@@ -69,6 +69,8 @@ class ParsedFunction:
     returns_record: bool = False # Simple record, treat as tuple or dict
     returns_setof: bool = False # For SETOF scalar types
     required_imports: set = field(default_factory=set)
+    # New field to store the base table name for SETOF table_name returns
+    setof_table_name: Optional[str] = None 
 
 # --- Global Schema Storage --- (Define globals AFTER structures)
 TABLE_SCHEMAS: Dict[str, List[ReturnColumn]] = {}
@@ -257,7 +259,7 @@ def _parse_params(param_str: str) -> Tuple[List[SQLParameter], set]:
 
     return params, required_imports
 
-def parse_sql(sql_content: str, schema_content: Optional[str] = None) -> List[ParsedFunction]:
+def parse_sql(sql_content: str, schema_content: Optional[str] = None) -> Tuple[List[ParsedFunction], Dict[str, set]]:
     """
     Parses SQL content, optionally using a separate schema file.
     
@@ -266,10 +268,12 @@ def parse_sql(sql_content: str, schema_content: Optional[str] = None) -> List[Pa
         schema_content: Optional string containing CREATE TABLE statements.
 
     Returns:
-        A list of ParsedFunction objects.
+        A tuple containing:
+          - list of ParsedFunction objects.
+          - dictionary mapping table names to required imports for their schemas.
     """
     global TABLE_SCHEMAS, TABLE_SCHEMA_IMPORTS
-    TABLE_SCHEMAS = {} # Reset global state for each run
+    TABLE_SCHEMAS = {} 
     TABLE_SCHEMA_IMPORTS = {} 
     
     functions = []
@@ -363,7 +367,9 @@ def parse_sql(sql_content: str, schema_content: Optional[str] = None) -> List[Pa
                         normalized_table_name = table_name_return.split('.')[-1]
                         logging.debug(f"  -> Returns SETOF {table_name_return}. Looking for table schema '{normalized_table_name}'.")
                         
-                        # Use normalized name for lookup
+                        # Store the table name for the generator
+                        func.setof_table_name = normalized_table_name 
+                        
                         if normalized_table_name in TABLE_SCHEMAS:
                              logging.info(f"    Found schema for table '{normalized_table_name}'")
                              func.return_columns = TABLE_SCHEMAS[normalized_table_name]
@@ -374,7 +380,7 @@ def parse_sql(sql_content: str, schema_content: Optional[str] = None) -> List[Pa
                              # Fallback as before
                              logging.warning(f"    Schema not found for table '{normalized_table_name}'. Mapping to List[Any]. Define dataclass '{normalized_table_name.capitalize()}' manually or ensure CREATE TABLE is parsed.")
                              func.return_type = "Any" 
-                             func.returns_table = True 
+                             func.returns_table = True # Still treat as table for generator naming
                              func.return_columns = [ReturnColumn(name="unknown", sql_type=table_name_return, python_type="Any")]
                              required_imports.add(PYTHON_IMPORTS["Any"])
                              required_imports.add("from dataclasses import dataclass")
@@ -412,4 +418,5 @@ def parse_sql(sql_content: str, schema_content: Optional[str] = None) -> List[Pa
     if not functions and processed_function_sql:
          logging.warning("No CREATE FUNCTION statements found or parsed successfully in main file.")
 
-    return functions 
+    # Return both functions and the collected schema imports
+    return functions, TABLE_SCHEMA_IMPORTS 

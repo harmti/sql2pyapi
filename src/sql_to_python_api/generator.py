@@ -1,82 +1,73 @@
-from typing import List
+from typing import List, Dict
 from .parser import ParsedFunction, ReturnColumn, SQLParameter
 import textwrap
 import logging
+import inflection # Using inflection library for plural->singular
 
-def _generate_dataclass(func: ParsedFunction) -> str:
-    """Generates a dataclass string for a function returning TABLE."""
-    # Attempt to generate a sensible class name from the SQL function name
-    # e.g., get_user_details -> UserDetails, list_all_items -> AllItems
-    class_name_base = func.python_name
-    if class_name_base.startswith("get_"):
-        class_name_base = class_name_base[4:]
-    elif class_name_base.startswith("list_"):
-        class_name_base = class_name_base[5:]
-        
-    class_name = class_name_base.replace("_", " ").title().replace(" ", "")
-    if not class_name:
-        class_name = "ResultRow" # Fallback
-    
-    # Handle potential SETOF table_name case where columns might be placeholder
-    if func.return_columns and func.return_columns[0].name == "unknown":
-         table_name_guess = func.return_columns[0].sql_type.capitalize()
-         logging.warning(f"Using assumed table name '{table_name_guess}' for dataclass name due to 'RETURNS SETOF {func.return_columns[0].sql_type}'.")
-         class_name = table_name_guess
-         # Return a placeholder comment using triple quotes for multi-line f-string
-         return f"""# TODO: Define dataclass for table '{func.return_columns[0].sql_type}' returned by {func.sql_name}
+# Define PYTHON_IMPORTS locally as well for fallback cases
+PYTHON_IMPORTS = {
+    "Any": "from typing import Any",
+    # Add others if needed directly by generator logic, but prefer parser-provided imports
+}
+
+def _to_singular_camel_case(name: str) -> str:
+    """Converts snake_case plural to SingularCamelCase."""
+    if not name:
+        return "ResultRow"
+    # Simple pluralization check (can be improved)
+    # Use inflection library for better singularization
+    singular_snake = inflection.singularize(name)
+    # Convert snake_case to CamelCase
+    return inflection.camelize(singular_snake)
+
+def _generate_dataclass(class_name: str, columns: List[ReturnColumn]) -> str:
+    """Generates a dataclass string given a name and columns."""
+    if not columns or (len(columns) == 1 and columns[0].name == "unknown"):
+        # Handle case where schema wasn't found or columns couldn't be parsed
+        sql_table_name = columns[0].sql_type if columns else "unknown_table"
+        return f"""# TODO: Define dataclass for table '{sql_table_name}'
 # @dataclass
 # class {class_name}:
 #     pass"""
 
-    fields = []
-    for col in func.return_columns:
-        fields.append(f"    {col.name}: {col.python_type}")
-
+    fields = [f"    {col.name}: {col.python_type}" for col in columns]
     fields_str = "\n".join(fields)
     return f"""@dataclass
 class {class_name}:
 {fields_str}
 """
 
-def _generate_function(func: ParsedFunction) -> str:
+def _generate_function(func: ParsedFunction, class_name_map: Dict[str, str]) -> str:
     """Generates the Python async function string."""
-    # Generate Python parameter string with Optional[...] = None for defaults
     params_list_py = ["conn: AsyncConnection"]
     for p in func.params:
-        if p.is_optional:
-            # Type hint already includes Optional[...] from parser
-            params_list_py.append(f"{p.name}: {p.python_type} = None") 
-        else:
-            params_list_py.append(f"{p.name}: {p.python_type}")
+        params_list_py.append(f"{p.name}: {p.python_type}{' = None' if p.is_optional else ''}")
     params_str_py = ", ".join(params_list_py)
 
-    # Determine return type hint
-    return_type_hint = "None"
-    class_name_for_table = "ResultRow" # Default
-    # Derive class name based on function name or specified table name
+    # --- Determine return type hint --- 
+    return_type_hint = "None" # Default
+    final_dataclass_name = None
+
     if func.returns_table:
-        if func.return_columns and func.return_columns[0].name != "unknown":
-            # RETURNS TABLE(...) case - use derived name
-            class_name_base = func.python_name
-            if class_name_base.startswith("get_"):
-                 class_name_base = class_name_base[4:]
-            elif class_name_base.startswith("list_"):
-                 class_name_base = class_name_base[5:]
-            class_name_for_table = class_name_base.replace("_", " ").title().replace(" ", "") or "ResultRow"
-        elif func.return_columns: 
-             # RETURNS SETOF table_name case - use capitalized table name
-             class_name_for_table = func.return_columns[0].sql_type.capitalize()
-        
-        return_type_hint = class_name_for_table
-        if func.returns_setof:
-            return_type_hint = f"List[{class_name_for_table}]"
+        if func.setof_table_name:
+            # Case: RETURNS SETOF table_name (schema potentially found)
+            # Get the standardized class name from the map
+            final_dataclass_name = class_name_map.get(func.setof_table_name, _to_singular_camel_case(func.setof_table_name))
         else:
-            # Single table row result should be Optional
-            return_type_hint = f"Optional[{class_name_for_table}]"
-    
-    # Use the return_type calculated by the parser for non-table cases
+            # Case: Explicit RETURNS TABLE(...)
+            # Generate a unique name based on function name
+            final_dataclass_name = _to_singular_camel_case(func.python_name.replace("get_", "").replace("list_", ""))
+            if not final_dataclass_name or final_dataclass_name == "ResultRow": # Avoid generic name if possible
+                 final_dataclass_name = inflection.camelize(func.python_name) + "Result"
+                 
+        return_type_hint = final_dataclass_name
+        if func.returns_setof:
+            return_type_hint = f"List[{final_dataclass_name}]"
+        else:
+            return_type_hint = f"Optional[{final_dataclass_name}]"
     elif func.return_type != "None":
-        return_type_hint = func.return_type # Already includes Optional/List wrapping from parser
+        # Parser already determined Optional/List wrapping for scalar/record types
+        return_type_hint = func.return_type 
 
     sql_args_placeholders = ", ".join(["%s"] * len(func.params))
     python_args_list = "[" + ", ".join([p.name for p in func.params]) + "]"
@@ -87,26 +78,29 @@ def _generate_function(func: ParsedFunction) -> str:
     body_lines.append("async with conn.cursor() as cur:")
     body_lines.append(f'    await cur.execute("SELECT * FROM {func.sql_name}({sql_args_placeholders})", {python_args_list})')
 
-    if func.return_type == "None" and not func.returns_table and not func.returns_record:
-        body_lines.append("    return None")
+    if not func.returns_table and func.return_type == "None":
+        body_lines.append("    return None") # Void function
     elif func.returns_setof:
         body_lines.append("    rows = await cur.fetchall()")
         if func.returns_table:
-             # Assumes class_name_for_table is correct (either derived or table name)
-             body_lines.append(f"    # TODO: Ensure dataclass '{class_name_for_table}' is defined correctly above.")
-             body_lines.append(f"    return [{class_name_for_table}(*row) for row in rows] if rows else []")
+             body_lines.append(f"    # Ensure dataclass '{final_dataclass_name}' is defined above.")
+             body_lines.append(f"    return [{final_dataclass_name}(*row) for row in rows] if rows else []")
         else: # SETOF scalar or record
+             body_lines.append("    # Assuming SETOF returns list of single-element tuples for scalars")
              body_lines.append("    return [row[0] for row in rows if row]" )
     else: # Single row expected
         body_lines.append("    row = await cur.fetchone()")
         body_lines.append("    if row is None:")
         body_lines.append("        return None")
         if func.returns_table:
-            # Assumes class_name_for_table is correct
-             body_lines.append(f"    # TODO: Ensure dataclass '{class_name_for_table}' is defined correctly above.")
-             body_lines.append(f"    return {class_name_for_table}(*row)")
-        else: # Single scalar or record
-             body_lines.append("    return row[0] if len(row) == 1 else row")
+             body_lines.append(f"    # Ensure dataclass '{final_dataclass_name}' is defined above.")
+             body_lines.append(f"    return {final_dataclass_name}(*row)")
+        elif func.returns_record:
+             body_lines.append("    # Return tuple for record type")
+             body_lines.append("    return row")
+        else: # Single scalar
+             body_lines.append("    # Return first element for scalar")
+             body_lines.append("    return row[0]") # Assumes scalar is first element
 
     indented_body = textwrap.indent("\n".join(body_lines), prefix="    ")
 
@@ -118,49 +112,97 @@ async def {func.python_name}({params_str_py}) -> {return_type_hint}:
 """
     return func_def
 
-def generate_python_code(functions: List[ParsedFunction], source_sql_file: str = "") -> str:
+def generate_python_code(
+    functions: List[ParsedFunction], 
+    table_schema_imports: Dict[str, set], # Accept the schema imports
+    source_sql_file: str = ""
+) -> str:
     """Generates the full Python module code as a string."""
-    if not functions:
-        return "# No functions found in the source SQL file.\n"
-
+    
     all_imports = set()
-    dataclasses = []
+    dataclass_defs = {}
     generated_functions = []
 
     all_imports.add("from psycopg import AsyncConnection")
-    all_imports.add("from typing import Optional, List, Any, Tuple, Dict")
+    # Base typing imports like Optional, List etc are added by the parser as needed
 
+    table_to_class_name_map: Dict[str, str] = {}
+    # Keep track of imports needed *directly* by the generated dataclasses
+    # These imports come from the types used within the dataclass fields.
+    dataclass_field_imports: Dict[str, set] = {}
+
+    # --- First pass: Identify and prepare unique dataclasses --- 
+    processed_tables = set() # Track processed table names to avoid redundant work
     for func in functions:
-        all_imports.update(func.required_imports)
+        all_imports.update(func.required_imports) # Get imports from parser (covers params, return wrappers, scalar types)
+        
+        target_dataclass_name = None
+        table_key = None # Key for tracking processed tables (normalized name)
+        
         if func.returns_table:
-            # Ensure dataclass import is added *if* a table is returned
-            all_imports.add("from dataclasses import dataclass") 
-            dataclasses.append(_generate_dataclass(func))
-        generated_functions.append(_generate_function(func))
+            all_imports.add("from dataclasses import dataclass") # Needed if any table is returned
+            if func.setof_table_name:
+                table_key = func.setof_table_name # Already normalized by parser
+                target_dataclass_name = _to_singular_camel_case(table_key)
+                table_to_class_name_map[table_key] = target_dataclass_name
+                
+                if table_key not in processed_tables:
+                    processed_tables.add(table_key)
+                    # Get imports FOR THE FIELDS using the PASSED dictionary
+                    schema_imports = table_schema_imports.get(table_key, set())
+                    dataclass_field_imports[target_dataclass_name] = schema_imports # Store imports per class name
+                    
+                    if func.return_columns and func.return_columns[0].name != "unknown":
+                        dataclass_defs[target_dataclass_name] = _generate_dataclass(target_dataclass_name, func.return_columns)
+                    else: # Schema not found by parser
+                         placeholder_cols = [ReturnColumn(name="unknown", sql_type=table_key, python_type="Any")] 
+                         dataclass_defs[target_dataclass_name] = _generate_dataclass(target_dataclass_name, placeholder_cols)
+                         # Add Any import if placeholder used
+                         any_import = PYTHON_IMPORTS.get("Any") # Use local PYTHON_IMPORTS
+                         if any_import: dataclass_field_imports[target_dataclass_name].add(any_import)
 
-    # Filter out potential None values from imports, just in case
-    all_imports = {imp for imp in all_imports if imp}
+            else: # Explicit RETURNS TABLE(...)
+                 target_dataclass_name = _to_singular_camel_case(func.python_name.replace("get_", "").replace("list_", ""))
+                 if not target_dataclass_name or target_dataclass_name == "ResultRow":
+                     target_dataclass_name = inflection.camelize(func.python_name) + "Result"
+                 
+                 if target_dataclass_name not in dataclass_defs:
+                      dataclass_defs[target_dataclass_name] = _generate_dataclass(target_dataclass_name, func.return_columns)
+                      # Imports for explicit table fields are already in func.required_imports
+                      # Store them associated with the class name for potential later use/consistency
+                      dataclass_field_imports[target_dataclass_name] = func.required_imports
+                      
+    # Add all necessary field type imports from generated dataclasses
+    for imports in dataclass_field_imports.values():
+        all_imports.update(imports)
 
+    # --- Second pass: Generate functions --- 
+    for func in functions:
+        generated_functions.append(_generate_function(func, table_to_class_name_map))
+
+    # --- Assemble code --- 
+    all_imports.discard(None) 
+    # Only add inflection import if actually used for naming
+    if table_to_class_name_map or any(not f.setof_table_name and f.returns_table for f in functions):
+        all_imports.add("import inflection")
+    
     from_imports = sorted([imp for imp in all_imports if imp.startswith("from")])
     direct_imports = sorted([imp for imp in all_imports if imp.startswith("import")])
 
     header = f"# Generated by sql-to-python-api from {source_sql_file}\n# DO NOT EDIT MANUALLY"
     
     import_section = "\n".join(direct_imports + from_imports)
-    # Add an extra newline after imports if there are subsequent sections
-    import_section += "\n" if dataclasses or generated_functions else ""
+    import_section += "\n\n" if dataclass_defs or generated_functions else ""
     
-    dataclass_section = "\n\n".join(dataclasses)
-     # Add an extra newline after dataclasses if there are functions
-    dataclass_section += "\n" if generated_functions else ""
+    dataclass_section = "\n\n".join(dataclass_defs[name] for name in sorted(dataclass_defs.keys()))
+    dataclass_section += "\n\n" if generated_functions else ""
     
     function_section = "\n\n".join(generated_functions)
 
-    # Assemble the final code
     code_parts = [header, import_section]
-    if dataclass_section.strip(): # Only add if there's content
+    if dataclass_section.strip():
         code_parts.append(dataclass_section)
-    if function_section.strip(): # Only add if there's content
+    if function_section.strip():
         code_parts.append(function_section)
 
-    return "\n".join(code_parts).strip() + "\n" # Ensure single trailing newline 
+    return "\n".join(code_parts).strip() + "\n" 

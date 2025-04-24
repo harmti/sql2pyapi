@@ -56,6 +56,10 @@ instance/
 # Generated code output
 generated/
 
+# Dependency lock files / generated requirements
+poetry.lock
+requirements*.txt
+
 # OS generated files
 .DS_Store
 .DS_Store?

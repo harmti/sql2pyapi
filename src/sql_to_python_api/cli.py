@@ -44,8 +44,8 @@ def main(
         raise typer.Exit(code=1)
 
     try:
-        # Pass both contents to the parser
-        functions = parse_sql(sql_content, schema_content=schema_content)
+        # Get both functions and schema imports from parser
+        functions, table_schema_imports = parse_sql(sql_content, schema_content=schema_content)
         
         if not functions:
             logging.warning("No functions found or parsed successfully. Output file will reflect this.")
@@ -55,8 +55,8 @@ def main(
             # Decide if exiting here is desired, or generating an empty file is ok.
             # return # Optionally exit if no functions are found
 
-        # Proceed to generate code even if only tables were parsed (functions list might be empty)
-        python_code = generate_python_code(functions, source_sql_file=sql_file.name)
+        # Pass schema imports to the generator
+        python_code = generate_python_code(functions, table_schema_imports, source_sql_file=sql_file.name)
 
     except SQLParsingError as e:
         logging.error(f"Failed to parse SQL: {e}")
