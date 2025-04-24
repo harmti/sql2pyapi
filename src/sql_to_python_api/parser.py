@@ -14,6 +14,8 @@ TYPE_MAP = {
     "int": "int",
     "bigint": "int", # Consider using int in Python 3, as it has arbitrary precision
     "smallint": "int",
+    "serial": "int", # Add serial mapping
+    "bigserial": "int", # Add bigserial mapping
     "boolean": "bool",
     "bool": "bool",
     "timestamp": "datetime",

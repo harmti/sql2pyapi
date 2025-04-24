@@ -266,3 +266,24 @@ def test_optional_params_function_generation(tmp_path):
         f"Expected ({expected_output_path}):\n{expected_content}\n"
         f"Actual ({actual_output_path}):\n{actual_content}"
     )
+
+def test_inline_schema_function_generation(tmp_path):
+    """Test generating code when CREATE TABLE is in the same file."""
+    functions_sql_path = FIXTURES_DIR / "inline_schema_function.sql"
+    expected_output_path = EXPECTED_DIR / "inline_schema_function_api.py"
+    actual_output_path = tmp_path / "inline_schema_function_api.py"
+
+    # Run the generator tool (NO schema file argument)
+    run_cli_tool(functions_sql_path, actual_output_path)
+
+    # Compare the generated file with the expected file
+    assert actual_output_path.is_file(), "Generated file was not created."
+    
+    expected_content = expected_output_path.read_text()
+    actual_content = actual_output_path.read_text()
+    
+    assert actual_content == expected_content, (
+        f"Generated file content does not match expected content.\n"
+        f"Expected ({expected_output_path}):\n{expected_content}\n"
+        f"Actual ({actual_output_path}):\n{actual_content}"
+    )
