@@ -7,7 +7,7 @@ name = "sql2py"
 version = "0.1.0"
 description = "Generate Python async API wrappers from PostgreSQL function definitions."
 authors = [
-    { name = "Your Name", email = "you@example.com" },
+    { name = "Timo Harmonen", email = "timo.harmonen@iki.fi" },
 ]
 readme = "README.md"
 requires-python = ">=3.10"
