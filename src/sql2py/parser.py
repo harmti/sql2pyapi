@@ -2,6 +2,7 @@ import re
 from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Tuple
 import logging
+import textwrap
 
 # --- Type Maps and Imports --- (Keep these first)
 # Basic PostgreSQL to Python type mapping
@@ -402,19 +403,70 @@ def parse_sql(sql_content: str, schema_content: Optional[str] = None) -> Tuple[L
 
         cleaned_comment = None
         if best_comment:
-            if best_comment.strip().startswith("--"):
-                all_lines = best_comment.splitlines()
-                cleaned_lines = [line.strip()[2:].strip() for line in all_lines if line.strip().startswith("--")]
-                cleaned_comment = "\n".join(cleaned_lines)
-            elif best_comment.strip().startswith("/*"):
-                start_block = best_comment.find("/*")
-                end_block = best_comment.rfind("*/")
-                if start_block != -1 and end_block != -1 and end_block > start_block:
-                    comment_content = best_comment[start_block + 2 : end_block].strip()
-                    import textwrap
+            lines = best_comment.strip().splitlines()
+            if lines[0].strip().startswith("--"):
+                cleaned_lines = []
+                for line in lines:  # Process original lines
+                    # Find the start of the actual comment text
+                    dash_pos = line.find("--")
+                    if dash_pos != -1:
+                        content_start_pos = dash_pos + 2
+                        # Remove one optional space after '--'
+                        if content_start_pos < len(line) and line[content_start_pos] == " ":
+                            content_start_pos += 1
+                        # Append the rest of the line, preserving its original form
+                        cleaned_lines.append(line[content_start_pos:])
+                    else:
+                        cleaned_lines.append(line)  # Keep lines not starting with -- as is?
+                raw_comment = "\n".join(cleaned_lines)
+                # Dedent the result to align with standard docstring formatting
+                cleaned_comment = textwrap.dedent(raw_comment).strip("\n")
 
-                    cleaned_comment = textwrap.dedent(comment_content).strip()
+            elif lines[0].strip().startswith("/*"):
+                # Extract content, dedent based on first line of content, keep internal formatting
+                start_block_idx = best_comment.find("/*")
+                end_block_idx = best_comment.rfind("*/")
+                if start_block_idx != -1 and end_block_idx != -1 and end_block_idx > start_block_idx:
+                    comment_content = best_comment[start_block_idx + 2 : end_block_idx]
+
+                    # Check if lines consistently start with * (common block comment style)
+                    content_lines = comment_content.splitlines()
+                    consistent_star = True
+                    if len(content_lines) > 1:
+                        for line in content_lines[1:]:
+                            stripped_line = line.strip()
+                            if stripped_line and not stripped_line.startswith("*"):
+                                consistent_star = False
+                                break
+                    else:
+                        # Single line block comment, check if it starts with *
+                        if content_lines and content_lines[0].strip().startswith("*"):
+                            pass  # It's consistent for a single line
+                        else:
+                            consistent_star = False
+
+                    processed_lines = []
+                    if consistent_star:
+                        # Strip leading * and optional space
+                        for i, line in enumerate(content_lines):
+                            lstripped_line = line.lstrip(" ")
+                            if lstripped_line.startswith("*"):
+                                star_pos = line.find("*")
+                                content_start = star_pos + 1
+                                if content_start < len(line) and line[content_start] == " ":
+                                    content_start += 1
+                                processed_lines.append(line[content_start:])
+                            else:
+                                processed_lines.append(line)  # Keep lines without star (e.g. first line?)
+                        comment_content = "\n".join(processed_lines)
+                    # else: keep original comment_content
+
+                    # Dedent, but don't strip leading/trailing newlines from the block yet
+                    dedented_content = textwrap.dedent(comment_content)
+                    # Remove leading/trailing empty lines that might result from dedent/original formatting
+                    cleaned_comment = dedented_content.strip("\n")
                 else:
+                    # Fallback: simple strip if block markers are weird
                     cleaned_comment = best_comment.strip()
 
         logging.info(f"Parsing function signature: {sql_name}")
