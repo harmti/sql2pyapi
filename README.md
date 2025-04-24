@@ -1,10 +1,47 @@
-# SQL to Python API Generator
+# SQL to Python Async API Generator
 
-This tool generates Python async API wrappers for PostgreSQL functions defined in a `.sql` file.
+This tool automatically generates Python asynchronous API wrappers for PostgreSQL functions defined in `.sql` files. It parses SQL function definitions, maps types, handles various return structures, and produces clean, type-hinted Python code using `psycopg` for database interaction.
 
-## Setup with UV
+## Use Case
 
-We recommend using [uv](https://github.com/astral-sh/uv) for managing dependencies and virtual environments.
+Modern web applications often interact with databases through stored procedures or functions for complex logic, data validation, or security. Maintaining separate database logic and application-level API code can be tedious and error-prone.
+
+This tool aims to bridge that gap by automatically creating Python functions that directly call your PostgreSQL functions, ensuring consistency and reducing boilerplate code. It's particularly useful when:
+
+*   You have a significant number of PostgreSQL functions exposed to your application layer.
+*   You want to leverage `asyncio` and `psycopg` for non-blocking database operations.
+*   You need type safety and clear API definitions in your Python code based on your SQL schema.
+*   You want to automatically generate data transfer objects (DTOs) or data classes based on `RETURNS TABLE` definitions or `SETOF table_name` returns.
+
+## Features Supported
+
+*   **SQL Parsing:**
+    *   Parses PostgreSQL `CREATE FUNCTION` statements.
+    *   Parses `CREATE TABLE` statements (from the same file or a separate schema file) to infer return types for `SETOF table_name`.
+    *   Extracts function name, parameters (including `IN`/`OUT`/`INOUT`, name, type, and `DEFAULT` for optional parameters).
+    *   Extracts return types:
+        *   `VOID`
+        *   Scalar types (e.g., `INTEGER`, `TEXT`, `UUID`, `TIMESTAMP`, `BOOLEAN`, `NUMERIC`, `JSONB`, etc.)
+        *   `RECORD` (returns a `Tuple`)
+        *   `TABLE (...)` (generates a specific `@dataclass`)
+        *   `SETOF scalar` (returns a `List[scalar_type]`)
+        *   `SETOF table_name` (returns a `List[Dataclass]` based on the `CREATE TABLE` definition or a placeholder if the table definition is not found).
+    *   Parses and includes SQL comments (`--` style and `/* ... */` style) preceding the function definition as the Python function's docstring. Handles multi-line comments.
+*   **Type Mapping:**
+    *   Maps common PostgreSQL types to Python types (e.g., `uuid` -> `UUID`, `text` -> `str`, `integer` -> `int`, `timestamp` -> `datetime`, `numeric` -> `Decimal`, `jsonb` -> `Dict[str, Any]`, `boolean` -> `bool`, `bytea` -> `bytes`).
+    *   Handles array types (e.g., `integer[]` -> `List[int]`).
+    *   Automatically adds necessary imports (`UUID`, `datetime`, `date`, `Decimal`, `Optional`, `List`, `Any`, `Dict`, `Tuple`).
+*   **Code Generation:**
+    *   Generates Python `async` functions using `psycopg` (v3+).
+    *   Includes type hints for parameters and return values (`Optional` for single returns, `List` for `SETOF`).
+    *   Generates `@dataclass` definitions for `RETURNS TABLE` and `SETOF table_name` structures. Uses `inflection` library to generate singular CamelCase class names from snake_case table names.
+    *   Generates placeholder dataclasses with TODO comments if a `SETOF table_name` is encountered but the corresponding `CREATE TABLE` statement wasn't found.
+    *   Handles optional parameters by assigning `None` as the default value in the Python function signature.
+    *   Uses Pythonic parameter names (e.g., removes `p_` or `_` prefixes).
+
+## Setup
+
+We recommend using `uv` for managing dependencies and virtual environments.
 
 1.  **Create and activate a virtual environment:**
     ```bash
@@ -14,33 +51,55 @@ We recommend using [uv](https://github.com/astral-sh/uv) for managing dependenci
 
 2.  **Install dependencies:**
     ```bash
-    uv pip install -e . # Installs the package in editable mode
+    uv pip install -e . # Installs the package in editable mode with its dependencies
     ```
-
-    *(Optional) For locked dependencies, generate requirements files:*
+    *(Optional: To install from a locked file)*
     ```bash
-    # Generate requirements.txt from pyproject.toml
-    uv pip compile pyproject.toml -o requirements.txt
-    
-    # Install from the lock file
-    uv pip sync requirements.txt 
+    # Generate requirements.lock (or requirements.txt) if needed
+    uv pip compile pyproject.toml -o requirements.lock
+    # Install exact versions
+    uv pip sync requirements.lock
     ```
 
 ## Usage
 
-Once installed, you can run the tool directly:
+The tool provides a command-line interface `sql-to-pyapi`.
+
+**Basic Usage:**
 
 ```bash
-sql-to-pyapi examples/users.sql generated/users_api.py
+sql-to-pyapi <input_sql_file> <output_python_file>
 ```
 
-This will read function definitions from `examples/users.sql` and write the generated Python code to `generated/users_api.py`.
+*   `<input_sql_file>`: Path to the `.sql` file containing `CREATE FUNCTION` (and optionally `CREATE TABLE`) statements.
+*   `<output_python_file>`: Path where the generated Python code will be written.
 
-## Features
+**Example:**
 
-*   Parses PostgreSQL `CREATE FUNCTION` statements.
-*   Extracts function name, parameters (name and type), and return type (`SCALAR`, `TABLE`, `RECORD`).
-*   Maps common PostgreSQL types to Python types (`UUID`, `TEXT`, `VARCHAR`, `INTEGER`, `TIMESTAMP`, `BOOLEAN`, `NUMERIC`, `DECIMAL`).
-*   Generates `@dataclass` for functions returning `TABLE`.
-*   Generates `async` Python functions using `psycopg` for database interaction.
-*   Includes type hints and basic docstrings. 
+```bash
+sql-to-pyapi path/to/your/functions.sql path/to/your/generated_api.py
+```
+
+**Using a Separate Schema File:**
+
+If your `CREATE TABLE` definitions are in a separate file, you can provide it using the `--schema-file` option:
+
+```bash
+sql-to-pyapi functions.sql generated_api.py --schema-file schema.sql
+```
+
+This is useful for resolving `SETOF table_name` return types when the table definitions are not in the same file as the functions.
+
+## Limitations and Future Work
+
+*   **Complex SQL:** Does not handle very complex SQL syntax within the function body or advanced `CREATE FUNCTION` options (like `VOLATILE`, `STABLE`, security attributes etc., although they are ignored gracefully).
+*   **Error Handling:** Generated code assumes the SQL function executes successfully. Robust error handling within the generated Python wrappers might need manual addition.
+*   **Type Mapping:** While common types are covered, less common or custom PostgreSQL types might map to `Any`. The `TYPE_MAP` in `parser.py` can be extended.
+*   **Dependencies:** Relies on `psycopg` (v3 async interface) and `inflection`.
+*   **Testing:** While unit tests cover various scenarios, more complex integration testing might be beneficial.
+
+## Development
+
+*   Install development dependencies: `uv pip install -e ".[dev]"`
+*   Run tests: `pytest`
+*   Linting/Formatting: Uses `ruff`. Check with `ruff check .` and format with `ruff format .` 
