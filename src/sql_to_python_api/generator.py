@@ -182,9 +182,6 @@ def generate_python_code(
 
     # --- Assemble code --- 
     all_imports.discard(None) 
-    # Only add inflection import if actually used for naming
-    if table_to_class_name_map or any(not f.setof_table_name and f.returns_table for f in functions):
-        all_imports.add("import inflection")
     
     from_imports = sorted([imp for imp in all_imports if imp.startswith("from")])
     direct_imports = sorted([imp for imp in all_imports if imp.startswith("import")])
