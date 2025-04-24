@@ -14,7 +14,7 @@ def run_cli_tool(functions_sql: Path, output_py: Path, schema_sql: Path = None):
     cmd = [
         sys.executable,  # Use the current Python executable
         "-m",
-        "sql_to_python_api.cli",  # Invoke the module's entry point
+        "sql2py.cli",  # Invoke the module's entry point
         str(functions_sql),
         str(output_py),
     ]
