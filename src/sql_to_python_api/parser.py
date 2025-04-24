@@ -388,22 +388,44 @@ def parse_sql(sql_content: str, schema_content: Optional[str] = None) -> Tuple[L
                  logging.warning(f"Could not determine return type for function {sql_name}. Assuming None.")
                  func.return_type = "None"
 
+            # --- Determine base Python return type --- 
+            base_return_type = "None" # Default
+            if func.returns_table: 
+                 # Dataclass name determined by generator, type here is just placeholder 
+                 # to trigger Optional/List logic correctly.
+                 base_return_type = "DataclassPlaceholder" 
+            elif func.returns_record:
+                 base_return_type = "Tuple"
+            elif func.return_type != "None": # Already mapped scalar type
+                 base_return_type = func.return_type 
+                 
             # --- Final type adjustments (List/Optional) --- 
-            is_optional_wrapper_needed = False
-            is_list_wrapper_needed = False
+            final_return_type = base_return_type
+            is_complex_type = False # Flag if List or Optional is used
 
             if returns_setof:
-                 is_list_wrapper_needed = True
-            elif not func.returns_table and func.return_type != "None": 
-                 is_optional_wrapper_needed = True
-            elif func.returns_table and not returns_setof:
-                 is_optional_wrapper_needed = True
-                 
-            if is_list_wrapper_needed: required_imports.add(PYTHON_IMPORTS["List"])
-            if is_optional_wrapper_needed: required_imports.add("from typing import Optional")
+                 required_imports.add(PYTHON_IMPORTS["List"])
+                 is_complex_type = True
+                 if base_return_type not in ["None", "DataclassPlaceholder"]:
+                     final_return_type = f"List[{base_return_type}]"
+                 # Generator handles List[DataclassName]
+            elif base_return_type not in ["None", "DataclassPlaceholder"]:
+                 # Single scalar or record return should be Optional
+                 required_imports.add("from typing import Optional")
+                 is_complex_type = True
+                 final_return_type = f"Optional[{base_return_type}]"
+            elif base_return_type == "DataclassPlaceholder":
+                 # Single table row return should be Optional
+                 required_imports.add("from typing import Optional")
+                 is_complex_type = True
+                 # Actual type TBD by generator, store placeholder
+                 final_return_type = "Optional[DataclassPlaceholder]"
 
-            if is_list_wrapper_needed or is_optional_wrapper_needed or \
-               any(t in func.return_type for t in ["Tuple", "Dict", "Any"]):
+            # Assign the calculated final type string
+            func.return_type = final_return_type
+            
+            # Add base typing imports if complex types were used
+            if is_complex_type or any(t in final_return_type for t in ["Tuple", "Dict", "Any"]):
                  required_imports.add("from typing import Optional, List, Any, Tuple, Dict")
                  
             func.required_imports = {imp for imp in required_imports if imp}
