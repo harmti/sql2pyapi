@@ -63,12 +63,12 @@ We recommend using `uv` for managing dependencies and virtual environments.
 
 ## Usage
 
-The tool provides a command-line interface `sql-to-pyapi`.
+The tool provides a command-line interface `sql2py`.
 
 **Basic Usage:**
 
 ```bash
-sql-to-pyapi <input_sql_file> <output_python_file>
+sql2py <input_sql_file> <output_python_file>
 ```
 
 *   `<input_sql_file>`: Path to the `.sql` file containing `CREATE FUNCTION` (and optionally `CREATE TABLE`) statements.
@@ -77,7 +77,7 @@ sql-to-pyapi <input_sql_file> <output_python_file>
 **Example:**
 
 ```bash
-sql-to-pyapi path/to/your/functions.sql path/to/your/generated_api.py
+sql2py path/to/your/functions.sql path/to/your/generated_api.py
 ```
 
 **Using a Separate Schema File:**
@@ -85,7 +85,7 @@ sql-to-pyapi path/to/your/functions.sql path/to/your/generated_api.py
 If your `CREATE TABLE` definitions are in a separate file, you can provide it using the `--schema-file` option:
 
 ```bash
-sql-to-pyapi functions.sql generated_api.py --schema-file schema.sql
+sql2py functions.sql generated_api.py --schema-file schema.sql
 ```
 
 This is useful for resolving `SETOF table_name` return types when the table definitions are not in the same file as the functions.
