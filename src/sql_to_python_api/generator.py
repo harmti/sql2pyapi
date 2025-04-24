@@ -218,8 +218,17 @@ def generate_python_code(
         "Dict": "from typing import Dict",
     }
     typing_needed = set()
+    datetime_needed = False
+    date_needed = False
 
     for imp in all_imports:
+        if imp == "from datetime import datetime":
+            datetime_needed = True
+            continue # Handled below
+        if imp == "from datetime import date":
+            date_needed = True
+            continue # Handled below
+            
         is_typing = False
         for type_name, type_import in consolidated_typings.items():
             if imp == type_import or type_name in imp: # Check if it's the import or used within another (e.g., List[str])
@@ -236,6 +245,14 @@ def generate_python_code(
         sorted_typings = sorted(list(typing_needed))
         typing_line = f"from typing import {', '.join(sorted_typings)}"
         other_imports.add(typing_line) # Add the single consolidated line
+
+    # Build the consolidated datetime/date import line if needed
+    if datetime_needed and date_needed:
+        other_imports.add("from datetime import datetime, date")
+    elif datetime_needed:
+        other_imports.add("from datetime import datetime")
+    elif date_needed:
+        other_imports.add("from datetime import date")
 
     # Sort all resulting imports
     from_imports = sorted([imp for imp in other_imports if imp.startswith("from")])

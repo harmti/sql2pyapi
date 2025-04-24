@@ -31,8 +31,8 @@ TYPE_MAP = {
 
 PYTHON_IMPORTS = {
     "UUID": "from uuid import UUID",
-    "datetime": "from datetime import datetime, date",
-    "date": "from datetime import datetime, date", # Ensure datetime is also imported if date is used
+    "datetime": "from datetime import datetime", # Import only datetime
+    "date": "from datetime import date", # Import only date
     "Decimal": "from decimal import Decimal",
     "Any": "from typing import Any", # Import for Any
     "List": "from typing import List", # Import for List
