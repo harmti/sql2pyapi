@@ -71,7 +71,23 @@ def _generate_function(func: ParsedFunction, class_name_map: Dict[str, str]) -> 
 
     sql_args_placeholders = ", ".join(["%s"] * len(func.params))
     python_args_list = "[" + ", ".join([p.python_name for p in func.params]) + "]"
-    docstring = f'""Call PostgreSQL function {func.sql_name}().""'
+    
+    # Generate the docstring
+    if func.sql_comment:
+        # Format the comment nicely within triple quotes
+        # Add parameters and return type info if available?
+        # For now, just use the comment directly, indented.
+        cleaned_lines = func.sql_comment.strip().split('\n')
+        # Ensure the first line starts correctly and indent subsequent lines
+        if cleaned_lines:
+             indented_comment = "\n".join([cleaned_lines[0].strip()] + [textwrap.indent(line.strip(), '    ') for line in cleaned_lines[1:]])
+             docstring = f'"""{indented_comment}"""'
+        else:
+             # Fallback if comment was empty after cleaning
+             docstring = f'"""Call PostgreSQL function {func.sql_name}()."""'
+    else:
+        # Default docstring if no comment was found
+        docstring = f'"""Call PostgreSQL function {func.sql_name}()."""'
 
     # --- Generate Function Body --- 
     body_lines = []
@@ -202,4 +218,4 @@ def generate_python_code(
     if function_section.strip():
         code_parts.append(function_section)
 
-    return "\n".join(code_parts).strip() + "\n" 
+    return "\n".join(code_parts).strip() + "\n"

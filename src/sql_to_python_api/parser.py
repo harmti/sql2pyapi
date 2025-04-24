@@ -72,6 +72,7 @@ class ParsedFunction:
     required_imports: set = field(default_factory=set)
     # New field to store the base table name for SETOF table_name returns
     setof_table_name: Optional[str] = None 
+    sql_comment: Optional[str] = None # Store the cleaned SQL comment
 
 # --- Global Schema Storage --- (Define globals AFTER structures)
 TABLE_SCHEMAS: Dict[str, List[ReturnColumn]] = {}
@@ -292,26 +293,26 @@ def parse_sql(sql_content: str, schema_content: Optional[str] = None) -> Tuple[L
     
     functions = []
     
-    # --- Pre-process both inputs --- 
-    def preprocess_sql(content: Optional[str]) -> str:
-        if not content: return ""
-        processed = re.sub(r"/\*.*?\*/", "", content, flags=re.DOTALL)
-        processed = re.sub(r"--.*?$", "", processed, flags=re.MULTILINE)
-        return "\n".join(line for line in processed.splitlines() if line.strip())
-
-    processed_schema_sql = preprocess_sql(schema_content)
-    processed_function_sql = preprocess_sql(sql_content)
-
     # --- First Pass: Parse CREATE TABLE (from schema file first, then function file) --- 
-    if processed_schema_sql:
+    if schema_content: # Use original schema_content
         logging.info("Parsing CREATE TABLE statements from schema file...")
-        _parse_create_table(processed_schema_sql)
+        _parse_create_table(schema_content) 
     # Also parse tables from the main file in case they are defined there
     logging.info("Parsing CREATE TABLE statements from main functions file...")
-    _parse_create_table(processed_function_sql)
+    _parse_create_table(sql_content) # Use original sql_content
     
     # --- Second Pass: Parse CREATE FUNCTION statements (only from main file) --- 
     logging.info("Parsing CREATE FUNCTION statements...")
+
+    # Regex to find comments (both -- and /* */)
+    comment_regex = re.compile(r"(--.*?$)|(/\\*.*?\\*/)", re.MULTILINE | re.DOTALL)
+    # Find all comments and store their positions and content
+    comments = []
+    for comment_match in comment_regex.finditer(sql_content):
+        start, end = comment_match.span()
+        comment_text = comment_match.group(0)
+        comments.append({"start": start, "end": end, "text": comment_text})
+
     function_regex = re.compile(
         r"CREATE(?:\s+OR\s+REPLACE)?\s+FUNCTION\s+([a-zA-Z0-9_.]+)" 
         r"\s*\(([^)]*)\)" 
@@ -320,11 +321,8 @@ def parse_sql(sql_content: str, schema_content: Optional[str] = None) -> Tuple[L
         re.IGNORECASE | re.DOTALL | re.MULTILINE
     )
 
-    # Find function bodies separately (this part might be less reliable)
-    # func_bodies = {m.group(1).strip(): m.group(0) 
-    #                for m in re.finditer(r"(FUNCTION\s+[a-zA-Z0-9_.]+\s*\([^)]*\)).*?(AS\s+(?:\$\$.*?\$\$|'.*?'))", processed_function_sql, re.IGNORECASE | re.DOTALL)}
-
-    for match in function_regex.finditer(processed_function_sql): # Use processed_function_sql here
+    last_match_end = 0 # Keep track of the end of the last parsed function or comment
+    for match in function_regex.finditer(sql_content): # Use original sql_content here
         sql_name = match.group(1).strip()
         param_str = match.group(2).strip() if match.group(2) else ""
         returns_setof = bool(match.group(3))
@@ -332,7 +330,36 @@ def parse_sql(sql_content: str, schema_content: Optional[str] = None) -> Tuple[L
         table_columns_str = match.group(5).strip() if is_returns_table and match.group(5) else ""
         scalar_or_table_name_return = match.group(6).strip() if match.group(6) else ""
         
+        function_start_pos = match.start()
+        
+        # Find the comment immediately preceding this function
+        best_comment = None
+        for comment in reversed(comments): # Search backwards from the last comment
+            if comment["end"] <= function_start_pos:
+                # Check if only whitespace exists between comment end and function start
+                intervening_text = sql_content[comment["end"]:function_start_pos]
+                if intervening_text.strip() == "":
+                    best_comment = comment["text"]
+                    break # Found the closest preceding comment
+        
+        cleaned_comment = None
+        if best_comment:
+             if best_comment.startswith("--"):
+                  # Remove '--' and leading/trailing whitespace from each line
+                  lines = [line.strip() for line in best_comment.splitlines()]
+                  cleaned_comment = "\\n".join(line[2:].strip() for line in lines)
+             elif best_comment.startswith("/*"):
+                  # Remove /* */ and leading/trailing whitespace
+                  cleaned_comment = best_comment[2:-2].strip()
+                  # Basic unindentation (remove common leading whitespace)
+                  lines = cleaned_comment.splitlines()
+                  if lines:
+                      import textwrap
+                      cleaned_comment = textwrap.dedent("\\n".join(lines)).strip()
+
         logging.info(f"Parsing function signature: {sql_name}")
+        # if cleaned_comment:
+        #     logging.debug(f"  -> Found comment: {cleaned_comment[:50]}...") # Optional debug
 
         try:
             params, param_imports = _parse_params(param_str)
@@ -340,6 +367,8 @@ def parse_sql(sql_content: str, schema_content: Optional[str] = None) -> Tuple[L
             required_imports.add("from psycopg import AsyncConnection")
 
             func = ParsedFunction(sql_name=sql_name, python_name=sql_name)
+            # Assign the cleaned comment
+            func.sql_comment = cleaned_comment 
             func.params = params
             func.returns_setof = returns_setof
 
@@ -418,40 +447,51 @@ def parse_sql(sql_content: str, schema_content: Optional[str] = None) -> Tuple[L
             is_complex_type = False # Flag if List or Optional is used
 
             if returns_setof:
-                 required_imports.add(PYTHON_IMPORTS["List"])
-                 is_complex_type = True
-                 if base_return_type not in ["None", "DataclassPlaceholder"]:
+                 # Check if base_return_type is needed for List hint
+                 if base_return_type != "None": 
                      final_return_type = f"List[{base_return_type}]"
-                 # Generator handles List[DataclassName]
-            elif base_return_type not in ["None", "DataclassPlaceholder"]:
-                 # Single scalar or record return should be Optional
+                     required_imports.add(PYTHON_IMPORTS["List"])
+                     is_complex_type = True
+                 elif base_return_type == "DataclassPlaceholder": # Case: SETOF table_name
+                     final_return_type = "List[DataclassPlaceholder]" # Generator will replace placeholder
+                     required_imports.add(PYTHON_IMPORTS["List"])
+                     is_complex_type = True
+                 # else: SETOF void? unlikely, ignore
+            elif base_return_type != "None": # Single return (scalar, record, or table row)
                  required_imports.add("from typing import Optional")
                  is_complex_type = True
-                 final_return_type = f"Optional[{base_return_type}]"
-            elif base_return_type == "DataclassPlaceholder":
-                 # Single table row return should be Optional
-                 required_imports.add("from typing import Optional")
-                 is_complex_type = True
-                 # Actual type TBD by generator, store placeholder
-                 final_return_type = "Optional[DataclassPlaceholder]"
+                 if base_return_type != "DataclassPlaceholder":
+                     final_return_type = f"Optional[{base_return_type}]"
+                 else: # Single table row
+                     final_return_type = "Optional[DataclassPlaceholder]" # Generator replaces
 
             # Assign the calculated final type string
             func.return_type = final_return_type
             
-            # Add base typing imports if complex types were used
-            if is_complex_type or any(t in final_return_type for t in ["Tuple", "Dict", "Any"]):
-                 required_imports.add("from typing import Optional, List, Any, Tuple, Dict")
+            # Add base typing imports if complex types were used or Tuple/Dict/Any involved
+            # Also ensure List/Optional imports are present if used.
+            typing_imports_to_add = set()
+            if "Optional[" in final_return_type: typing_imports_to_add.add("from typing import Optional")
+            if "List[" in final_return_type: typing_imports_to_add.add(PYTHON_IMPORTS["List"])
+            if "Tuple" in final_return_type: typing_imports_to_add.add(PYTHON_IMPORTS["Tuple"])
+            if "Dict" in final_return_type: typing_imports_to_add.add(PYTHON_IMPORTS["Dict"])
+            if "Any" in final_return_type: typing_imports_to_add.add(PYTHON_IMPORTS["Any"])
+            
+            required_imports.update(typing_imports_to_add)
                  
             func.required_imports = {imp for imp in required_imports if imp}
             functions.append(func)
 
+            last_match_end = match.end() # Update last match end
+
         except Exception as e:
             logging.exception(f"Failed to parse function '{sql_name}'. Skipping.")
+            last_match_end = match.end() # Ensure we advance past the failed function
             continue
 
     logging.info(f"Parsed {len(TABLE_SCHEMAS)} CREATE TABLE statements.")
     logging.info(f"Parsed {len(functions)} CREATE FUNCTION statements.")
-    if not functions and processed_function_sql:
+    if not functions and sql_content:
          logging.warning("No CREATE FUNCTION statements found or parsed successfully in main file.")
 
     # Return both functions and the collected schema imports
