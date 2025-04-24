@@ -1,0 +1,134 @@
+from typing import List
+from .parser import ParsedFunction, ReturnColumn # Use absolute import if modules are in different packages
+import textwrap
+
+def _generate_dataclass(func: ParsedFunction) -> str:
+    """Generates a dataclass string for a function returning TABLE."""
+    class_name = func.python_name.replace("get_", "").replace("_", " ").title().replace(" ", "")
+    if not class_name:
+        class_name = "ResultRow"
+
+    fields = []
+    for col in func.return_columns:
+        fields.append(f"    {col.name}: {col.python_type}")
+
+    fields_str = "\n".join(fields)
+    # Construct the string directly with correct indentation
+    return f"""@dataclass
+class {class_name}:
+{fields_str}
+"""
+
+def _generate_function(func: ParsedFunction) -> str:
+    """Generates the Python async function string."""
+    params_list = ["conn: AsyncConnection"]
+    params_list.extend([f"{p.name}: {p.python_type}" for p in func.params])
+    params_str = ", ".join(params_list)
+
+    # Determine return type hint (logic remains the same)
+    return_type_hint = "None"
+    class_name_for_table = "ResultRow" # Default
+    if func.returns_table:
+        class_name_for_table = func.python_name.replace("get_", "").replace("_", " ").title().replace(" ", "") or "ResultRow"
+        return_type_hint = class_name_for_table
+        if func.returns_setof:
+            return_type_hint = f"List[{class_name_for_table}]"
+        else:
+            return_type_hint = f"Optional[{class_name_for_table}]"
+    elif func.returns_record:
+        return_type_hint = func.return_type
+        if func.returns_setof:
+            return_type_hint = f"List[{return_type_hint}]"
+        else:
+            return_type_hint = f"Optional[{return_type_hint}]"
+    elif func.return_type != "None":
+        return_type_hint = func.return_type
+        if not func.returns_setof:
+            return_type_hint = f"Optional[{return_type_hint}]"
+
+    sql_args_placeholders = ", ".join(["%s"] * len(func.params))
+    python_args_list = "[" + ", ".join([p.name for p in func.params]) + "]"
+    docstring = f'""Call PostgreSQL function {func.sql_name}().""'
+
+    # --- Generate Function Body --- 
+    # Use simple string formatting and ensure correct base indentation
+    body_lines = []
+    body_lines.append("async with conn.cursor() as cur:")
+    body_lines.append(f'    await cur.execute("SELECT * FROM {func.sql_name}({sql_args_placeholders})", {python_args_list})')
+
+    if func.return_type == "None" and not func.returns_table and not func.returns_record:
+        body_lines.append("    return None") # Explicit return None for void functions
+    elif func.returns_setof:
+        body_lines.append("    rows = await cur.fetchall()")
+        if func.returns_table:
+             body_lines.append(f"    return [{class_name_for_table}(*row) for row in rows]")
+        else:
+             body_lines.append("    # Extract first element if it's a list of single-element tuples")
+             body_lines.append("    return [row[0] for row in rows if row]" )
+    else: # Single row expected
+        body_lines.append("    row = await cur.fetchone()")
+        body_lines.append("    if row is None:")
+        body_lines.append("        return None")
+        if func.returns_table:
+             body_lines.append(f"    return {class_name_for_table}(*row)")
+        else:
+             body_lines.append("    # For scalar, return the single value; for record (tuple), return the tuple")
+             body_lines.append("    return row[0] if len(row) == 1 else row")
+
+    # Indent the entire body correctly
+    indented_body = textwrap.indent("\n".join(body_lines), prefix="    ")
+
+    # --- Assemble the function --- 
+    func_def = f"""
+async def {func.python_name}({params_str}) -> {return_type_hint}:
+    {docstring}
+{indented_body}
+"""
+    return func_def
+
+def generate_python_code(functions: List[ParsedFunction], source_sql_file: str = "") -> str:
+    """Generates the full Python module code as a string."""
+    if not functions:
+        return "# No functions found in the source SQL file.\n"
+
+    all_imports = set()
+    dataclasses = []
+    generated_functions = []
+
+    all_imports.add("from psycopg import AsyncConnection")
+    all_imports.add("from typing import Optional, List, Any, Tuple, Dict")
+
+    for func in functions:
+        all_imports.update(func.required_imports)
+        if func.returns_table:
+            # Ensure dataclass import is added *if* a table is returned
+            all_imports.add("from dataclasses import dataclass") 
+            dataclasses.append(_generate_dataclass(func))
+        generated_functions.append(_generate_function(func))
+
+    # Filter out potential None values from imports, just in case
+    all_imports = {imp for imp in all_imports if imp}
+
+    from_imports = sorted([imp for imp in all_imports if imp.startswith("from")])
+    direct_imports = sorted([imp for imp in all_imports if imp.startswith("import")])
+
+    header = f"# Generated by sql-to-python-api from {source_sql_file}\n# DO NOT EDIT MANUALLY"
+    
+    import_section = "\n".join(direct_imports + from_imports)
+    # Add an extra newline after imports if there are subsequent sections
+    import_section += "\n" if dataclasses or generated_functions else ""
+    
+    dataclass_section = "\n\n".join(dataclasses)
+     # Add an extra newline after dataclasses if there are functions
+    dataclass_section += "\n" if generated_functions else ""
+    
+    function_section = "\n\n".join(generated_functions)
+
+    # Assemble the final code
+    code_parts = [header, import_section]
+    if dataclass_section.strip(): # Only add if there's content
+        code_parts.append(dataclass_section)
+    if function_section.strip(): # Only add if there's content
+        code_parts.append(function_section)
+
+    return "\n".join(code_parts).strip() + "\n" # Ensure single trailing newline 

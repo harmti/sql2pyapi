@@ -1,0 +1,43 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "sql-to-python-api"
+version = "0.1.0"
+description = "Generate Python async API wrappers from PostgreSQL function definitions."
+authors = [
+    { name = "Your Name", email = "you@example.com" },
+]
+readme = "README.md"
+requires-python = ">=3.10"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "License :: OSI Approved :: MIT License", # Assuming MIT, change if needed
+    "Operating System :: OS Independent",
+    "Topic :: Software Development :: Code Generators",
+    "Topic :: Database",
+]
+dependencies = [
+    "typer[all]>=0.9.0,<1.0.0",
+    "psycopg[binary,pool]>=3.1.9,<4.0.0", # For generated code
+]
+
+[project.urls]
+"Homepage" = "" # Add repository URL if available
+"Bug Tracker" = "" # Add issue tracker URL if available
+
+[project.scripts]
+sql-to-pyapi = "sql_to_python_api.cli:app"
+
+[tool.hatch.version]
+path = "src/sql_to_python_api/__init__.py" # Optional: manage version in __init__.py
+
+[tool.hatch.build.targets.sdist]
+include = ["/src", "/pyproject.toml", "/README.md"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/sql_to_python_api"] 
