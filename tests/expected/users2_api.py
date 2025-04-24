@@ -3,13 +3,14 @@
 from dataclasses import dataclass
 from datetime import datetime, date
 from psycopg import AsyncConnection
-from typing import Any, List, Optional
+from typing import List, Optional
 from uuid import UUID
 
 
 @dataclass
 class CreateUser:
-    id: Any
+    id: UUID
+    clerk_id: str
 
 
 @dataclass

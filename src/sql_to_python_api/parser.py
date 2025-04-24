@@ -111,8 +111,11 @@ def _parse_column_definitions(col_defs_str: str) -> Tuple[List[ReturnColumn], se
     if not col_defs_str:
         return columns, required_imports
 
+    # Handle both comma-separated (from RETURNS TABLE) and newline-separated (from CREATE TABLE)
+    processed_defs = col_defs_str.replace(',', '\n')
+
     # Split definition block into individual lines, easier to process
-    lines = col_defs_str.splitlines()
+    lines = processed_defs.splitlines()
     
     terminating_keywords = {
         'primary', 'unique', 'not', 'null', 
@@ -420,13 +423,15 @@ def parse_sql(sql_content: str, schema_content: Optional[str] = None) -> Tuple[L
                              required_imports.update(TABLE_SCHEMA_IMPORTS[normalized_table_name])
                              required_imports.add("from dataclasses import dataclass")
                         else:
-                             # Fallback as before
-                             logging.warning(f"    Schema not found for table '{normalized_table_name}'. Mapping to List[Any]. Define dataclass '{normalized_table_name.capitalize()}' manually or ensure CREATE TABLE is parsed.")
-                             func.return_type = "Any" 
+                             # Fallback: Schema not found
+                             logging.warning(f"    Schema not found for table '{normalized_table_name}'. Generating placeholder dataclass. Define dataclass '{_to_singular_camel_case(normalized_table_name)}' manually or ensure CREATE TABLE is parsed.")
+                             # Do NOT set func.return_type here. Let the base type logic handle it.
                              func.returns_table = True # Still treat as table for generator naming
+                             # Create a placeholder column definition
                              func.return_columns = [ReturnColumn(name="unknown", sql_type=table_name_return, python_type="Any")]
+                             # Ensure necessary imports for the placeholder scenario
                              required_imports.add(PYTHON_IMPORTS["Any"])
-                             required_imports.add("from dataclasses import dataclass")
+                             required_imports.add("from dataclasses import dataclass") 
             else:
                  logging.warning(f"Could not determine return type for function {sql_name}. Assuming None.")
                  func.return_type = "None"
