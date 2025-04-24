@@ -27,18 +27,25 @@ class User:
     is_deleted: bool
 
 
-
-
-async def create_user(conn: AsyncConnection, clerk_id: str, email: Optional[str] = None, email_verified: Optional[bool] = None, first_name: Optional[str] = None, last_name: Optional[str] = None) -> Optional[CreateUser]:
+async def create_user(
+    conn: AsyncConnection,
+    clerk_id: str,
+    email: Optional[str] = None,
+    email_verified: Optional[bool] = None,
+    first_name: Optional[str] = None,
+    last_name: Optional[str] = None,
+) -> Optional[CreateUser]:
     """Function to create a new user or return existing if clerk_id matches"""
     async with conn.cursor() as cur:
-        await cur.execute("SELECT * FROM create_user(%s, %s, %s, %s, %s)", [clerk_id, email, email_verified, first_name, last_name])
+        await cur.execute(
+            "SELECT * FROM create_user(%s, %s, %s, %s, %s)",
+            [clerk_id, email, email_verified, first_name, last_name],
+        )
         row = await cur.fetchone()
         if row is None:
             return None
         # Ensure dataclass 'CreateUser' is defined above.
         return CreateUser(*row)
-
 
 
 async def get_user_by_clerk_id(conn: AsyncConnection, clerk_id: str) -> List[User]:
@@ -50,7 +57,6 @@ async def get_user_by_clerk_id(conn: AsyncConnection, clerk_id: str) -> List[Use
         return [User(*row) for row in rows] if rows else []
 
 
-
 async def get_user_by_id(conn: AsyncConnection, id: UUID) -> List[User]:
     """Function to get a user by their internal id"""
     async with conn.cursor() as cur:
@@ -58,7 +64,6 @@ async def get_user_by_id(conn: AsyncConnection, id: UUID) -> List[User]:
         rows = await cur.fetchall()
         # Ensure dataclass 'User' is defined above.
         return [User(*row) for row in rows] if rows else []
-
 
 
 async def get_users(conn: AsyncConnection) -> List[User]:
@@ -70,15 +75,24 @@ async def get_users(conn: AsyncConnection) -> List[User]:
         return [User(*row) for row in rows] if rows else []
 
 
-
-async def update_user(conn: AsyncConnection, id: UUID, email: Optional[str] = None, email_verified: Optional[bool] = None, first_name: Optional[str] = None, last_name: Optional[str] = None, last_sign_in_at: Optional[datetime] = None) -> List[User]:
+async def update_user(
+    conn: AsyncConnection,
+    id: UUID,
+    email: Optional[str] = None,
+    email_verified: Optional[bool] = None,
+    first_name: Optional[str] = None,
+    last_name: Optional[str] = None,
+    last_sign_in_at: Optional[datetime] = None,
+) -> List[User]:
     """Function to update user details"""
     async with conn.cursor() as cur:
-        await cur.execute("SELECT * FROM update_user(%s, %s, %s, %s, %s, %s)", [id, email, email_verified, first_name, last_name, last_sign_in_at])
+        await cur.execute(
+            "SELECT * FROM update_user(%s, %s, %s, %s, %s, %s)",
+            [id, email, email_verified, first_name, last_name, last_sign_in_at],
+        )
         rows = await cur.fetchall()
         # Ensure dataclass 'User' is defined above.
         return [User(*row) for row in rows] if rows else []
-
 
 
 async def delete_user(conn: AsyncConnection, id: UUID) -> Optional[UUID]:

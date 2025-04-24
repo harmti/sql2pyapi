@@ -4,11 +4,10 @@ from psycopg import AsyncConnection
 from typing import Optional
 
 
-
 async def function_with_multiline_dash_comment(conn: AsyncConnection) -> Optional[int]:
     """This is a multi-line comment
-describing the first function.
-It has three lines."""
+    describing the first function.
+    It has three lines."""
     async with conn.cursor() as cur:
         await cur.execute("SELECT * FROM function_with_multiline_dash_comment()", [])
         row = await cur.fetchone()
@@ -16,7 +15,6 @@ It has three lines."""
             return None
         # Return first element for scalar
         return row[0]
-
 
 
 async def function_with_single_block_comment(conn: AsyncConnection) -> Optional[str]:
@@ -30,11 +28,10 @@ async def function_with_single_block_comment(conn: AsyncConnection) -> Optional[
         return row[0]
 
 
-
 async def function_with_multi_block_comment(conn: AsyncConnection) -> Optional[bool]:
     """* This is a multi-line block comment.
- * It uses asterisks for alignment.
- *   And has some indentation."""
+    * It uses asterisks for alignment.
+    *   And has some indentation."""
     async with conn.cursor() as cur:
         await cur.execute("SELECT * FROM function_with_multi_block_comment()", [])
         row = await cur.fetchone()
@@ -44,13 +41,11 @@ async def function_with_multi_block_comment(conn: AsyncConnection) -> Optional[b
         return row[0]
 
 
-
 async def function_with_no_comment(conn: AsyncConnection) -> None:
     """Call PostgreSQL function function_with_no_comment()."""
     async with conn.cursor() as cur:
         await cur.execute("SELECT * FROM function_with_no_comment()", [])
         return None
-
 
 
 async def function_with_separated_comment(conn: AsyncConnection) -> Optional[int]:

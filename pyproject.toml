@@ -30,6 +30,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0.0", # Or pin to a specific version range if needed
+    "ruff>=0.5.5", # Add ruff
 ]
 
 [project.urls]
@@ -46,4 +47,10 @@ path = "src/sql_to_python_api/__init__.py" # Optional: manage version in __init_
 include = ["/src", "/pyproject.toml", "/README.md"]
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/sql_to_python_api"] 
+packages = ["src/sql_to_python_api"]
+
+[tool.ruff]
+line-length = 120
+exclude = [
+    "tests/expected",
+]

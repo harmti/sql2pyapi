@@ -6,11 +6,20 @@ from typing import Any, Dict, Optional
 from uuid import UUID
 
 
-
-async def add_item(conn: AsyncConnection, name: str, category_id: int, is_available: bool, price: Decimal, attributes: Dict[str, Any]) -> Optional[UUID]:
+async def add_item(
+    conn: AsyncConnection,
+    name: str,
+    category_id: int,
+    is_available: bool,
+    price: Decimal,
+    attributes: Dict[str, Any],
+) -> Optional[UUID]:
     """Adds an item with various attributes"""
     async with conn.cursor() as cur:
-        await cur.execute("SELECT * FROM add_item(%s, %s, %s, %s, %s)", [name, category_id, is_available, price, attributes])
+        await cur.execute(
+            "SELECT * FROM add_item(%s, %s, %s, %s, %s)",
+            [name, category_id, is_available, price, attributes],
+        )
         row = await cur.fetchone()
         if row is None:
             return None

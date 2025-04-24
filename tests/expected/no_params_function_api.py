@@ -5,7 +5,6 @@ from psycopg import AsyncConnection
 from typing import Optional
 
 
-
 async def get_current_db_time(conn: AsyncConnection) -> Optional[datetime]:
     """Returns the current database time"""
     async with conn.cursor() as cur:

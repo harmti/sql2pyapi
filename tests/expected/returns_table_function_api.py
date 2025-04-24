@@ -13,8 +13,6 @@ class UserBasicInfo:
     is_active: bool
 
 
-
-
 async def get_user_basic_info(conn: AsyncConnection, user_id: UUID) -> Optional[UserBasicInfo]:
     """Returns a user's basic info as a table"""
     async with conn.cursor() as cur:

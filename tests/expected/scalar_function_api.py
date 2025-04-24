@@ -4,7 +4,6 @@ from psycopg import AsyncConnection
 from typing import Optional
 
 
-
 async def get_item_count(conn: AsyncConnection) -> Optional[int]:
     """Returns a simple count"""
     async with conn.cursor() as cur:
@@ -14,7 +13,6 @@ async def get_item_count(conn: AsyncConnection) -> Optional[int]:
             return None
         # Return first element for scalar
         return row[0]
-
 
 
 async def get_item_name(conn: AsyncConnection, id: int) -> Optional[str]:

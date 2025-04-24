@@ -4,7 +4,6 @@ from psycopg import AsyncConnection
 from typing import List, Optional, Tuple
 
 
-
 async def get_processing_status(conn: AsyncConnection) -> Optional[Tuple]:
     """Returns an anonymous record containing status and count"""
     async with conn.cursor() as cur:
@@ -14,7 +13,6 @@ async def get_processing_status(conn: AsyncConnection) -> Optional[Tuple]:
             return None
         # Return tuple for record type
         return row
-
 
 
 async def get_all_statuses(conn: AsyncConnection) -> List[Tuple]:

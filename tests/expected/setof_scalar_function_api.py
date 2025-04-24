@@ -4,7 +4,6 @@ from psycopg import AsyncConnection
 from typing import List
 
 
-
 async def get_item_ids_by_category(conn: AsyncConnection, category_name: str) -> List[int]:
     """Returns a list of item IDs for a given category"""
     async with conn.cursor() as cur:

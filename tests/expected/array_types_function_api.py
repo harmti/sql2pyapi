@@ -4,7 +4,6 @@ from psycopg import AsyncConnection
 from typing import List, Optional
 
 
-
 async def get_item_ids(conn: AsyncConnection) -> Optional[List[int]]:
     """Returns an array of integers"""
     async with conn.cursor() as cur:
@@ -14,7 +13,6 @@ async def get_item_ids(conn: AsyncConnection) -> Optional[List[int]]:
             return None
         # Return first element for scalar
         return row[0]
-
 
 
 async def process_tags(conn: AsyncConnection, tags: List[str]) -> Optional[List[str]]:
