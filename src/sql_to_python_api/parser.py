@@ -94,6 +94,17 @@ def _map_sql_to_python_type(sql_type: str, is_optional: bool = False) -> Tuple[s
         list_import = PYTHON_IMPORTS.get("List")
         if list_import: combined_imports.add(list_import)
     
+    # --- Add special handling for dict/json types ---
+    if py_type == "dict":
+        py_type = "Dict[str, Any]" # Make it the specific generic type
+        # Ensure Dict and Any imports are added
+        dict_import = PYTHON_IMPORTS.get("Dict")
+        any_import = PYTHON_IMPORTS.get("Any")
+        if dict_import: combined_imports.add(dict_import)
+        if any_import: combined_imports.add(any_import)
+        # Remove the basic 'dict' import if it was added (it's not needed)
+        # combined_imports.discard(PYTHON_IMPORTS.get("dict")) # Assuming no explicit 'dict' import
+
     if is_optional and py_type != "Any":
         # Only wrap non-array types with Optional here; array types are handled by [] or List[]
         # Or assume default NULL means optional even for arrays? For now, only non-arrays.
