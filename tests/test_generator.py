@@ -33,33 +33,47 @@ def run_cli_tool(functions_sql: Path, output_py: Path, schema_sql: Path = None):
     return result
 
 
-def test_user_generation_with_schema():
+def test_user_generation_with_schema(tmp_path):
     """Test generating the user API with a separate schema file."""
     functions_sql_path = FIXTURES_DIR / "users2.sql"
     schema_sql_path = FIXTURES_DIR / "schema2.sql"
     expected_output_path = EXPECTED_DIR / "users2_api.py"
-    # Create a temporary output file for the test run
-    # Note: pytest provides fixtures like `tmp_path` for better temporary file handling
-    # Using a fixed name for now, but tmp_path is recommended for more robust tests.
-    actual_output_path = TEST_DIR / "_temp_users2_api.py" 
+    # Use pytest's tmp_path fixture for the output file
+    actual_output_path = tmp_path / "users2_api.py" 
 
-    try:
-        # Run the generator tool
-        run_cli_tool(functions_sql_path, actual_output_path, schema_sql_path)
+    # Run the generator tool
+    run_cli_tool(functions_sql_path, actual_output_path, schema_sql_path)
 
-        # Compare the generated file with the expected file
-        assert actual_output_path.is_file(), "Generated file was not created."
-        
-        expected_content = expected_output_path.read_text()
-        actual_content = actual_output_path.read_text()
-        
-        assert actual_content == expected_content, (
-            f"Generated file content does not match expected content.\n"
-            f"Expected ({expected_output_path}):\n{expected_content}\n"
-            f"Actual ({actual_output_path}):\n{actual_content}"
-        )
+    # Compare the generated file with the expected file
+    assert actual_output_path.is_file(), "Generated file was not created."
+    
+    expected_content = expected_output_path.read_text()
+    actual_content = actual_output_path.read_text()
+    
+    assert actual_content == expected_content, (
+        f"Generated file content does not match expected content.\n"
+        f"Expected ({expected_output_path}):\n{expected_content}\n"
+        f"Actual ({actual_output_path}):\n{actual_content}"
+    )
+    # No need for manual cleanup, tmp_path handles it
 
-    finally:
-        # Clean up the temporary file
-        if actual_output_path.exists():
-            actual_output_path.unlink() 
+def test_void_function_generation(tmp_path):
+    """Test generating a function that returns void."""
+    functions_sql_path = FIXTURES_DIR / "void_function.sql"
+    expected_output_path = EXPECTED_DIR / "void_function_api.py"
+    actual_output_path = tmp_path / "void_function_api.py"
+
+    # Run the generator tool (no schema file needed)
+    run_cli_tool(functions_sql_path, actual_output_path)
+
+    # Compare the generated file with the expected file
+    assert actual_output_path.is_file(), "Generated file was not created."
+    
+    expected_content = expected_output_path.read_text()
+    actual_content = actual_output_path.read_text()
+    
+    assert actual_content == expected_content, (
+        f"Generated file content does not match expected content.\n"
+        f"Expected ({expected_output_path}):\n{expected_content}\n"
+        f"Actual ({actual_output_path}):\n{actual_content}"
+    ) 
