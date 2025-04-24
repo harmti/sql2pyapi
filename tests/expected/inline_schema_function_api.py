@@ -13,6 +13,8 @@ class Product:
     price: Decimal
 
 
+
+
 async def get_all_products(conn: AsyncConnection) -> List[Product]:
     """Function that returns rows from the products table
 Should use the schema defined above"""
@@ -20,4 +22,4 @@ Should use the schema defined above"""
         await cur.execute("SELECT * FROM get_all_products()", [])
         rows = await cur.fetchall()
         # Ensure dataclass 'Product' is defined above.
-        return [Product(*row) for row in rows] if rows else [] 
+        return [Product(*row) for row in rows] if rows else []

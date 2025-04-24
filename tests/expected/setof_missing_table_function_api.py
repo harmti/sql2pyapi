@@ -13,7 +13,8 @@ from typing import Any, List
 
 
 async def get_undefined_table_data(conn: AsyncConnection) -> List[SomeUndefinedTable]:
-    """The schema for 'some_undefined_table' is intentionally missing."""
+    """Returns a setof some_undefined_table records
+The schema for 'some_undefined_table' is intentionally missing."""
     async with conn.cursor() as cur:
         await cur.execute("SELECT * FROM get_undefined_table_data()", [])
         rows = await cur.fetchall()

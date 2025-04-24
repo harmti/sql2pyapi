@@ -348,30 +348,46 @@ def parse_sql(sql_content: str, schema_content: Optional[str] = None) -> Tuple[L
         
         function_start_pos = match.start()
         
-        # Find the comment immediately preceding this function
-        best_comment = None
-        for comment in reversed(comments): # Search backwards from the last comment
-            if comment["end"] <= function_start_pos:
-                # Check if only whitespace exists between comment end and function start
-                intervening_text = sql_content[comment["end"]:function_start_pos]
-                if intervening_text.strip() == "":
-                    best_comment = comment["text"]
-                    break # Found the closest preceding comment
+        # Find the comment block immediately preceding this function
+        # Combine text from contiguous comment blocks
+        best_comment_block = []
+        last_comment_end = -1
         
+        for i in range(len(comments) - 1, -1, -1): # Search backwards
+            comment = comments[i]
+            if comment["end"] <= function_start_pos:
+                intervening_text = sql_content[comment["end"]:function_start_pos if last_comment_end == -1 else last_comment_end]
+                if intervening_text.strip() == "": # Check whitespace between this comment and the next item (func or comment)
+                    best_comment_block.insert(0, comment["text"]) # Prepend to maintain order
+                    last_comment_end = comment["start"] # Update position for next intervening text check
+                else:
+                    break # Non-whitespace gap, stop collecting
+            elif comment["start"] >= function_start_pos:
+                continue # Comment is after the function start
+            else: 
+                 break # Comment overlaps or is way before with non-whitespace gap
+
+        best_comment = "\n".join(best_comment_block) if best_comment_block else None
+
         cleaned_comment = None
-        if best_comment:
-             if best_comment.startswith("--"):
-                  # Remove '--' and leading/trailing whitespace from each line
-                  lines = [line.strip() for line in best_comment.splitlines()]
-                  cleaned_comment = "\\n".join(line[2:].strip() for line in lines)
-             elif best_comment.startswith("/*"):
-                  # Remove /* */ and leading/trailing whitespace
-                  cleaned_comment = best_comment[2:-2].strip()
-                  # Basic unindentation (remove common leading whitespace)
-                  lines = cleaned_comment.splitlines()
-                  if lines:
-                      import textwrap
-                      cleaned_comment = textwrap.dedent("\\n".join(lines)).strip()
+        if best_comment: # Now best_comment contains the full potentially multi-line block
+             if best_comment.strip().startswith("--"):
+                  # Clean each line within the combined block
+                  all_lines = best_comment.splitlines()
+                  cleaned_lines = [line.strip()[2:].strip() for line in all_lines if line.strip().startswith("--")]
+                  cleaned_comment = "\n".join(cleaned_lines)
+             elif best_comment.strip().startswith("/*"):
+                  # Find the first /* and last */ in the combined block (might span multiple /* */ blocks technically)
+                  start_block = best_comment.find("/*")
+                  end_block = best_comment.rfind("*/")
+                  if start_block != -1 and end_block != -1 and end_block > start_block:
+                       comment_content = best_comment[start_block+2:end_block].strip()
+                       # Dedent the extracted content
+                       import textwrap
+                       cleaned_comment = textwrap.dedent(comment_content).strip()
+                  else:
+                       # Fallback if block delimiters are weird, treat as plain text (might be wrong)
+                       cleaned_comment = best_comment.strip()
 
         logging.info(f"Parsing function signature: {sql_name}")
         # if cleaned_comment:

@@ -74,17 +74,8 @@ def _generate_function(func: ParsedFunction, class_name_map: Dict[str, str]) -> 
     
     # Generate the docstring
     if func.sql_comment:
-        # Format the comment nicely within triple quotes
-        # Add parameters and return type info if available?
-        # For now, just use the comment directly, indented.
-        cleaned_lines = func.sql_comment.strip().split('\n')
-        # Ensure the first line starts correctly and indent subsequent lines
-        if cleaned_lines:
-             indented_comment = "\n".join([cleaned_lines[0].strip()] + [textwrap.indent(line.strip(), '    ') for line in cleaned_lines[1:]])
-             docstring = f'"""{indented_comment}"""'
-        else:
-             # Fallback if comment was empty after cleaning
-             docstring = f'"""Call PostgreSQL function {func.sql_name}()."""'
+        # Use the cleaned comment directly from the parser
+        docstring = f'"""{func.sql_comment}"""'
     else:
         # Default docstring if no comment was found
         docstring = f'"""Call PostgreSQL function {func.sql_name}()."""'
