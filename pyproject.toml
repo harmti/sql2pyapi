@@ -27,6 +27,11 @@ dependencies = [
     "inflection>=0.5.1,<1.0.0", # Added for dataclass naming
 ]
 
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0", # Or pin to a specific version range if needed
+]
+
 [project.urls]
 "Homepage" = "" # Add repository URL if available
 "Bug Tracker" = "" # Add issue tracker URL if available
