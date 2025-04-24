@@ -139,4 +139,25 @@ def test_returns_table_function_generation(tmp_path):
         f"Generated file content does not match expected content.\n"
         f"Expected ({expected_output_path}):\n{expected_content}\n"
         f"Actual ({actual_output_path}):\n{actual_content}"
+    )
+
+def test_setof_missing_table_function_generation(tmp_path):
+    """Test generating a function that returns SETOF table_name where the schema is missing."""
+    functions_sql_path = FIXTURES_DIR / "setof_missing_table_function.sql"
+    expected_output_path = EXPECTED_DIR / "setof_missing_table_function_api.py"
+    actual_output_path = tmp_path / "setof_missing_table_function_api.py"
+
+    # Run the generator tool (no schema file needed)
+    run_cli_tool(functions_sql_path, actual_output_path)
+
+    # Compare the generated file with the expected file
+    assert actual_output_path.is_file(), "Generated file was not created."
+    
+    expected_content = expected_output_path.read_text()
+    actual_content = actual_output_path.read_text()
+    
+    assert actual_content == expected_content, (
+        f"Generated file content does not match expected content.\n"
+        f"Expected ({expected_output_path}):\n{expected_content}\n"
+        f"Actual ({actual_output_path}):\n{actual_content}"
     ) 

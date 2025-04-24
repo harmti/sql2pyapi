@@ -148,9 +148,10 @@ def generate_python_code(
     dataclass_field_imports: Dict[str, set] = {}
 
     # --- First pass: Identify and prepare unique dataclasses --- 
-    processed_tables = set() # Track processed table names to avoid redundant work
+    processed_tables = set()
     for func in functions:
-        all_imports.update(func.required_imports) # Get imports from parser (covers params, return wrappers, scalar types)
+        # Update all_imports with requirements from this function FIRST
+        all_imports.update(func.required_imports) 
         
         target_dataclass_name = None
         table_key = None # Key for tracking processed tables (normalized name)
@@ -197,7 +198,7 @@ def generate_python_code(
         generated_functions.append(_generate_function(func, table_to_class_name_map))
         # Ensure imports from this function are added *after* the dataclass pass
         # but *before* assembling the final import list
-        all_imports.update(func.required_imports) 
+        # all_imports.update(func.required_imports) # MOVED to first pass
 
     # --- Assemble code --- 
     all_imports.discard(None) 

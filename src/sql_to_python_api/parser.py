@@ -424,7 +424,7 @@ def parse_sql(sql_content: str, schema_content: Optional[str] = None) -> Tuple[L
                              required_imports.add("from dataclasses import dataclass")
                         else:
                              # Fallback: Schema not found
-                             logging.warning(f"    Schema not found for table '{normalized_table_name}'. Generating placeholder dataclass. Define dataclass '{_to_singular_camel_case(normalized_table_name)}' manually or ensure CREATE TABLE is parsed.")
+                             logging.warning(f"    Schema not found for table '{normalized_table_name}'. Generating placeholder dataclass. Define the corresponding dataclass manually or ensure CREATE TABLE is parsed.")
                              # Do NOT set func.return_type here. Let the base type logic handle it.
                              func.returns_table = True # Still treat as table for generator naming
                              # Create a placeholder column definition
