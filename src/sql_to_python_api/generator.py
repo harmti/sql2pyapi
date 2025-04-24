@@ -101,7 +101,10 @@ def _generate_function(func: ParsedFunction, class_name_map: Dict[str, str]) -> 
         if func.returns_table:
              body_lines.append(f"    # Ensure dataclass '{final_dataclass_name}' is defined above.")
              body_lines.append(f"    return [{final_dataclass_name}(*row) for row in rows] if rows else []")
-        else: # SETOF scalar or record
+        elif func.returns_record:
+             body_lines.append("    # Return list of tuples for SETOF record")
+             body_lines.append("    return rows")
+        else: # SETOF scalar 
              body_lines.append("    # Assuming SETOF returns list of single-element tuples for scalars")
              body_lines.append("    return [row[0] for row in rows if row]" )
     else: # Single row expected
