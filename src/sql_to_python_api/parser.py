@@ -47,10 +47,11 @@ class SQLParsingError(Exception):
 
 @dataclass
 class SQLParameter:
-    name: str
+    name: str # Original SQL name (e.g., p_email)
+    python_name: str # Pythonic name (e.g., email)
     sql_type: str
     python_type: str
-    is_optional: bool = False # Added flag for default values
+    is_optional: bool = False
 
 @dataclass
 class ReturnColumn:
@@ -167,7 +168,7 @@ def _parse_column_definitions(col_defs_str: str) -> Tuple[List[ReturnColumn], se
         # Clean up type string (e.g., remove trailing precision info if not needed for mapping)
         sql_type_cleaned = sql_type.split('(')[0].strip() 
 
-        py_type, import_stmt = _map_sql_to_python_type(sql_type, is_optional=False) # is_optional not relevant here
+        py_type, import_stmt = _map_sql_to_python_type(sql_type, is_optional=False)
 
         if import_stmt:
             for imp in import_stmt.split('\n'):
@@ -230,7 +231,6 @@ def _parse_params(param_str: str) -> Tuple[List[SQLParameter], set]:
         re.IGNORECASE
     )
     
-    # Split parameters by comma first
     param_defs = param_str.split(',')
     
     for param_def in param_defs:
@@ -242,12 +242,20 @@ def _parse_params(param_str: str) -> Tuple[List[SQLParameter], set]:
              logging.warning(f"Could not parse parameter definition: {param_def}")
              continue
              
-        name = match.group(1).strip()
+        sql_name = match.group(1).strip()
         sql_type = match.group(2).strip()
         remainder = match.group(3).strip()
         
         is_optional = "default" in remainder.lower()
         
+        # Generate Pythonic name
+        python_name = sql_name
+        if python_name.startswith('p_') and len(python_name) > 2:
+             python_name = python_name[2:]
+        elif python_name.startswith('_') and len(python_name) > 1:
+             python_name = python_name[1:]
+        # Add more prefix handling if needed
+
         py_type, import_stmts = _map_sql_to_python_type(sql_type, is_optional)
 
         if import_stmts:
@@ -255,7 +263,13 @@ def _parse_params(param_str: str) -> Tuple[List[SQLParameter], set]:
                 if imp:
                     required_imports.add(imp)
 
-        params.append(SQLParameter(name=name, sql_type=sql_type, python_type=py_type, is_optional=is_optional))
+        params.append(SQLParameter(
+             name=sql_name, 
+             python_name=python_name, # Store pythonic name
+             sql_type=sql_type, 
+             python_type=py_type, 
+             is_optional=is_optional
+        ))
 
     return params, required_imports
 

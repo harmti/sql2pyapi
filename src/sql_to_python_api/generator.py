@@ -41,7 +41,7 @@ def _generate_function(func: ParsedFunction, class_name_map: Dict[str, str]) -> 
     """Generates the Python async function string."""
     params_list_py = ["conn: AsyncConnection"]
     for p in func.params:
-        params_list_py.append(f"{p.name}: {p.python_type}{' = None' if p.is_optional else ''}")
+        params_list_py.append(f"{p.python_name}: {p.python_type}{' = None' if p.is_optional else ''}")
     params_str_py = ", ".join(params_list_py)
 
     # --- Determine return type hint --- 
@@ -70,7 +70,7 @@ def _generate_function(func: ParsedFunction, class_name_map: Dict[str, str]) -> 
         return_type_hint = func.return_type 
 
     sql_args_placeholders = ", ".join(["%s"] * len(func.params))
-    python_args_list = "[" + ", ".join([p.name for p in func.params]) + "]"
+    python_args_list = "[" + ", ".join([p.python_name for p in func.params]) + "]"
     docstring = f'""Call PostgreSQL function {func.sql_name}().""'
 
     # --- Generate Function Body --- 
