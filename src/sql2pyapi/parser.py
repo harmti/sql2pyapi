@@ -296,12 +296,25 @@ def _parse_params(param_str: str) -> Tuple[List[SQLParameter], set]:
     if not param_str:
         return params, required_imports
 
+    # Regex revised: simpler, less greedy type capture
+    # 1: Optional mode (IN/OUT/INOUT)
+    # 2: Parameter name
+    # 3: Parameter type (non-greedy, stop before DEFAULT or end)
+    # 4: Optional DEFAULT clause (and anything after)
     param_regex = re.compile(
-        r"\s*(?:(?:IN|OUT|INOUT)\s+)?([a-zA-Z0-9_]+)\s+([a-zA-Z0-9_.()\[\]]+(?:(?:\s*\(.*?\))?))"  # Name and Type (incl precision/array)
-        r"(.*)",  # Capture the rest (potential default clause)
-        re.IGNORECASE,
+        r"""
+        \s*                         # Leading whitespace
+        (?:(IN|OUT|INOUT)\s+)?      # Optional mode (Group 1)
+        ([a-zA-Z0-9_]+)             # Parameter name (Group 2)
+        \s+                         # Whitespace after name
+        (.*?)                       # Parameter type (Group 3) - Non-greedy
+        (?:\s+(DEFAULT\s+.*)|$)    # Optional Default clause or end of string (Group 4 for DEFAULT part)
+        """,
+        re.IGNORECASE | re.VERBOSE,
     )
 
+    # Split by comma, but handle potential commas inside DEFAULT strings or type definitions
+    # Basic split works for now, complexity increases if defaults contain commas
     param_defs = param_str.split(",")
 
     for param_def in param_defs:
@@ -311,14 +324,30 @@ def _parse_params(param_str: str) -> Tuple[List[SQLParameter], set]:
 
         match = param_regex.match(param_def)
         if not match:
-            logging.warning(f"Could not parse parameter definition: {param_def}")
-            continue
+            # Handle the case where split might happen inside parens like numeric(10, 2)
+            # This is a basic recovery attempt
+            if params and ')' not in params[-1].sql_type and ')' in param_def:
+                 logging.debug(f"Attempting recovery for split inside type: appending '{param_def}'")
+                 params[-1].sql_type += "," + param_def
+                 # Re-run type mapping for the corrected type
+                 py_type, import_stmts = _map_sql_to_python_type(params[-1].sql_type, params[-1].is_optional)
+                 params[-1].python_type = py_type
+                 if import_stmts:
+                    for imp in import_stmts.split("\n"):
+                         if imp:
+                             required_imports.add(imp)
+                 continue # Skip rest of processing for this fragment
+            else:
+                 logging.warning(f"Could not parse parameter definition: {param_def}")
+                 continue
 
-        sql_name = match.group(1).strip()
-        sql_type = match.group(2).strip()
-        remainder = match.group(3).strip()
+        # mode = match.group(1) # Currently unused
+        sql_name = match.group(2).strip()
+        sql_type = match.group(3).strip()
+        remainder = match.group(4) # Includes 'DEFAULT ...'
+        remainder = remainder.strip() if remainder else ""
 
-        is_optional = "default" in remainder.lower()
+        is_optional = remainder.lower().startswith("default")
 
         # Generate Pythonic name
         python_name = sql_name
@@ -326,7 +355,6 @@ def _parse_params(param_str: str) -> Tuple[List[SQLParameter], set]:
             python_name = python_name[2:]
         elif python_name.startswith("_") and len(python_name) > 1:
             python_name = python_name[1:]
-        # Add more prefix handling if needed
 
         py_type, import_stmts = _map_sql_to_python_type(sql_type, is_optional)
 
@@ -338,7 +366,7 @@ def _parse_params(param_str: str) -> Tuple[List[SQLParameter], set]:
         params.append(
             SQLParameter(
                 name=sql_name,
-                python_name=python_name,  # Store pythonic name
+                python_name=python_name,
                 sql_type=sql_type,
                 python_type=py_type,
                 is_optional=is_optional,

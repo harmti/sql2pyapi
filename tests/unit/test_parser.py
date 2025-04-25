@@ -1,10 +1,10 @@
 """Unit tests for the sql2pyapi parser module."""
 
 import pytest
-from typing import Optional, Tuple, Set
+from typing import Optional, Tuple, Set, List
 
 # Import the function under test (even if private)
-from sql2pyapi.parser import _map_sql_to_python_type
+from sql2pyapi.parser import _map_sql_to_python_type, _parse_params, SQLParameter
 
 # Parameterized test cases: (sql_type, is_optional, expected_py_type, expected_imports)
 map_type_test_cases = [
@@ -95,3 +95,61 @@ def test_map_sql_to_python_type(sql_type: str, is_optional: bool, expected_py_ty
 # def test_dummy():
 #     """Dummy test to ensure discovery."""
 #     assert True 
+
+
+# --- Tests for _parse_params --- 
+
+# Parameterized test cases: (param_str, expected_params, expected_imports)
+parse_params_test_cases = [
+    # No params
+    ("", [], set()), 
+    (" ", [], set()),
+    # Single simple param
+    ("p_name text", [SQLParameter('p_name', 'name', 'text', 'str', False)], set()),
+    # Multiple simple params
+    ("p_id integer, p_email varchar", [
+        SQLParameter('p_id', 'id', 'integer', 'int', False),
+        SQLParameter('p_email', 'email', 'varchar', 'str', False)
+    ], set()),
+    # Params needing pythonic name conversion
+    ("_p_name text, _value int", [
+        SQLParameter('_p_name', 'p_name', 'text', 'str', False),
+        SQLParameter('_value', 'value', 'int', 'int', False)
+    ], set()),
+    # Params with default values (implies optional)
+    ("p_count int DEFAULT 0", [SQLParameter('p_count', 'count', 'int', 'Optional[int]', True)], {"from typing import Optional"}),
+    ("p_tag text DEFAULT 'hello'", [SQLParameter('p_tag', 'tag', 'text', 'Optional[str]', True)], {"from typing import Optional"}),
+    ("p_active boolean DEFAULT true, p_ratio numeric DEFAULT 0.5", [
+        SQLParameter('p_active', 'active', 'boolean', 'Optional[bool]', True),
+        SQLParameter('p_ratio', 'ratio', 'numeric', 'Optional[Decimal]', True)
+    ], {"from typing import Optional", "from decimal import Decimal"}),
+    # Params with complex types
+    ("p_ids uuid[]", [SQLParameter('p_ids', 'ids', 'uuid[]', 'List[UUID]', False)], {"from typing import List", "from uuid import UUID"}),
+    ("p_data jsonb", [SQLParameter('p_data', 'data', 'jsonb', 'Dict[str, Any]', False)], {"from typing import Dict", "from typing import Any"}),
+    ("p_dates date[] DEFAULT NULL", [SQLParameter('p_dates', 'dates', 'date[]', 'Optional[List[date]]', True)], {"from typing import List", "from datetime import date", "from typing import Optional"}),
+    # Params with IN/OUT/INOUT modes (current parser ignores mode but should parse name/type)
+    ("IN p_user_id int", [SQLParameter('p_user_id', 'user_id', 'int', 'int', False)], set()),
+    ("OUT p_result text", [SQLParameter('p_result', 'result', 'text', 'str', False)], set()),
+    ("INOUT p_counter bigint", [SQLParameter('p_counter', 'counter', 'bigint', 'int', False)], set()),
+    # Mixed cases
+    ("p_id int, IN p_name text DEFAULT 'Guest', p_values int[]", [
+        SQLParameter('p_id', 'id', 'int', 'int', False),
+        SQLParameter('p_name', 'name', 'text', 'Optional[str]', True),
+        SQLParameter('p_values', 'values', 'int[]', 'List[int]', False)
+    ], {"from typing import Optional", "from typing import List"}),
+    # Types with precision/scale
+    ("p_price numeric(10, 2)", [SQLParameter('p_price', 'price', 'numeric(10,2)', 'Decimal', False)], {"from decimal import Decimal"}),
+    ("p_code character varying(50) DEFAULT 'DEFAULT'", [SQLParameter('p_code', 'code', 'character varying(50)', 'Optional[str]', True)], {"from typing import Optional"}),
+]
+
+
+@pytest.mark.parametrize("param_str, expected_params, expected_imports", parse_params_test_cases)
+def test_parse_params(param_str: str, expected_params: List[SQLParameter], expected_imports: Set[str]):
+    """Tests the _parse_params function with various input strings."""
+    params, required_imports = _parse_params(param_str)
+
+    # Check the list of SQLParameter objects
+    assert params == expected_params
+
+    # Check the set of required imports
+    assert required_imports == expected_imports 
