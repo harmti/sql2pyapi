@@ -394,6 +394,94 @@ def _parse_params(param_str: str) -> Tuple[List[SQLParameter], set]:
     return params, required_imports
 
 
+def _clean_comment_block(comment_block: str) -> str:
+    """Cleans a block of SQL comments (either -- or /* */ style) for use as a docstring."""
+    cleaned_comment = None
+    lines = comment_block.strip().splitlines()
+    if not lines:
+        return ""
+
+    if lines[0].strip().startswith("--"):
+        cleaned_lines = []
+        for line in lines:
+            dash_pos = line.find("--")
+            if dash_pos != -1:
+                content_start_pos = dash_pos + 2
+                if content_start_pos < len(line) and line[content_start_pos] == " ":
+                    content_start_pos += 1
+                cleaned_lines.append(line[content_start_pos:])
+            else:
+                cleaned_lines.append(line)
+        raw_comment = "\n".join(cleaned_lines)
+        cleaned_comment = textwrap.dedent(raw_comment).strip("\n")
+
+    elif lines[0].strip().startswith("/*"):
+        start_block_idx = comment_block.find("/*")
+        end_block_idx = comment_block.rfind("*/")
+        if start_block_idx != -1 and end_block_idx != -1 and end_block_idx > start_block_idx:
+            comment_content = comment_block[start_block_idx + 2 : end_block_idx]
+            content_lines = comment_content.splitlines()
+            consistent_star = all(line.strip().startswith("*") or not line.strip() for line in content_lines[1:])
+
+            processed_lines = []
+            if consistent_star:
+                for line in content_lines:
+                    lstripped_line = line.lstrip(" ")
+                    if lstripped_line.startswith("*"):
+                        star_pos = line.find("*")
+                        content_start = star_pos + 1
+                        if content_start < len(line) and line[content_start] == " ":
+                            content_start += 1
+                        processed_lines.append(line[content_start:])
+                    else:
+                        processed_lines.append(line)
+                comment_content = "\n".join(processed_lines)
+
+            dedented_content = textwrap.dedent(comment_content)
+            cleaned_comment = dedented_content.strip("\n")
+        else:
+            cleaned_comment = comment_block.strip()
+    else:
+        # Should not happen if called with valid comment block, but handle defensively
+        cleaned_comment = comment_block.strip()
+
+    return cleaned_comment if cleaned_comment is not None else ""
+
+
+def _find_preceding_comment(sql_content: str, function_start_pos: int, all_comments: List[Dict]) -> Optional[str]:
+    """Finds and cleans the comment block immediately preceding a function definition."""
+    best_comment_block_lines = []
+    # Start anchor position at the beginning of the function itself
+    last_anchor_pos = function_start_pos 
+
+    for i in range(len(all_comments) - 1, -1, -1):  # Search backwards
+        comment = all_comments[i]
+        
+        # Skip comments that start at or after the current anchor position
+        if comment["start"] >= last_anchor_pos:
+            continue
+
+        # Check the text between the end of this comment and the last anchor position
+        intervening_text = sql_content[comment["end"] : last_anchor_pos]
+
+        if intervening_text.strip() == "":
+            # This comment is contiguous to the block or function start
+            # Add its text to the beginning of our list
+            best_comment_block_lines.insert(0, comment["text"])
+            # Update the anchor to the start of this comment, looking for more comments before it
+            last_anchor_pos = comment["start"]
+        else:
+            # Found non-whitespace text between this comment and the anchor
+            # This means the contiguous block (if any) has ended, so stop searching
+            break
+
+    if not best_comment_block_lines:
+        return None
+
+    full_comment_block = "\n".join(best_comment_block_lines)
+    return _clean_comment_block(full_comment_block)
+
+
 def parse_sql(sql_content: str, schema_content: Optional[str] = None) -> Tuple[List[ParsedFunction], Dict[str, set]]:
     """
     Parses SQL content, optionally using a separate schema file.
@@ -424,14 +512,12 @@ def parse_sql(sql_content: str, schema_content: Optional[str] = None) -> Tuple[L
     # --- Second Pass: Parse CREATE FUNCTION statements (only from main file) ---
     logging.info("Parsing CREATE FUNCTION statements...")
 
-    # Regex to find comments (both -- and /* */)
-    comment_regex = re.compile(r"(--.*?$)|(/\\*.*?\\*/)", re.MULTILINE | re.DOTALL)
-    # Find all comments and store their positions and content
-    comments = []
-    for comment_match in comment_regex.finditer(sql_content):
-        start, end = comment_match.span()
-        comment_text = comment_match.group(0)
-        comments.append({"start": start, "end": end, "text": comment_text})
+    # Pre-parse all comments once
+    comment_regex = re.compile(r"(--.*?$)|(/\*.*?\*/)", re.MULTILINE | re.DOTALL)
+    all_comments = [
+        {"start": m.start(), "end": m.end(), "text": m.group(0)}
+        for m in comment_regex.finditer(sql_content)
+    ]
 
     function_regex = re.compile(
         r"CREATE(?:\s+OR\s+REPLACE)?\s+FUNCTION\s+([a-zA-Z0-9_.]+)"
@@ -441,8 +527,7 @@ def parse_sql(sql_content: str, schema_content: Optional[str] = None) -> Tuple[L
         re.IGNORECASE | re.DOTALL | re.MULTILINE,
     )
 
-    # last_match_end removed from here, wasn't used before the loop
-    for match in function_regex.finditer(sql_content):  # Use original sql_content here
+    for match in function_regex.finditer(sql_content):
         sql_name = match.group(1).strip()
         param_str = match.group(2).strip() if match.group(2) else ""
         returns_setof = bool(match.group(3))
@@ -452,104 +537,17 @@ def parse_sql(sql_content: str, schema_content: Optional[str] = None) -> Tuple[L
 
         function_start_pos = match.start()
 
-        # Find the comment block immediately preceding this function
-        best_comment_block = []
-        last_comment_end = -1
-
-        for i in range(len(comments) - 1, -1, -1):  # Search backwards
-            comment = comments[i]
-            if comment["end"] <= function_start_pos:
-                intervening_text = sql_content[
-                    comment["end"] : function_start_pos if last_comment_end == -1 else last_comment_end
-                ]
-                if intervening_text.strip() == "":
-                    best_comment_block.insert(0, comment["text"])
-                    last_comment_end = comment["start"]
-                else:
-                    break
-            elif comment["start"] >= function_start_pos:
-                continue
-            else:
-                break
-
-        best_comment = "\n".join(best_comment_block) if best_comment_block else None
-
-        cleaned_comment = None
-        if best_comment:
-            lines = best_comment.strip().splitlines()
-            if lines[0].strip().startswith("--"):
-                cleaned_lines = []
-                for line in lines:  # Process original lines
-                    # Find the start of the actual comment text
-                    dash_pos = line.find("--")
-                    if dash_pos != -1:
-                        content_start_pos = dash_pos + 2
-                        # Remove one optional space after '--'
-                        if content_start_pos < len(line) and line[content_start_pos] == " ":
-                            content_start_pos += 1
-                        # Append the rest of the line, preserving its original form
-                        cleaned_lines.append(line[content_start_pos:])
-                    else:
-                        cleaned_lines.append(line)  # Keep lines not starting with -- as is?
-                raw_comment = "\n".join(cleaned_lines)
-                # Dedent the result to align with standard docstring formatting
-                cleaned_comment = textwrap.dedent(raw_comment).strip("\n")
-
-            elif lines[0].strip().startswith("/*"):
-                # Extract content, dedent based on first line of content, keep internal formatting
-                start_block_idx = best_comment.find("/*")
-                end_block_idx = best_comment.rfind("*/")
-                if start_block_idx != -1 and end_block_idx != -1 and end_block_idx > start_block_idx:
-                    comment_content = best_comment[start_block_idx + 2 : end_block_idx]
-
-                    # Check if lines consistently start with * (common block comment style)
-                    content_lines = comment_content.splitlines()
-                    consistent_star = True
-                    if len(content_lines) > 1:
-                        for line in content_lines[1:]:
-                            stripped_line = line.strip()
-                            if stripped_line and not stripped_line.startswith("*"):
-                                consistent_star = False
-                                break
-                    else:
-                        # Single line block comment, check if it starts with *
-                        if content_lines and content_lines[0].strip().startswith("*"):
-                            pass  # It's consistent for a single line
-                        else:
-                            consistent_star = False
-
-                    processed_lines = []
-                    if consistent_star:
-                        # Strip leading * and optional space
-                        for i, line in enumerate(content_lines):
-                            lstripped_line = line.lstrip(" ")
-                            if lstripped_line.startswith("*"):
-                                star_pos = line.find("*")
-                                content_start = star_pos + 1
-                                if content_start < len(line) and line[content_start] == " ":
-                                    content_start += 1
-                                processed_lines.append(line[content_start:])
-                            else:
-                                processed_lines.append(line)  # Keep lines without star (e.g. first line?)
-                        comment_content = "\n".join(processed_lines)
-                    # else: keep original comment_content
-
-                    # Dedent, but don't strip leading/trailing newlines from the block yet
-                    dedented_content = textwrap.dedent(comment_content)
-                    # Remove leading/trailing empty lines that might result from dedent/original formatting
-                    cleaned_comment = dedented_content.strip("\n")
-                else:
-                    # Fallback: simple strip if block markers are weird
-                    cleaned_comment = best_comment.strip()
+        # Find and clean the preceding comment using the helper function
+        cleaned_comment = _find_preceding_comment(sql_content, function_start_pos, all_comments)
 
         logging.info(f"Parsing function signature: {sql_name}")
 
         try:
             # Clean comments from param_str before parsing
             param_str_cleaned = re.sub(r"--.*?$", "", param_str, flags=re.MULTILINE)
-            param_str_cleaned = re.sub(r"/\\*.*?\\*/", "", param_str_cleaned, flags=re.DOTALL)
+            param_str_cleaned = re.sub(r"/\*.*?\*/", "", param_str_cleaned, flags=re.DOTALL)
             param_str_cleaned = " ".join(param_str_cleaned.split()) # Normalize whitespace
-            params, param_imports = _parse_params(param_str_cleaned) # Use cleaned string
+            params, param_imports = _parse_params(param_str_cleaned)
             required_imports = param_imports.copy()
             required_imports.add("from psycopg import AsyncConnection")
 
