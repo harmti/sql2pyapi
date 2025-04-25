@@ -263,9 +263,10 @@ def _parse_create_table(sql_content: str):
                 logging.warning(
                     f"  -> No columns parsed for table {table_name} from definition: '{col_defs_str_cleaned[:100]}...'"
                 )
-        except Exception:
-            logging.exception(f"Failed to parse columns for table '{table_name}'. Skipping.")
-            continue
+        except Exception as e:
+            logging.exception(f"Failed to parse columns for table '{table_name}'.")
+            # Re-raise as a specific parsing error instead of continuing
+            raise SQLParsingError(f"Failed to parse columns for table '{table_name}'") from e
 
 
 def _parse_params(param_str: str) -> Tuple[List[SQLParameter], set]:
@@ -608,13 +609,15 @@ def parse_sql(sql_content: str, schema_content: Optional[str] = None) -> Tuple[L
             func.required_imports = {imp for imp in required_imports if imp}
             functions.append(func)
 
+        except SQLParsingError as spe: # Catch specific parsing errors
+            logging.error(f"Failed to parse function '{sql_name}' due to: {spe}")
+            raise # Re-raise the parsing error to halt execution
+
         except Exception as e:
-            logging.exception(f"Failed to parse function '{sql_name}'. Error: {e} Skipping.")
-            continue
+            logging.error(
+                f"Unexpected error parsing function '{sql_name}': {e}. Skipping this function.", exc_info=True
+            )
+            # Continue to the next function for non-parsing errors
 
-    logging.info(f"Parsed {len(TABLE_SCHEMAS)} CREATE TABLE statements.")
-    logging.info(f"Parsed {len(functions)} CREATE FUNCTION statements.")
-    if not functions and sql_content:
-        logging.warning("No CREATE FUNCTION statements found or parsed successfully in main file.")
-
+    logging.info(f"Finished parsing. Found {len(functions)} functions and {len(TABLE_SCHEMAS)} table schemas.")
     return functions, TABLE_SCHEMA_IMPORTS
