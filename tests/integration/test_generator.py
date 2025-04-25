@@ -2,11 +2,11 @@ from pathlib import Path
 import subprocess
 import sys
 
-# Define paths relative to the test file location
-TEST_DIR = Path(__file__).parent
-FIXTURES_DIR = TEST_DIR / "fixtures"
-EXPECTED_DIR = TEST_DIR / "expected"
-PROJECT_ROOT = TEST_DIR.parent  # Assumes tests/ is one level down from root
+# Define paths relative to the main tests/ directory
+TESTS_ROOT_DIR = Path(__file__).parent.parent # Go up one level to tests/
+FIXTURES_DIR = TESTS_ROOT_DIR / "fixtures"
+EXPECTED_DIR = TESTS_ROOT_DIR / "expected"
+PROJECT_ROOT = TESTS_ROOT_DIR.parent # Go up one level from tests/ to project root
 
 
 def run_cli_tool(functions_sql: Path, output_py: Path, schema_sql: Path = None):
