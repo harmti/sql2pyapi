@@ -3,6 +3,7 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Tuple
 import logging
 import textwrap
+import math
 
 # --- Type Maps and Imports --- (Keep these first)
 # Basic PostgreSQL to Python type mapping
@@ -88,6 +89,18 @@ class ParsedFunction:
 # --- Global Schema Storage --- (Define globals AFTER structures)
 TABLE_SCHEMAS: Dict[str, List[ReturnColumn]] = {}
 TABLE_SCHEMA_IMPORTS: Dict[str, set] = {}
+
+# --- Regex Definitions (Module Level) ---
+FUNCTION_REGEX = re.compile(
+    r"CREATE(?:\s+OR\s+REPLACE)?\s+FUNCTION\s+([a-zA-Z0-9_.]+)"
+    r"\s*\(([^)]*)\)"
+    r"\s+RETURNS\s+(?:(SETOF)\s+)?(?:(TABLE)\s*\((.*?)\)|([a-zA-Z0-9_.()\[\]]+))" # Groups 3,4,5,6 relate to returns
+    r"(.*?)(?:AS\s+\$\$|AS\s+\'|LANGUAGE\s+\w+)",
+    re.IGNORECASE | re.DOTALL | re.MULTILINE,
+)
+
+# Regex to find comments (both -- and /* */)
+COMMENT_REGEX = re.compile(r"(--.*?$)|(/\*.*?\*/)", re.MULTILINE | re.DOTALL)
 
 
 def _map_sql_to_python_type(sql_type: str, is_optional: bool = False) -> Tuple[str, Optional[str]]:
@@ -250,7 +263,7 @@ def _parse_column_definitions(col_defs_str: str) -> Tuple[List[ReturnColumn], se
         is_optional = "not null" not in constraint_part and "primary key" not in constraint_part
 
         # Pass the determined optionality to the type mapping function
-        py_type, import_stmt = _map_sql_to_python_type(sql_type_extracted, is_optional=is_optional)
+        py_type, import_stmt = _map_sql_to_python_type(sql_type_extracted, is_optional)
 
         if import_stmt:
             for imp in import_stmt.split("\n"):
@@ -394,92 +407,155 @@ def _parse_params(param_str: str) -> Tuple[List[SQLParameter], set]:
     return params, required_imports
 
 
-def _clean_comment_block(comment_block: str) -> str:
-    """Cleans a block of SQL comments (either -- or /* */ style) for use as a docstring."""
-    cleaned_comment = None
-    lines = comment_block.strip().splitlines()
-    if not lines:
+def _clean_comment_block(comment_lines: List[str]) -> str:
+    """Cleans a list of raw SQL comment lines for use as a docstring."""
+    if not comment_lines:
         return ""
 
-    if lines[0].strip().startswith("--"):
-        cleaned_lines = []
-        for line in lines:
-            dash_pos = line.find("--")
-            if dash_pos != -1:
-                content_start_pos = dash_pos + 2
-                if content_start_pos < len(line) and line[content_start_pos] == " ":
-                    content_start_pos += 1
-                cleaned_lines.append(line[content_start_pos:])
-            else:
-                cleaned_lines.append(line)
-        raw_comment = "\n".join(cleaned_lines)
-        cleaned_comment = textwrap.dedent(raw_comment).strip("\n")
+    cleaned_lines = []
+    for line in comment_lines: # Raw line from list passed by _find_preceding_comment
+        stripped_line = line.strip() # Whitespace removed from ends
+        cleaned_line = None # Default to None, set if we successfully clean
 
-    elif lines[0].strip().startswith("/*"):
-        start_block_idx = comment_block.find("/*")
-        end_block_idx = comment_block.rfind("*/")
-        if start_block_idx != -1 and end_block_idx != -1 and end_block_idx > start_block_idx:
-            comment_content = comment_block[start_block_idx + 2 : end_block_idx]
-            content_lines = comment_content.splitlines()
-            consistent_star = all(line.strip().startswith("*") or not line.strip() for line in content_lines[1:])
+        # --- Determine line type ---
+        is_line_comment = stripped_line.startswith("--")
+        is_block_start = stripped_line.startswith("/*")
+        is_block_end = stripped_line.endswith("*/")
+        is_block_single = is_block_start and is_block_end
+        # Check for leading star *only if* it's not the start/end of the block itself
+        is_leading_star = stripped_line.startswith("*") and not is_block_start and not is_block_end
 
-            processed_lines = []
-            if consistent_star:
-                for line in content_lines:
-                    lstripped_line = line.lstrip(" ")
-                    if lstripped_line.startswith("*"):
-                        star_pos = line.find("*")
-                        content_start = star_pos + 1
-                        if content_start < len(line) and line[content_start] == " ":
-                            content_start += 1
-                        processed_lines.append(line[content_start:])
-                    else:
-                        processed_lines.append(line)
-                comment_content = "\n".join(processed_lines)
+        # --- Process based on type ---
+        if is_line_comment:
+            cleaned_line = stripped_line[2:]
+            if cleaned_line.startswith(" "): cleaned_line = cleaned_line[1:] # Remove one leading space AFTER --
+        elif is_block_single:
+            cleaned_line = stripped_line[2:-2].strip() if len(stripped_line) > 4 else "" # Strip inside /* */
+        elif is_block_start: # Start of multi-line block (might be the only content, e.g., "/*")
+             cleaned_line = stripped_line[2:].lstrip() # Remove '/*' and leading space AFTER it
+        elif is_block_end: # End of multi-line block (might be the only content, e.g., "*/")
+             # This case now correctly handles lines like ' * ... */' because is_leading_star is false
+             cleaned_line = stripped_line[:-2].rstrip() # Remove '*/' and trailing space BEFORE it
+        elif is_leading_star: # Middle line of multi-line block starting with *
+             cleaned_line = stripped_line[1:] # Remove '*'
+             if cleaned_line.startswith(" "): cleaned_line = cleaned_line[1:] # Remove only one leading space after *
+        else: # Line inside block without marker, or some other unexpected line
+             # Keep original behavior: append stripped line
+             cleaned_line = stripped_line
 
-            dedented_content = textwrap.dedent(comment_content)
-            cleaned_comment = dedented_content.strip("\n")
-        else:
-            cleaned_comment = comment_block.strip()
-    else:
-        # Should not happen if called with valid comment block, but handle defensively
-        cleaned_comment = comment_block.strip()
+        # Append the processed line (reverting: remove individual strip)
+        if cleaned_line is not None:
+             cleaned_lines.append(cleaned_line) # Reverted: No .strip() here
 
-    return cleaned_comment if cleaned_comment is not None else ""
+    # Join the cleaned lines, dedent, and final strip
+    valid_lines = cleaned_lines
+    if not valid_lines:
+         return ""
+
+    raw_comment = "\n".join(valid_lines) # Join the pieces
+    # Use textwrap.dedent for final indentation cleanup
+    try:
+        # Dedent assumes consistent indentation, might mess up mixed comments
+        # Apply strip() after dedent
+        dedented_comment = textwrap.dedent(raw_comment).strip()
+    except Exception as e:
+        logging.warning(f"textwrap.dedent failed during comment cleaning: {e}. Using raw comment.")
+        # Strip raw comment if dedent fails
+        dedented_comment = raw_comment.strip()
+
+    # Return the final result (already stripped)
+    return dedented_comment
 
 
-def _find_preceding_comment(sql_content: str, function_start_pos: int, all_comments: List[Dict]) -> Optional[str]:
-    """Finds and cleans the comment block immediately preceding a function definition."""
-    best_comment_block_lines = []
-    # Start anchor position at the beginning of the function itself
-    last_anchor_pos = function_start_pos 
+def _find_preceding_comment(lines: list[str], func_start_line_idx: int) -> str | None:
+    """
+    Finds the comment block immediately preceding a function definition.
 
-    for i in range(len(all_comments) - 1, -1, -1):  # Search backwards
-        comment = all_comments[i]
-        
-        # Skip comments that start at or after the current anchor position
-        if comment["start"] >= last_anchor_pos:
+    Args:
+        lines: The list of lines in the SQL file.
+        func_start_line_idx: The 0-based index of the line where the function definition starts.
+
+    Returns:
+        The cleaned comment block as a string, or None if no preceding comment is found.
+    """
+    comment_lines = []
+    in_block_comment = False
+    last_comment_end_line_idx = -1
+    found_first_comment_line = False # New flag
+
+    for i in range(func_start_line_idx - 1, -1, -1):
+        line_content = lines[i] # Keep original line with leading whitespace
+        stripped_line = line_content.strip()
+
+        # If we already found a comment, and this line is blank, stop searching
+        if found_first_comment_line and not stripped_line:
+             break # Stop searching backwards if we hit a blank line after a comment
+        elif not stripped_line:
+             continue # Skip blank lines before finding the first comment
+
+        # --- Block comment end `*/` --- 
+        is_block_end = stripped_line.endswith("*/")
+        if is_block_end:
+            if in_block_comment:
+                # Nested block comments aren't handled simply; stop searching
+                return None # Or maybe just break?
+            in_block_comment = True
+            found_first_comment_line = True # Mark that we found a comment
+            # ... rest of existing /* ... */ and /* ... */ check ...
+            start_block_idx = stripped_line.rfind("/*")
+            if start_block_idx != -1 and start_block_idx < stripped_line.rfind("*/"): # Single line block
+                comment_lines.insert(0, line_content) # Insert original line
+                in_block_comment = False
+                last_comment_end_line_idx = i
+                continue
+            else: # End of a multi-line block
+                comment_lines.insert(0, line_content) # Insert original line
+                last_comment_end_line_idx = i
+                continue
+
+        # --- Block comment start `/*` --- 
+        is_block_start = stripped_line.startswith("/*")
+        if is_block_start:
+            if not in_block_comment:
+                # Started a block comment without seeing the end - malformed or not preceding comment
+                # If we haven't found any comment line yet, this isn't the preceding comment
+                if not found_first_comment_line: return None
+                # Otherwise, could be a block above line comments, stop here
+                break
+            # This is the start of a block we are tracking
+            found_first_comment_line = True
+            comment_lines.insert(0, line_content) # Insert original line
+            in_block_comment = False
+            last_comment_end_line_idx = i
             continue
 
-        # Check the text between the end of this comment and the last anchor position
-        intervening_text = sql_content[comment["end"] : last_anchor_pos]
+        # --- Inside a block comment --- 
+        if in_block_comment:
+            found_first_comment_line = True
+            comment_lines.insert(0, line_content) # Insert original line
+            last_comment_end_line_idx = i
+            continue
 
-        if intervening_text.strip() == "":
-            # This comment is contiguous to the block or function start
-            # Add its text to the beginning of our list
-            best_comment_block_lines.insert(0, comment["text"])
-            # Update the anchor to the start of this comment, looking for more comments before it
-            last_anchor_pos = comment["start"]
-        else:
-            # Found non-whitespace text between this comment and the anchor
-            # This means the contiguous block (if any) has ended, so stop searching
-            break
+        # --- Line comment `--` --- 
+        is_line_comment = stripped_line.startswith("--")
+        if is_line_comment:
+            found_first_comment_line = True
+            comment_lines.insert(0, line_content) # Insert original line
+            last_comment_end_line_idx = i
+            continue
 
-    if not best_comment_block_lines:
+        # --- Non-comment, non-empty line --- 
+        # If we encounter a non-empty, non-comment line, stop searching
+        # This will also handle the gap check implicitly
+        break
+
+    if not comment_lines:
         return None
 
-    full_comment_block = "\n".join(best_comment_block_lines)
-    return _clean_comment_block(full_comment_block)
+    # No final gap check needed as the loop logic handles it.
+
+    # Pass the list of original comment lines (with whitespace)
+    return _clean_comment_block(comment_lines)
 
 
 def _parse_return_clause(match: re.Match, initial_imports: set) -> Tuple[dict, set]:
@@ -566,10 +642,13 @@ def _parse_return_clause(match: re.Match, initial_imports: set) -> Tuple[dict, s
 
                 if normalized_table_name in TABLE_SCHEMAS:
                     logging.info(f"    Found schema for table '{normalized_table_name}'")
-                    return_props['return_columns'] = TABLE_SCHEMAS[normalized_table_name]
+                    found_columns = TABLE_SCHEMAS[normalized_table_name]
+                    # Use .get() for imports dict
+                    found_imports = TABLE_SCHEMA_IMPORTS.get(normalized_table_name, set()) 
+                    return_props['return_columns'] = found_columns
                     return_props['returns_table'] = True
                     return_props['return_type'] = "DataclassPlaceholder"
-                    required_imports.update(TABLE_SCHEMA_IMPORTS[normalized_table_name])
+                    required_imports.update(found_imports)
                     required_imports.add("from dataclasses import dataclass")
                 else:
                     logging.warning(
@@ -613,6 +692,9 @@ def parse_sql(sql_content: str, schema_content: Optional[str] = None) -> Tuple[L
 
     functions = []
 
+    # Split content into lines once for comment finding
+    lines = sql_content.splitlines()
+
     # --- First Pass: Parse CREATE TABLE (from schema file first, then function file) ---
     if schema_content:  # Use original schema_content
         logging.info("Parsing CREATE TABLE statements from schema file...")
@@ -624,22 +706,8 @@ def parse_sql(sql_content: str, schema_content: Optional[str] = None) -> Tuple[L
     # --- Second Pass: Parse CREATE FUNCTION statements (only from main file) ---
     logging.info("Parsing CREATE FUNCTION statements...")
 
-    # Pre-parse all comments once
-    comment_regex = re.compile(r"(--.*?$)|(/\*.*?\*/)", re.MULTILINE | re.DOTALL)
-    all_comments = [
-        {"start": m.start(), "end": m.end(), "text": m.group(0)}
-        for m in comment_regex.finditer(sql_content)
-    ]
-
-    function_regex = re.compile(
-        r"CREATE(?:\s+OR\s+REPLACE)?\s+FUNCTION\s+([a-zA-Z0-9_.]+)"
-        r"\s*\(([^)]*)\)"
-        r"\s+RETURNS\s+(?:(SETOF)\s+)?(?:(TABLE)\s*\((.*?)\)|([a-zA-Z0-9_.()\[\]]+))"
-        r"(.*?)(?:AS\s+\$\$|AS\s+\'|LANGUAGE\s+\w+)",
-        re.IGNORECASE | re.DOTALL | re.MULTILINE,
-    )
-
-    for match in function_regex.finditer(sql_content):
+    # Use module-level regex here
+    for match in FUNCTION_REGEX.finditer(sql_content):
         sql_name = match.group(1).strip()
         param_str = match.group(2).strip() if match.group(2) else ""
         returns_setof = bool(match.group(3))
@@ -648,9 +716,11 @@ def parse_sql(sql_content: str, schema_content: Optional[str] = None) -> Tuple[L
         scalar_or_table_name_return = match.group(6).strip() if match.group(6) else ""
 
         function_start_pos = match.start()
+        # Calculate the line index corresponding to the start position
+        function_start_line_idx = sql_content.count('\n', 0, function_start_pos)
 
-        # Find and clean the preceding comment using the helper function
-        cleaned_comment = _find_preceding_comment(sql_content, function_start_pos, all_comments)
+        # Find and clean the preceding comment using the new helper function
+        cleaned_comment = _find_preceding_comment(lines, function_start_line_idx)
 
         logging.info(f"Parsing function signature: {sql_name}")
 
