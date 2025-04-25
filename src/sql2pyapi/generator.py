@@ -23,7 +23,7 @@ def _to_singular_camel_case(name: str) -> str:
     return inflection.camelize(singular_snake)
 
 
-def _generate_dataclass(class_name: str, columns: List[ReturnColumn]) -> str:
+def _generate_dataclass(class_name: str, columns: List[ReturnColumn], make_fields_optional: bool = False) -> str:
     """Generates a dataclass string given a name and columns."""
     if not columns or (len(columns) == 1 and columns[0].name == "unknown"):
         # Handle case where schema wasn't found or columns couldn't be parsed
@@ -33,7 +33,20 @@ def _generate_dataclass(class_name: str, columns: List[ReturnColumn]) -> str:
 # class {class_name}:
 #     pass"""
 
-    fields = [f"    {col.name}: {col.python_type}" for col in columns]
+    fields = []
+    for col in columns:
+        field_type = col.python_type
+        # Wrap with Optional if needed based on column's optionality OR if forced for RETURNS TABLE
+        if make_fields_optional and not field_type.startswith("Optional["):
+            field_type = f"Optional[{field_type}]"
+        elif col.is_optional and not field_type.startswith("Optional["):
+            # This case should already be handled by _map_sql_to_python_type, but double-check
+            # We might have removed Optional in mapping if is_optional was False initially
+            # Re-add Optional if the parser determined it should be optional now
+            field_type = f"Optional[{field_type}]"
+
+        fields.append(f"    {col.name}: {field_type}")
+
     fields_str = "\n".join(fields)
     return f"""@dataclass
 class {class_name}:
@@ -43,8 +56,14 @@ class {class_name}:
 
 def _generate_function(func: ParsedFunction, class_name_map: Dict[str, str]) -> str:
     """Generates the Python async function string."""
+    
+    # Sort parameters: non-optional first, then optional
+    non_optional_params = [p for p in func.params if not p.is_optional]
+    optional_params = [p for p in func.params if p.is_optional]
+    sorted_params = non_optional_params + optional_params
+
     params_list_py = ["conn: AsyncConnection"]
-    for p in func.params:
+    for p in sorted_params:
         params_list_py.append(f"{p.python_name}: {p.python_type}{' = None' if p.is_optional else ''}")
     params_str_py = ", ".join(params_list_py)
 
@@ -62,9 +81,13 @@ def _generate_function(func: ParsedFunction, class_name_map: Dict[str, str]) -> 
         else:
             # Case: Explicit RETURNS TABLE(...)
             # Generate a unique name based on function name
-            final_dataclass_name = _to_singular_camel_case(func.python_name.replace("get_", "").replace("list_", ""))
-            if not final_dataclass_name or final_dataclass_name == "ResultRow":  # Avoid generic name if possible
-                final_dataclass_name = inflection.camelize(func.python_name) + "Result"
+            # Apply CamelCase directly and append Result suffix
+            final_dataclass_name = inflection.camelize(func.python_name) + "Result"
+
+        # Ensure the name is stored in the map for the function generation pass
+        # This handles both SETOF table_name and explicit RETURNS TABLE cases
+        func_key = f"_func_{func.sql_name}" 
+        class_name_map[func_key] = final_dataclass_name 
 
         return_type_hint = final_dataclass_name
         if func.returns_setof:
@@ -76,7 +99,8 @@ def _generate_function(func: ParsedFunction, class_name_map: Dict[str, str]) -> 
         return_type_hint = func.return_type
 
     sql_args_placeholders = ", ".join(["%s"] * len(func.params))
-    python_args_list = "[" + ", ".join([p.python_name for p in func.params]) + "]"
+    # Use sorted params for the execute call arguments list
+    python_args_list = "[" + ", ".join([p.python_name for p in sorted_params]) + "]"
 
     # Generate the docstring, respecting multi-line formatting and indentation
     docstring_lines = []
@@ -170,13 +194,11 @@ def generate_python_code(
     dataclass_defs = {}
     generated_functions = []
 
-    all_imports.add("from psycopg import AsyncConnection")
     # Base typing imports like Optional, List etc are added by the parser as needed
 
     table_to_class_name_map: Dict[str, str] = {}
-    # Keep track of imports needed *directly* by the generated dataclasses
-    # These imports come from the types used within the dataclass fields.
-    dataclass_field_imports: Dict[str, set] = {}
+    # Rename dataclass_field_imports -> imports_per_dataclass
+    imports_per_dataclass: Dict[str, set] = {}
 
     # --- First pass: Identify and prepare unique dataclasses ---
     processed_tables = set()
@@ -198,121 +220,136 @@ def generate_python_code(
                     processed_tables.add(table_key)
                     # Get imports FOR THE FIELDS using the PASSED dictionary
                     schema_imports = table_schema_imports.get(table_key, set())
-                    dataclass_field_imports[target_dataclass_name] = schema_imports  # Store imports per class name
+                    imports_per_dataclass[target_dataclass_name] = schema_imports  # Use new name
 
                     if func.return_columns and func.return_columns[0].name != "unknown":
                         dataclass_defs[target_dataclass_name] = _generate_dataclass(
-                            target_dataclass_name, func.return_columns
+                            target_dataclass_name, func.return_columns,
+                            make_fields_optional=False # SETOF table uses schema directly (optionality from ReturnColumn)
                         )
                     else:  # Schema not found by parser
                         placeholder_cols = [ReturnColumn(name="unknown", sql_type=table_key, python_type="Any")]
                         dataclass_defs[target_dataclass_name] = _generate_dataclass(
-                            target_dataclass_name, placeholder_cols
+                            target_dataclass_name, placeholder_cols,
+                            make_fields_optional=True # Make placeholder optional
                         )
                         # Add Any import if placeholder used
                         any_import = PYTHON_IMPORTS.get("Any")  # Use local PYTHON_IMPORTS
                         if any_import:
-                            dataclass_field_imports[target_dataclass_name].add(any_import)
+                            # Ensure the set exists before adding to it
+                            if target_dataclass_name not in imports_per_dataclass: # Use new name
+                                imports_per_dataclass[target_dataclass_name] = set() # Use new name
+                            imports_per_dataclass[target_dataclass_name].add(any_import) # Use new name
 
             else:  # Explicit RETURNS TABLE(...)
-                target_dataclass_name = _to_singular_camel_case(
-                    func.python_name.replace("get_", "").replace("list_", "")
-                )
-                if not target_dataclass_name or target_dataclass_name == "ResultRow":
-                    target_dataclass_name = inflection.camelize(func.python_name) + "Result"
+                # Generate a unique name based on function name
+                # Apply CamelCase directly and append Result suffix
+                target_dataclass_name = inflection.camelize(func.python_name) + "Result"
 
+                # Always store the class name mapping for the function generation pass
+                func_key = f"_func_{func.sql_name}"
+                table_to_class_name_map[func_key] = target_dataclass_name
+
+                # Generate the dataclass definition only if it hasn't been created yet
                 if target_dataclass_name not in dataclass_defs:
                     dataclass_defs[target_dataclass_name] = _generate_dataclass(
-                        target_dataclass_name, func.return_columns
+                        target_dataclass_name, func.return_columns,
+                        make_fields_optional=True # Explicit RETURNS TABLE cols default to Optional
                     )
-                    # Imports for explicit table fields are already in func.required_imports
-                    # Store them associated with the class name for potential later use/consistency
-                    dataclass_field_imports[target_dataclass_name] = func.required_imports
+                
+                # Crucially, always associate the required imports for this function's 
+                # specific return type with the dataclass name, even if the def was skipped.
+                # This ensures the imports are collected correctly later.
+                imports_per_dataclass[target_dataclass_name] = func.required_imports # Use new name
 
     # Add all necessary field type imports from generated dataclasses
-    for imports in dataclass_field_imports.values():
-        all_imports.update(imports)
+    # Now this loop should not encounter a NameError
+    # print(f\"DEBUG: Before iterating imports_per_dataclass: {imports_per_dataclass}\") # <--- REMOVED DEBUG LINE
+    # Iterate directly over the dictionary items
+    for _, imports_set in imports_per_dataclass.items(): # Use original dict
+        all_imports.update(imports_set)
 
     # --- Second pass: Generate functions ---
+    # Restore the function generation loop
     for func in functions:
         generated_functions.append(_generate_function(func, table_to_class_name_map))
-        # Ensure imports from this function are added *after* the dataclass pass
-        # but *before* assembling the final import list
-        # all_imports.update(func.required_imports) # MOVED to first pass
 
     # --- Assemble code ---
     all_imports.discard(None)
 
     # Consolidate typing imports for better readability
-    other_imports = set()
+    # Define standard imports that should always be present if used
+    standard_imports_order = [
+        "from typing import List, Optional, Tuple, Dict, Any",
+        "from uuid import UUID",
+        "from datetime import date, datetime",
+        "from decimal import Decimal",
+        "from psycopg import AsyncConnection",
+        "from dataclasses import dataclass",
+    ]
 
-    consolidated_typings = {
-        "Optional": "from typing import Optional",
-        "List": "from typing import List",
-        "Any": "from typing import Any",
-        "Tuple": "from typing import Tuple",
-        "Dict": "from typing import Dict",
-    }
-    typing_needed = set()
-    datetime_needed = False
-    date_needed = False
+    # Filter the standard imports based on what's actually in all_imports
+    present_standard_imports = []
+    temp_all_imports = all_imports.copy()
 
-    for imp in all_imports:
-        if imp == "from datetime import datetime":
-            datetime_needed = True
-            continue  # Handled below
-        if imp == "from datetime import date":
-            date_needed = True
-            continue  # Handled below
+    for std_imp in standard_imports_order:
+        # Check if any part of the standard import line matches an import in the set
+        # Example: Check if 'from typing import List' is needed if 'from typing import Optional' is also standard
+        import_parts = std_imp.split('import')
+        module = import_parts[0].replace('from', '').strip()
+        names = [name.strip() for name in import_parts[1].split(',')] if len(import_parts) > 1 else []
 
-        is_typing = False
-        for type_name, type_import in consolidated_typings.items():
-            if (
-                imp == type_import or type_name in imp
-            ):  # Check if it's the import or used within another (e.g., List[str])
-                typing_needed.add(type_name)
-                is_typing = True
-                # Don't break, might need multiple (e.g., Optional[List[...]])
+        needed = False
+        imports_to_remove = set()
+        for imp_in_set in temp_all_imports:
+            if imp_in_set.startswith(f"from {module} import"):
+                # Check if this standard import line covers one needed in the set
+                imp_names_in_set = [name.strip() for name in imp_in_set.split('import')[1].split(',')]
+                if any(name in imp_names_in_set for name in names):
+                    needed = True
+                    imports_to_remove.add(imp_in_set) # Mark for removal if covered by consolidated line
+            elif std_imp == imp_in_set: # Handle direct match like 'import psycopg'
+                needed = True
+                imports_to_remove.add(imp_in_set)
 
-        if not is_typing:
-            # Keep non-typing imports as they are (psycopg, uuid, datetime, dataclasses etc.)
-            other_imports.add(imp)
+        if needed:
+            present_standard_imports.append(std_imp)
+            # Remove the specific imports that are now covered by the standard line
+            # This logic might need refinement for complex cases
+            # A simpler approach might be to just check if keywords like 'List', 'Optional' exist
+            # For now, let's stick to adding the standard line if *any* part is needed
+            temp_all_imports -= imports_to_remove # Imperfect removal, might leave unused specific imports
 
-    # Build the consolidated typing import line if needed
-    if typing_needed:
-        sorted_typings = sorted(list(typing_needed))
-        typing_line = f"from typing import {', '.join(sorted_typings)}"
-        other_imports.add(typing_line)  # Add the single consolidated line
+    # Collect any remaining non-standard imports (e.g., custom types)
+    # This is still imperfect; we might add standard imports unnecessarily if a part matches.
+    # A better approach would be to parse all required names (List, Optional, UUID, etc.)
+    # and then build the standard import lines based ONLY on the names present.
+    # For now, prioritizing inclusion over perfect minimalism.
+    other_imports = sorted(list(temp_all_imports))
 
-    # Build the consolidated datetime/date import line if needed
-    if datetime_needed and date_needed:
-        other_imports.add("from datetime import datetime, date")
-    elif datetime_needed:
-        other_imports.add("from datetime import datetime")
-    elif date_needed:
-        other_imports.add("from datetime import date")
+    # Combine standard and other imports
+    import_statements = present_standard_imports + other_imports
 
-    # Sort all resulting imports
-    from_imports = sorted([imp for imp in other_imports if imp.startswith("from")])
-    direct_imports = sorted([imp for imp in other_imports if imp.startswith("import")])
+    # --- Generate Header ---
+    source_filename = os.path.basename(source_sql_file) if source_sql_file else "input.sql"
+    header_lines = [
+        "# -*- coding: utf-8 -*-\n",
+        f"# Auto-generated by sql2pyapi from {source_filename}",
+    ]
+    header = "\n".join(header_lines)
 
-    # Generate the Python code
-    source_sql_file_name = os.path.basename(source_sql_file) if source_sql_file else "source SQL"
-    header = f"# Generated by sql2pyapi from {source_sql_file_name}\n# DO NOT EDIT MANUALLY"
-
-    final_str = header
-    import_section = "\n".join(direct_imports + from_imports)
-    if import_section:
-        final_str += "\n" + import_section.strip()
-
-    # Prepare definitions
+    # --- Generate Dataclasses and Functions (without section headers) ---
     stripped_dataclasses = [dataclass_defs[name].strip() for name in sorted(dataclass_defs.keys())]
     stripped_functions = [func.strip() for func in generated_functions]
-    all_definitions = stripped_dataclasses + stripped_functions  # Combine lists
 
-    if all_definitions:
-        # Add separator before definitions and join them
-        final_str += "\n\n" + "\n\n".join(all_definitions)
+    # Combine definitions with minimal spacing
+    code_body = "\n\n".join(stripped_dataclasses + stripped_functions)
 
-    final_str += "\n"
-    return final_str
+    # Assemble final string
+    final_str = header
+    if import_statements:
+        final_str += "\n\n" + "\n".join(import_statements)
+    if code_body:
+        final_str += "\n\n" + code_body
+
+    return final_str.strip() + "\n" # Ensure single trailing newline

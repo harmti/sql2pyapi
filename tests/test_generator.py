@@ -319,3 +319,49 @@ def test_comment_formats_generation(tmp_path):
         f"Expected ({expected_output_path}):\n{expected_content}\n"
         f"Actual ({actual_output_path}):\n{actual_content}"
     )
+
+
+def test_param_comments_function_generation(tmp_path):
+    """Test generating API for function with comments in parameters."""
+    functions_sql_path = FIXTURES_DIR / "param_comments_function.sql"
+    expected_output_path = EXPECTED_DIR / "param_comments_function_api.py"
+    actual_output_path = tmp_path / "param_comments_function_api.py"
+
+    run_cli_tool(functions_sql_path, actual_output_path)
+
+    assert actual_output_path.is_file(), "Generated file was not created."
+    expected_content = expected_output_path.read_text()
+    actual_content = actual_output_path.read_text()
+    assert actual_content == expected_content, \
+        f"Generated file content does not match expected.\nExpected:\n{expected_content}\nActual:\n{actual_content}"
+
+
+def test_table_col_comments_generation(tmp_path):
+    """Test generating API for function returning table with column comments."""
+    functions_sql_path = FIXTURES_DIR / "table_col_comments.sql"
+    expected_output_path = EXPECTED_DIR / "table_col_comments_api.py"
+    actual_output_path = tmp_path / "table_col_comments_api.py"
+
+    # This fixture includes CREATE TABLE, so the tool should parse it directly
+    run_cli_tool(functions_sql_path, actual_output_path)
+
+    assert actual_output_path.is_file(), "Generated file was not created."
+    expected_content = expected_output_path.read_text()
+    actual_content = actual_output_path.read_text()
+    assert actual_content == expected_content, \
+        f"Generated file content does not match expected.\nExpected:\n{expected_content}\nActual:\n{actual_content}"
+
+
+def test_returns_table_comments_function_generation(tmp_path):
+    """Test generating API for function with comments in RETURNS TABLE columns."""
+    functions_sql_path = FIXTURES_DIR / "returns_table_comments_function.sql"
+    expected_output_path = EXPECTED_DIR / "returns_table_comments_function_api.py"
+    actual_output_path = tmp_path / "returns_table_comments_function_api.py"
+
+    run_cli_tool(functions_sql_path, actual_output_path)
+
+    assert actual_output_path.is_file(), "Generated file was not created."
+    expected_content = expected_output_path.read_text()
+    actual_content = actual_output_path.read_text()
+    assert actual_content == expected_content, \
+        f"Generated file content does not match expected.\nExpected:\n{expected_content}\nActual:\n{actual_content}"

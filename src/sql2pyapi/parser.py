@@ -65,6 +65,7 @@ class ReturnColumn:
     name: str
     sql_type: str
     python_type: str
+    is_optional: bool = True # Default to optional unless NOT NULL is found
 
 
 @dataclass
@@ -156,11 +157,12 @@ def _parse_column_definitions(col_defs_str: str) -> Tuple[List[ReturnColumn], se
     }
 
     for line in lines:
-        line = line.strip()
+        # Strip -- comments first, then strip whitespace
+        line = re.sub(r"--.*?$", "", line).strip()
         if not line or line.lower().startswith(("constraint", "primary key", "foreign key", "unique", "check", "like")):
             continue  # Skip constraint definitions or LIKE clauses
 
-        # Remove trailing comma if present
+        # Remove trailing comma if present (after comment removal)
         if line.endswith(","):
             line = line[:-1].strip()
 
@@ -203,16 +205,20 @@ def _parse_column_definitions(col_defs_str: str) -> Tuple[List[ReturnColumn], se
         else:
             sql_type = " ".join(type_parts)
 
-        # Clean up type string (e.g., remove trailing precision info if not needed for mapping)
-        # sql_type_cleaned variable was here, removed as unused
+        # Determine if the column is optional (nullable)
+        # A column is considered optional unless 'NOT NULL' is explicitly present in its definition line.
+        # We also consider PRIMARY KEY columns as not optional.
+        line_lower = line.lower()
+        is_optional = "not null" not in line_lower and "primary key" not in line_lower
 
-        py_type, import_stmt = _map_sql_to_python_type(sql_type, is_optional=False)
+        # Pass the determined optionality to the type mapping function
+        py_type, import_stmt = _map_sql_to_python_type(sql_type, is_optional=is_optional)
 
         if import_stmt:
             for imp in import_stmt.split("\n"):
                 if imp:
                     required_imports.add(imp)
-        columns.append(ReturnColumn(name=col_name, sql_type=sql_type, python_type=py_type))
+        columns.append(ReturnColumn(name=col_name, sql_type=sql_type, python_type=py_type, is_optional=is_optional))
 
     if not columns and col_defs_str.strip():
         logging.warning(f"Could not parse any columns from CREATE TABLE block: '{col_defs_str[:100]}...'")
@@ -472,7 +478,11 @@ def parse_sql(sql_content: str, schema_content: Optional[str] = None) -> Tuple[L
         logging.info(f"Parsing function signature: {sql_name}")
 
         try:
-            params, param_imports = _parse_params(param_str)
+            # Clean comments from param_str before parsing
+            param_str_cleaned = re.sub(r"--.*?$", "", param_str, flags=re.MULTILINE)
+            param_str_cleaned = re.sub(r"/\\*.*?\\*/", "", param_str_cleaned, flags=re.DOTALL)
+            param_str_cleaned = " ".join(param_str_cleaned.split()) # Normalize whitespace
+            params, param_imports = _parse_params(param_str_cleaned) # Use cleaned string
             required_imports = param_imports.copy()
             required_imports.add("from psycopg import AsyncConnection")
 
@@ -485,11 +495,14 @@ def parse_sql(sql_content: str, schema_content: Optional[str] = None) -> Tuple[L
 
             if is_returns_table:
                 logging.debug("  -> Returns explicit TABLE definition")
-                return_cols, col_imports = _parse_column_definitions(table_columns_str)
+                # Clean comments from table_columns_str before parsing
+                cleaned_table_columns_str = re.sub(r"--.*?$", "", table_columns_str, flags=re.MULTILINE)
+                cleaned_table_columns_str = re.sub(r"/\\*.*?\\*/", "", cleaned_table_columns_str, flags=re.DOTALL)
+                cleaned_table_columns_str = "\n".join(line.strip() for line in cleaned_table_columns_str.splitlines() if line.strip())
+                return_cols, col_imports = _parse_column_definitions(cleaned_table_columns_str) # Use cleaned string
                 if not return_cols:
                     logging.warning(
-                        f"    No columns parsed from explicit TABLE definition for {sql_name}. Content: '{table_columns_str[:100]}...'"
-                    )
+                        f"    No columns parsed from explicit TABLE definition for {sql_name}. Content: '{cleaned_table_columns_str[:100]}...'")
                     func.return_type = "Any"  # Fallback
                     required_imports.add(PYTHON_IMPORTS["Any"])
                 else:
@@ -521,8 +534,7 @@ def parse_sql(sql_content: str, schema_content: Optional[str] = None) -> Tuple[L
                         table_name_return = return_type_str
                         normalized_table_name = table_name_return.split(".")[-1]
                         logging.debug(
-                            f"  -> Returns SETOF {table_name_return}. Looking for table schema '{normalized_table_name}'."
-                        )
+                            f"  -> Returns SETOF {table_name_return}. Looking for table schema '{normalized_table_name}'.")
 
                         func.setof_table_name = normalized_table_name
 
@@ -534,8 +546,7 @@ def parse_sql(sql_content: str, schema_content: Optional[str] = None) -> Tuple[L
                             required_imports.add("from dataclasses import dataclass")
                         else:
                             logging.warning(
-                                f"    Schema not found for table '{normalized_table_name}'. Generating placeholder dataclass. Define the corresponding dataclass manually or ensure CREATE TABLE is parsed."
-                            )
+                                f"    Schema not found for table '{normalized_table_name}'. Generating placeholder dataclass. Define the corresponding dataclass manually or ensure CREATE TABLE is parsed.")
                             func.returns_table = True
                             func.return_columns = [
                                 ReturnColumn(
@@ -597,9 +608,8 @@ def parse_sql(sql_content: str, schema_content: Optional[str] = None) -> Tuple[L
             func.required_imports = {imp for imp in required_imports if imp}
             functions.append(func)
 
-        except Exception:
-            logging.exception(f"Failed to parse function '{sql_name}'. Skipping.")
-            # last_match_end assignment removed from here
+        except Exception as e:
+            logging.exception(f"Failed to parse function '{sql_name}'. Error: {e} Skipping.")
             continue
 
     logging.info(f"Parsed {len(TABLE_SCHEMAS)} CREATE TABLE statements.")
