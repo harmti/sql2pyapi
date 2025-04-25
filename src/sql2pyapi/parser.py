@@ -482,6 +482,118 @@ def _find_preceding_comment(sql_content: str, function_start_pos: int, all_comme
     return _clean_comment_block(full_comment_block)
 
 
+def _parse_return_clause(match: re.Match, initial_imports: set) -> Tuple[dict, set]:
+    """Parses the RETURNS clause details from the function regex match.
+
+    Args:
+        match: The regex match object from function_regex.
+        initial_imports: The set of imports gathered so far (e.g., from params).
+
+    Returns:
+        A tuple containing:
+        - A dictionary with parsed return properties:
+            {
+                'return_type': str,      # Base Python type ('None', 'int', 'Tuple', 'DataclassPlaceholder')
+                'returns_table': bool,
+                'return_columns': List[ReturnColumn],
+                'returns_record': bool,
+                'setof_table_name': Optional[str]
+            }
+        - The updated set of required imports.
+    """
+    returns_setof = bool(match.group(3))
+    is_returns_table = bool(match.group(4))
+    table_columns_str = match.group(5).strip() if is_returns_table and match.group(5) else ""
+    scalar_or_table_name_return = match.group(6).strip() if match.group(6) else ""
+    sql_name = match.group(1).strip() # For logging
+
+    # Initialize return properties
+    return_props = {
+        'return_type': "None",
+        'returns_table': False,
+        'return_columns': [],
+        'returns_record': False,
+        'setof_table_name': None
+    }
+    required_imports = initial_imports.copy()
+
+    if is_returns_table:
+        logging.debug(f"  -> Function '{sql_name}' returns explicit TABLE definition")
+        cleaned_table_columns_str = re.sub(r"--.*?$", "", table_columns_str, flags=re.MULTILINE)
+        cleaned_table_columns_str = re.sub(r"/\\*.*?\\*/", "", cleaned_table_columns_str, flags=re.DOTALL)
+        cleaned_table_columns_str = "\n".join(line.strip() for line in cleaned_table_columns_str.splitlines() if line.strip())
+        return_cols, col_imports = _parse_column_definitions(cleaned_table_columns_str)
+        if not return_cols:
+            logging.warning(
+                f"    No columns parsed from explicit TABLE definition for {sql_name}. Content: '{cleaned_table_columns_str[:100]}...'")
+            return_props['return_type'] = "Any"  # Fallback
+            required_imports.add(PYTHON_IMPORTS["Any"])
+        else:
+            return_props['return_columns'] = return_cols
+            return_props['returns_table'] = True
+            return_props['return_type'] = "DataclassPlaceholder" # Placeholder for later List/Optional wrapping
+            required_imports.update(col_imports)
+            required_imports.add("from dataclasses import dataclass")
+
+    elif scalar_or_table_name_return:
+        return_type_str = scalar_or_table_name_return
+        if return_type_str.lower() == "void":
+            logging.debug(f"  -> Function '{sql_name}' returns VOID")
+            return_props['return_type'] = "None"
+        elif return_type_str.lower() == "record":
+            logging.debug(f"  -> Function '{sql_name}' returns RECORD")
+            return_props['returns_record'] = True
+            return_props['return_type'] = "Tuple"
+            required_imports.add(PYTHON_IMPORTS["Tuple"])
+        else:
+            # Could be scalar or SETOF table_name
+            py_return_type, ret_import = _map_sql_to_python_type(return_type_str)
+            if py_return_type != "Any" or not returns_setof:
+                # Treat as scalar
+                logging.debug(f"  -> Function '{sql_name}' returns SCALAR: {return_type_str} -> {py_return_type}")
+                return_props['return_type'] = py_return_type
+                if ret_import:
+                    for imp in ret_import.split("\n"):
+                        if imp:
+                            required_imports.add(imp)
+            else:
+                # Assume SETOF unknown type is SETOF table_name
+                table_name_return = return_type_str
+                normalized_table_name = table_name_return.split(".")[-1]
+                logging.debug(
+                    f"  -> Function '{sql_name}' returns SETOF {table_name_return}. Looking for table schema '{normalized_table_name}'.")
+                return_props['setof_table_name'] = normalized_table_name
+
+                if normalized_table_name in TABLE_SCHEMAS:
+                    logging.info(f"    Found schema for table '{normalized_table_name}'")
+                    return_props['return_columns'] = TABLE_SCHEMAS[normalized_table_name]
+                    return_props['returns_table'] = True
+                    return_props['return_type'] = "DataclassPlaceholder"
+                    required_imports.update(TABLE_SCHEMA_IMPORTS[normalized_table_name])
+                    required_imports.add("from dataclasses import dataclass")
+                else:
+                    logging.warning(
+                        f"    Schema not found for table '{normalized_table_name}'. Generating placeholder dataclass.")
+                    return_props['returns_table'] = True
+                    return_props['return_type'] = "DataclassPlaceholder"
+                    # Generate minimal placeholder column info
+                    return_props['return_columns'] = [
+                        ReturnColumn(
+                            name="unknown",
+                            sql_type=table_name_return,
+                            python_type="Any"
+                        )
+                    ]
+                    required_imports.add(PYTHON_IMPORTS["Any"])
+                    required_imports.add("from dataclasses import dataclass")
+    else:
+        # No explicit RETURNS TABLE or scalar/table name - should be rare
+        logging.warning(f"Could not determine base return type for function '{sql_name}'. Assuming None.")
+        return_props['return_type'] = "None"
+
+    return return_props, required_imports
+
+
 def parse_sql(sql_content: str, schema_content: Optional[str] = None) -> Tuple[List[ParsedFunction], Dict[str, set]]:
     """
     Parses SQL content, optionally using a separate schema file.
@@ -551,126 +663,58 @@ def parse_sql(sql_content: str, schema_content: Optional[str] = None) -> Tuple[L
             required_imports = param_imports.copy()
             required_imports.add("from psycopg import AsyncConnection")
 
-            func = ParsedFunction(sql_name=sql_name, python_name=sql_name)
-            func.sql_comment = cleaned_comment
-            func.params = params
-            func.returns_setof = returns_setof
+            # --- Parse RETURNS clause using helper --- 
+            return_props, updated_imports = _parse_return_clause(match, required_imports)
+            current_imports = updated_imports
+            # --- End RETURNS clause parsing ---
+            
+            # Create ParsedFunction object and assign parsed properties
+            func = ParsedFunction(
+                sql_name=sql_name, 
+                python_name=sql_name, # TODO: Pythonic name conversion for func?
+                sql_comment=cleaned_comment,
+                params=params,
+                returns_setof=returns_setof, # Use original bool flag
+                returns_table=return_props['returns_table'],
+                return_columns=return_props['return_columns'],
+                returns_record=return_props['returns_record'],
+                setof_table_name=return_props['setof_table_name'],
+                return_type="" # Will be set below
+            )
 
-            table_name_return = None
-
-            if is_returns_table:
-                logging.debug("  -> Returns explicit TABLE definition")
-                # Clean comments from table_columns_str before parsing
-                cleaned_table_columns_str = re.sub(r"--.*?$", "", table_columns_str, flags=re.MULTILINE)
-                cleaned_table_columns_str = re.sub(r"/\\*.*?\\*/", "", cleaned_table_columns_str, flags=re.DOTALL)
-                cleaned_table_columns_str = "\n".join(line.strip() for line in cleaned_table_columns_str.splitlines() if line.strip())
-                return_cols, col_imports = _parse_column_definitions(cleaned_table_columns_str) # Use cleaned string
-                if not return_cols:
-                    logging.warning(
-                        f"    No columns parsed from explicit TABLE definition for {sql_name}. Content: '{cleaned_table_columns_str[:100]}...'")
-                    func.return_type = "Any"  # Fallback
-                    required_imports.add(PYTHON_IMPORTS["Any"])
-                else:
-                    func.return_columns = return_cols
-                    func.returns_table = True
-                    required_imports.update(col_imports)
-                    required_imports.add("from dataclasses import dataclass")
-
-            elif scalar_or_table_name_return:
-                return_type_str = scalar_or_table_name_return
-                if return_type_str.lower() == "void":
-                    logging.debug("  -> Returns VOID")
-                    func.return_type = "None"
-                elif return_type_str.lower() == "record":
-                    logging.debug("  -> Returns RECORD")
-                    func.returns_record = True
-                    func.return_type = "Tuple"
-                    required_imports.add(PYTHON_IMPORTS["Tuple"])
-                else:
-                    py_return_type, ret_import = _map_sql_to_python_type(return_type_str)
-                    if py_return_type != "Any" or not returns_setof:
-                        logging.debug(f"  -> Returns SCALAR: {return_type_str} -> {py_return_type}")
-                        func.return_type = py_return_type
-                        if ret_import:
-                            for imp in ret_import.split("\n"):
-                                if imp:
-                                    required_imports.add(imp)
-                    else:  # SETOF unknown type -> assume table name
-                        table_name_return = return_type_str
-                        normalized_table_name = table_name_return.split(".")[-1]
-                        logging.debug(
-                            f"  -> Returns SETOF {table_name_return}. Looking for table schema '{normalized_table_name}'.")
-
-                        func.setof_table_name = normalized_table_name
-
-                        if normalized_table_name in TABLE_SCHEMAS:
-                            logging.info(f"    Found schema for table '{normalized_table_name}'")
-                            func.return_columns = TABLE_SCHEMAS[normalized_table_name]
-                            func.returns_table = True
-                            required_imports.update(TABLE_SCHEMA_IMPORTS[normalized_table_name])
-                            required_imports.add("from dataclasses import dataclass")
-                        else:
-                            logging.warning(
-                                f"    Schema not found for table '{normalized_table_name}'. Generating placeholder dataclass. Define the corresponding dataclass manually or ensure CREATE TABLE is parsed.")
-                            func.returns_table = True
-                            func.return_columns = [
-                                ReturnColumn(
-                                    name="unknown",
-                                    sql_type=table_name_return,
-                                    python_type="Any",
-                                )
-                            ]
-                            required_imports.add(PYTHON_IMPORTS["Any"])
-                            required_imports.add("from dataclasses import dataclass")
-            else:
-                logging.warning(f"Could not determine return type for function {sql_name}. Assuming None.")
-                func.return_type = "None"
-
-            base_return_type = "None"
-            if func.returns_table:
-                base_return_type = "DataclassPlaceholder"
-            elif func.returns_record:
-                base_return_type = "Tuple"
-            elif func.return_type != "None":
-                base_return_type = func.return_type
+            # --- Determine final Python return type hint --- 
+            base_return_type = return_props['return_type'] # Get base type from helper
 
             final_return_type = base_return_type
-            # is_complex_type was here, removed as unused
-
             if returns_setof:
                 if base_return_type != "None":
                     final_return_type = f"List[{base_return_type}]"
-                    required_imports.add(PYTHON_IMPORTS["List"])
-                    # is_complex_type assignment removed
-                elif base_return_type == "DataclassPlaceholder":
-                    final_return_type = "List[DataclassPlaceholder]"
-                    required_imports.add(PYTHON_IMPORTS["List"])
-                    # is_complex_type assignment removed
-            elif base_return_type != "None":
-                required_imports.add("from typing import Optional")
-                # is_complex_type assignment removed
-                if base_return_type != "DataclassPlaceholder":
-                    final_return_type = f"Optional[{base_return_type}]"
-                else:
-                    final_return_type = "Optional[DataclassPlaceholder]"
+                    current_imports.add(PYTHON_IMPORTS["List"])
+                # No else needed, SETOF None remains None (or should it be List[None]? No.)
+            elif base_return_type != "None": 
+                # Non-SETOF, non-None return types are Optional
+                final_return_type = f"Optional[{base_return_type}]"
+                current_imports.add("from typing import Optional")
 
             func.return_type = final_return_type
+            # --- End final return type determination ---
 
+            # --- Final import aggregation (ensure List/Optional/Tuple etc. are present if used) ---
             typing_imports_to_add = set()
             if "Optional[" in final_return_type:
                 typing_imports_to_add.add("from typing import Optional")
             if "List[" in final_return_type:
                 typing_imports_to_add.add(PYTHON_IMPORTS["List"])
-            if "Tuple" in final_return_type:
+            if "Tuple" in final_return_type: # Check base or final? Base seems safer.
                 typing_imports_to_add.add(PYTHON_IMPORTS["Tuple"])
             if "Dict" in final_return_type:
                 typing_imports_to_add.add(PYTHON_IMPORTS["Dict"])
             if "Any" in final_return_type:
                 typing_imports_to_add.add(PYTHON_IMPORTS["Any"])
+            current_imports.update(typing_imports_to_add)
+            # --- End final import aggregation ---
 
-            required_imports.update(typing_imports_to_add)
-
-            func.required_imports = {imp for imp in required_imports if imp}
+            func.required_imports = {imp for imp in current_imports if imp}
             functions.append(func)
 
         except SQLParsingError as spe: # Catch specific parsing errors
