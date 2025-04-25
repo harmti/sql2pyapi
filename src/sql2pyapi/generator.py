@@ -140,8 +140,12 @@ def _generate_function(func: ParsedFunction, class_name_map: Dict[str, str]) -> 
             body_lines.append("    # Return tuple for record type")
             body_lines.append("    return row")
         else:  # Single scalar
-            body_lines.append("    # Return first element for scalar")
-            body_lines.append("    return row[0]")  # Assumes scalar is first element
+            body_lines.append("    if isinstance(row, dict):")
+            body_lines.append(f"        # Assumes the key is the function name for dict rows")
+            body_lines.append(f"        return row[{repr(func.sql_name)}]")
+            body_lines.append("    else:")
+            body_lines.append("        # Fallback for tuple-like rows (index 0)")
+            body_lines.append("        return row[0]")
 
     indented_body = textwrap.indent("\n".join(body_lines), prefix="    ")
 

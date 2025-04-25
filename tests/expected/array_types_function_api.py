@@ -10,8 +10,12 @@ async def get_item_ids(conn: AsyncConnection) -> Optional[List[int]]:
         row = await cur.fetchone()
         if row is None:
             return None
-        # Return first element for scalar
-        return row[0]
+        if isinstance(row, dict):
+            # Assumes the key is the function name for dict rows
+            return row['get_item_ids']
+        else:
+            # Fallback for tuple-like rows (index 0)
+            return row[0]
 
 async def process_tags(conn: AsyncConnection, tags: List[str]) -> Optional[List[str]]:
     """Takes and returns an array of text"""
@@ -20,5 +24,9 @@ async def process_tags(conn: AsyncConnection, tags: List[str]) -> Optional[List[
         row = await cur.fetchone()
         if row is None:
             return None
-        # Return first element for scalar
-        return row[0]
+        if isinstance(row, dict):
+            # Assumes the key is the function name for dict rows
+            return row['process_tags']
+        else:
+            # Fallback for tuple-like rows (index 0)
+            return row[0]

@@ -12,5 +12,9 @@ async def add_item(conn: AsyncConnection, name: str, category_id: int, is_availa
         row = await cur.fetchone()
         if row is None:
             return None
-        # Return first element for scalar
-        return row[0]
+        if isinstance(row, dict):
+            # Assumes the key is the function name for dict rows
+            return row['add_item']
+        else:
+            # Fallback for tuple-like rows (index 0)
+            return row[0]

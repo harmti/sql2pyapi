@@ -13,8 +13,12 @@ async def function_with_multiline_dash_comment(conn: AsyncConnection) -> Optiona
         row = await cur.fetchone()
         if row is None:
             return None
-        # Return first element for scalar
-        return row[0]
+        if isinstance(row, dict):
+            # Assumes the key is the function name for dict rows
+            return row['function_with_multiline_dash_comment']
+        else:
+            # Fallback for tuple-like rows (index 0)
+            return row[0]
 
 async def function_with_single_block_comment(conn: AsyncConnection) -> Optional[str]:
     """This is a single-line block comment."""
@@ -23,8 +27,12 @@ async def function_with_single_block_comment(conn: AsyncConnection) -> Optional[
         row = await cur.fetchone()
         if row is None:
             return None
-        # Return first element for scalar
-        return row[0]
+        if isinstance(row, dict):
+            # Assumes the key is the function name for dict rows
+            return row['function_with_single_block_comment']
+        else:
+            # Fallback for tuple-like rows (index 0)
+            return row[0]
 
 async def function_with_multi_block_comment(conn: AsyncConnection) -> Optional[bool]:
     """This is a multi-line block comment.
@@ -36,8 +44,12 @@ async def function_with_multi_block_comment(conn: AsyncConnection) -> Optional[b
         row = await cur.fetchone()
         if row is None:
             return None
-        # Return first element for scalar
-        return row[0]
+        if isinstance(row, dict):
+            # Assumes the key is the function name for dict rows
+            return row['function_with_multi_block_comment']
+        else:
+            # Fallback for tuple-like rows (index 0)
+            return row[0]
 
 async def function_with_no_comment(conn: AsyncConnection) -> None:
     """Call PostgreSQL function function_with_no_comment()."""
@@ -52,5 +64,9 @@ async def function_with_separated_comment(conn: AsyncConnection) -> Optional[int
         row = await cur.fetchone()
         if row is None:
             return None
-        # Return first element for scalar
-        return row[0]
+        if isinstance(row, dict):
+            # Assumes the key is the function name for dict rows
+            return row['function_with_separated_comment']
+        else:
+            # Fallback for tuple-like rows (index 0)
+            return row[0]

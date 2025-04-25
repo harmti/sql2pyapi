@@ -11,5 +11,9 @@ async def get_current_db_time(conn: AsyncConnection) -> Optional[datetime]:
         row = await cur.fetchone()
         if row is None:
             return None
-        # Return first element for scalar
-        return row[0]
+        if isinstance(row, dict):
+            # Assumes the key is the function name for dict rows
+            return row['get_current_db_time']
+        else:
+            # Fallback for tuple-like rows (index 0)
+            return row[0]

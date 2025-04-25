@@ -10,8 +10,12 @@ async def get_item_count(conn: AsyncConnection) -> Optional[int]:
         row = await cur.fetchone()
         if row is None:
             return None
-        # Return first element for scalar
-        return row[0]
+        if isinstance(row, dict):
+            # Assumes the key is the function name for dict rows
+            return row['get_item_count']
+        else:
+            # Fallback for tuple-like rows (index 0)
+            return row[0]
 
 async def get_item_name(conn: AsyncConnection, id: int) -> Optional[str]:
     """Returns text, potentially null"""
@@ -20,5 +24,9 @@ async def get_item_name(conn: AsyncConnection, id: int) -> Optional[str]:
         row = await cur.fetchone()
         if row is None:
             return None
-        # Return first element for scalar
-        return row[0]
+        if isinstance(row, dict):
+            # Assumes the key is the function name for dict rows
+            return row['get_item_name']
+        else:
+            # Fallback for tuple-like rows (index 0)
+            return row[0]

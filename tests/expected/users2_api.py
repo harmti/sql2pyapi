@@ -103,5 +103,9 @@ async def delete_user(conn: AsyncConnection, id: UUID) -> Optional[UUID]:
         row = await cur.fetchone()
         if row is None:
             return None
-        # Return first element for scalar
-        return row[0]
+        if isinstance(row, dict):
+            # Assumes the key is the function name for dict rows
+            return row['delete_user']
+        else:
+            # Fallback for tuple-like rows (index 0)
+            return row[0]
