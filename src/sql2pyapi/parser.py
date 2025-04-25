@@ -157,88 +157,106 @@ def _parse_column_definitions(col_defs_str: str) -> Tuple[List[ReturnColumn], se
     if not col_defs_str:
         return columns, required_imports
 
-    # Handle both comma-separated (from RETURNS TABLE) and newline-separated (from CREATE TABLE)
-    processed_defs = col_defs_str.replace(",", "\n")
+    # Split by comma or newline to get potential definition parts
+    # Clean fragments: remove comments and strip whitespace
+    fragments = []
+    for part in re.split(r'[,\n]', col_defs_str):
+        cleaned_part = re.sub(r"--.*?$", "", part).strip()
+        if cleaned_part:
+            fragments.append(cleaned_part)
 
-    # Split definition block into individual lines, easier to process
-    lines = processed_defs.splitlines()
+    if not fragments:
+        return columns, required_imports
 
-    terminating_keywords = {
-        "primary",
-        "unique",
-        "not",
-        "null",
-        "references",
-        "check",
-        "collate",
-        "default",
-        "generated",
-        "constraint",
-    }
+    # Regex to capture column name (quoted or unquoted) and the rest
+    name_regex = re.compile(r'^\s*(?:("[^"\n]+")|([a-zA-Z0-9_]+))\s+(.*)$')
 
-    for line in lines:
-        # Strip -- comments first, then strip whitespace
-        line = re.sub(r"--.*?$", "", line).strip()
-        if not line or line.lower().startswith(("constraint", "primary key", "foreign key", "unique", "check", "like")):
-            continue  # Skip constraint definitions or LIKE clauses
+    # Process fragments, attempting to form complete definitions
+    i = 0
+    while i < len(fragments):
+        current_def = fragments[i]
+        i += 1
 
-        # Remove trailing comma if present (after comment removal)
-        if line.endswith(","):
-            line = line[:-1].strip()
+        # --- Attempt to merge fragments split inside parentheses (e.g., numeric(p, s)) ---
+        if columns and re.match(r"^\d+\s*\)?", current_def): # Looks like scale part e.g., "2)"
+            last_col = columns[-1]
+            if last_col.sql_type.lower().startswith(("numeric(", "decimal(")) and ',' not in last_col.sql_type:
+                 logging.debug(f"Attempting merge for numeric/decimal scale: '{current_def}'")
+                 merged_type = last_col.sql_type + ", " + current_def.rstrip(")") + ")"
+                 # Update last column's type
+                 last_col.sql_type = merged_type
+                 # Re-map python type and update imports if necessary (nullability unlikely to change)
+                 py_type, import_stmt = _map_sql_to_python_type(merged_type, last_col.is_optional)
+                 if py_type != last_col.python_type:
+                     last_col.python_type = py_type
+                     if import_stmt:
+                        for imp in import_stmt.split("\n"):
+                             if imp:
+                                 required_imports.add(imp)
+                 continue # Skip processing this fragment further
+        # --- End merge attempt ---
 
-        parts = line.split()  # Split by whitespace
-        if len(parts) < 2:
+        # Skip constraint definitions
+        if current_def.lower().startswith(("constraint", "primary key", "foreign key", "unique", "check", "like")):
             continue
 
-        col_name = parts[0].strip('"')
+        # Match name and the rest of the definition
+        name_match = name_regex.match(current_def)
+        if not name_match:
+            logging.warning(f"Could not extract column name from definition fragment: '{current_def}'")
+            continue
 
-        # Accumulate type parts, stopping at keywords
+        col_name = (name_match.group(1) or name_match.group(2)).strip('"')
+        rest_of_def = name_match.group(3).strip()
+
+        # Extract type - find the first terminating keyword
+        terminating_keywords = {
+            "primary", "unique", "not", "null", "references",
+            "check", "collate", "default", "generated"
+        }
         type_parts = []
-        for i in range(1, len(parts)):
-            part = parts[i]
-            part_lower = part.lower()
+        words = rest_of_def.split()
+        sql_type_extracted = None
+        constraint_part_start_index = len(words)
 
+        for j, word in enumerate(words):
+            word_lower = word.lower()
             is_terminator = False
             for keyword in terminating_keywords:
-                # Check if the part *is* or *starts with* a keyword
-                # (Handle cases like `DEFAULT` vs `DEFAULT 'value'`)
-                if part_lower == keyword or part_lower.startswith(keyword + "("):
+                # Handle NOT NULL as a single keyword
+                if keyword == "not" and j + 1 < len(words) and words[j+1].lower() == "null":
                     is_terminator = True
                     break
-
+                # Skip 'null' if it follows 'not'
+                if keyword == "null" and j > 0 and words[j-1].lower() == "not":
+                    continue
+                
+                if word_lower == keyword or word_lower.startswith(keyword + "("):
+                    is_terminator = True
+                    break
             if is_terminator:
+                constraint_part_start_index = j
                 break
-            type_parts.append(part)
-
+            type_parts.append(word)
+        
         if not type_parts:
-            # This might happen for lines defining constraints inline but not starting with keyword
-            # e.g., `col INT PRIMARY KEY` - we only want name/type here
-            if len(parts) >= 2:
-                # Assume second part might be the type if first isn't constraint
-                if parts[0].lower() not in terminating_keywords and parts[1].lower() not in terminating_keywords:
-                    sql_type = parts[1]
-                else:
-                    continue  # Skip likely constraint line
-            else:
-                continue  # Skip short lines
-            logging.debug(f"Trying fallback type parsing for column '{col_name}' in definition: '{line}'")
-        else:
-            sql_type = " ".join(type_parts)
+             logging.warning(f"Could not extract column type from definition: '{current_def}'")
+             continue
+        
+        sql_type_extracted = " ".join(type_parts)
+        constraint_part = " ".join(words[constraint_part_start_index:]).lower()
 
         # Determine if the column is optional (nullable)
-        # A column is considered optional unless 'NOT NULL' is explicitly present in its definition line.
-        # We also consider PRIMARY KEY columns as not optional.
-        line_lower = line.lower()
-        is_optional = "not null" not in line_lower and "primary key" not in line_lower
+        is_optional = "not null" not in constraint_part and "primary key" not in constraint_part
 
         # Pass the determined optionality to the type mapping function
-        py_type, import_stmt = _map_sql_to_python_type(sql_type, is_optional=is_optional)
+        py_type, import_stmt = _map_sql_to_python_type(sql_type_extracted, is_optional=is_optional)
 
         if import_stmt:
             for imp in import_stmt.split("\n"):
                 if imp:
                     required_imports.add(imp)
-        columns.append(ReturnColumn(name=col_name, sql_type=sql_type, python_type=py_type, is_optional=is_optional))
+        columns.append(ReturnColumn(name=col_name, sql_type=sql_type_extracted, python_type=py_type, is_optional=is_optional))
 
     if not columns and col_defs_str.strip():
         logging.warning(f"Could not parse any columns from CREATE TABLE block: '{col_defs_str[:100]}...'")

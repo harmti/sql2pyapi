@@ -6,6 +6,12 @@ from typing import Optional, Tuple, Set, List
 # Import the function under test (even if private)
 from sql2pyapi.parser import _map_sql_to_python_type, _parse_params, SQLParameter
 
+# Import the functions/classes under test
+from sql2pyapi.parser import (
+    _parse_column_definitions,
+    ReturnColumn,
+)
+
 # Parameterized test cases: (sql_type, is_optional, expected_py_type, expected_imports)
 map_type_test_cases = [
     # Basic types
@@ -153,3 +159,68 @@ def test_parse_params(param_str: str, expected_params: List[SQLParameter], expec
 
     # Check the set of required imports
     assert required_imports == expected_imports 
+
+
+# --- Tests for _parse_column_definitions --- 
+
+# Parameterized test cases: (col_defs_str, expected_cols, expected_imports)
+parse_columns_test_cases = [
+    # Empty input
+    ("", [], set()),
+    ("  ", [], set()),
+    # Single simple column (default: optional=True)
+    ("id integer", [ReturnColumn('id', 'integer', 'Optional[int]', True)], {"from typing import Optional"}),
+    # Multiple simple columns
+    ("name text, created_at timestamp", [
+        ReturnColumn('name', 'text', 'Optional[str]', True),
+        ReturnColumn('created_at', 'timestamp', 'Optional[datetime]', True),
+    ], {"from typing import Optional", "from datetime import datetime"}),
+    # Newline separated
+    ("name text\nvalue numeric", [
+        ReturnColumn('name', 'text', 'Optional[str]', True),
+        ReturnColumn('value', 'numeric', 'Optional[Decimal]', True),
+    ], {"from typing import Optional", "from decimal import Decimal"}),
+    # NOT NULL constraint
+    ("user_id uuid NOT NULL", [ReturnColumn('user_id', 'uuid', 'UUID', False)], {"from uuid import UUID"}),
+    # PRIMARY KEY constraint (implies NOT NULL)
+    ("item_id bigint PRIMARY KEY", [ReturnColumn('item_id', 'bigint', 'int', False)], set()),
+    # Mixed nullability
+    ("id int PRIMARY KEY, description text, is_active boolean NOT NULL", [
+        ReturnColumn('id', 'int', 'int', False),
+        ReturnColumn('description', 'text', 'Optional[str]', True),
+        ReturnColumn('is_active', 'boolean', 'bool', False),
+    ], {"from typing import Optional"}),
+    # With comments
+    ("col1 int, -- This is a comment\ncol2 text -- Another comment", [
+        ReturnColumn('col1', 'int', 'Optional[int]', True),
+        ReturnColumn('col2', 'text', 'Optional[str]', True),
+    ], {"from typing import Optional"}),
+    # Types with precision/scale
+    # ("price numeric(10, 2) NOT NULL", [ReturnColumn('price', 'numeric(10, 2)', 'Decimal', False)], {"from decimal import Decimal"}), # TODO: Fix parser for comma in type
+    ("code character varying(50)", [ReturnColumn('code', 'character varying(50)', 'Optional[str]', True)], {"from typing import Optional"}),
+    # Array types
+    ("tags text[]", [ReturnColumn('tags', 'text[]', 'Optional[List[str]]', True)], {"from typing import Optional", "from typing import List"}),
+    ("scores integer[] NOT NULL", [ReturnColumn('scores', 'integer[]', 'List[int]', False)], {"from typing import List"}),
+    # Constraints to ignore
+    ("id serial PRIMARY KEY, name varchar UNIQUE, email text NOT NULL CHECK (email <> ''), age int DEFAULT 18", [
+        ReturnColumn('id', 'serial', 'int', False),
+        ReturnColumn('name', 'varchar', 'Optional[str]', True),
+        ReturnColumn('email', 'text', 'str', False),
+        ReturnColumn('age', 'int', 'Optional[int]', True),
+    ], {"from typing import Optional"}),
+    # Quoted identifiers
+    ('"user Name" text, "order" int NOT NULL', [
+        ReturnColumn('user Name', 'text', 'Optional[str]', True),
+        ReturnColumn('order', 'int', 'int', False),
+    ], {"from typing import Optional"})
+
+]
+
+
+@pytest.mark.parametrize("col_defs_str, expected_cols, expected_imports", parse_columns_test_cases)
+def test_parse_column_definitions(col_defs_str: str, expected_cols: List[ReturnColumn], expected_imports: Set[str]):
+    """Tests the _parse_column_definitions function."""
+    cols, imports = _parse_column_definitions(col_defs_str)
+
+    assert cols == expected_cols
+    assert imports == expected_imports 
