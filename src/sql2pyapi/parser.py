@@ -10,7 +10,8 @@ TYPE_MAP = {
     "uuid": "UUID",
     "text": "str",
     "varchar": "str",
-    "character varying": "str",  # Add alias
+    "character varying": "str",  # Explicitly map this
+    "character": "str",         # Add mapping for 'character' base type
     "integer": "int",
     "int": "int",
     "bigint": "int",  # Consider using int in Python 3, as it has arbitrary precision
@@ -92,23 +93,44 @@ TABLE_SCHEMA_IMPORTS: Dict[str, set] = {}
 def _map_sql_to_python_type(sql_type: str, is_optional: bool = False) -> Tuple[str, Optional[str]]:
     """Maps SQL type to Python type and returns required import. Wraps with Optional if needed."""
     sql_type_normal = sql_type.lower().strip()
-    # Split on whitespace, parenthesis, or square brackets to get the base type
-    sql_type_base = re.split(r"[\s(\[]", sql_type_normal, 1)[0]
     is_array = sql_type_normal.endswith("[]")
+    if is_array:
+        # Remove the [] suffix for base type lookup
+        sql_type_no_array = sql_type_normal[:-2].strip()
+    else:
+        sql_type_no_array = sql_type_normal
 
-    py_type = TYPE_MAP.get(sql_type_base, "Any")
+    # Split on whitespace, parenthesis, or square brackets to get the *potential* base type
+    # This handles cases like "character varying(N)" but might fail for "timestamp with time zone"
+    potential_base_type = re.split(r"[\s(\[]", sql_type_no_array, maxsplit=1)[0]
+
+    # --- Refined Type Lookup ---
+    # First, check for an exact match (e.g., "timestamp with time zone")
+    py_type = TYPE_MAP.get(sql_type_no_array)
+    if not py_type:
+        # If no exact match, check using the split potential base type (e.g., "character")
+        py_type = TYPE_MAP.get(potential_base_type, "Any")
+
+    # --- Import Handling ---
     import_stmt = PYTHON_IMPORTS.get(py_type)
     combined_imports = {import_stmt} if import_stmt else set()
+    if py_type == "Any":
+        # Ensure Any is imported if type maps to Any
+        any_import = PYTHON_IMPORTS.get("Any")
+        if any_import:
+            combined_imports.add(any_import)
 
+    # --- Array Handling ---
     if is_array:
         py_type = f"List[{py_type}]"
         list_import = PYTHON_IMPORTS.get("List")
         if list_import:
             combined_imports.add(list_import)
 
-    # --- Add special handling for dict/json types ---
-    if py_type == "dict":
-        py_type = "Dict[str, Any]"  # Make it the specific generic type
+    # --- Special handling for dict/json types (BEFORE Optional wrapping, AFTER array wrapping) ---
+    # Use 'in' check to handle both 'dict' and 'List[dict]'
+    if "dict" in py_type:
+        py_type = py_type.replace("dict", "Dict[str, Any]") # Replace dict part
         # Ensure Dict and Any imports are added
         dict_import = PYTHON_IMPORTS.get("Dict")
         any_import = PYTHON_IMPORTS.get("Any")
@@ -116,15 +138,13 @@ def _map_sql_to_python_type(sql_type: str, is_optional: bool = False) -> Tuple[s
             combined_imports.add(dict_import)
         if any_import:
             combined_imports.add(any_import)
-        # Remove the basic 'dict' import if it was added (it's not needed)
-        # combined_imports.discard(PYTHON_IMPORTS.get("dict")) # Assuming no explicit 'dict' import
 
-    if is_optional and py_type != "Any":
-        # Only wrap non-array types with Optional here; array types are handled by [] or List[]
-        # Or assume default NULL means optional even for arrays? For now, only non-arrays.
-        if not is_array:
-            py_type = f"Optional[{py_type}]"
-            combined_imports.add("from typing import Optional")
+    # --- Optional Handling ---
+    if is_optional and py_type != "Any" and not py_type.startswith("Optional["):
+        # Only wrap non-Any types that aren't already Optional
+        # We apply Optional even to List types if the base SQL type could be NULL
+        py_type = f"Optional[{py_type}]"
+        combined_imports.add("from typing import Optional")
 
     final_imports_str = "\n".join(filter(None, sorted(list(combined_imports))))
     return py_type, final_imports_str if final_imports_str else None
