@@ -622,44 +622,58 @@ def _parse_return_clause(match: re.Match, initial_imports: set) -> Tuple[dict, s
             return_props['return_type'] = "Tuple"
             required_imports.add(PYTHON_IMPORTS["Tuple"])
         else:
-            # Could be scalar or SETOF table_name
-            py_return_type, ret_import = _map_sql_to_python_type(return_type_str)
-            if py_return_type != "Any" or not returns_setof:
-                # Treat as scalar
-                logging.debug(f"  -> Function '{sql_name}' returns SCALAR: {return_type_str} -> {py_return_type}")
-                return_props['return_type'] = py_return_type
-                if ret_import:
-                    for imp in ret_import.split("\n"):
-                        if imp:
-                            required_imports.add(imp)
-            else:
-                # Assume SETOF unknown type is SETOF table_name
-                table_name_return = return_type_str
-                normalized_table_name = table_name_return.split(".")[-1]
-                logging.debug(
-                    f"  -> Function '{sql_name}' returns SETOF {table_name_return}. Looking for table schema '{normalized_table_name}'.")
-                return_props['setof_table_name'] = normalized_table_name
+            # Could be scalar, table_name, or SETOF table_name
+            normalized_table_name = return_type_str.split(".")[-1]
 
-                if normalized_table_name in TABLE_SCHEMAS:
-                    logging.info(f"    Found schema for table '{normalized_table_name}'")
-                    found_columns = TABLE_SCHEMAS[normalized_table_name]
-                    # Use .get() for imports dict
-                    found_imports = TABLE_SCHEMA_IMPORTS.get(normalized_table_name, set()) 
-                    return_props['return_columns'] = found_columns
-                    return_props['returns_table'] = True
-                    return_props['return_type'] = "DataclassPlaceholder"
-                    required_imports.update(found_imports)
-                    required_imports.add("from dataclasses import dataclass")
+            # --- NEW: Check if it's a known table name (even if not SETOF) ---
+            if normalized_table_name in TABLE_SCHEMAS:
+                logging.debug(
+                    f"  -> Function '{sql_name}' returns TABLE TYPE: {return_type_str}. Found schema '{normalized_table_name}'."
+                )
+                return_props['return_columns'] = TABLE_SCHEMAS[normalized_table_name]
+                # Use .get() for imports dict
+                found_imports = TABLE_SCHEMA_IMPORTS.get(normalized_table_name, set())
+                return_props['returns_table'] = True
+                return_props['return_type'] = "DataclassPlaceholder" # Placeholder for later List/Optional wrapping
+                required_imports.update(found_imports)
+                required_imports.add("from dataclasses import dataclass")
+                # If it was also SETOF, record the table name for generator logic
+                if returns_setof:
+                    return_props['setof_table_name'] = normalized_table_name
+            # --- END NEW ---
+            else:
+                # Could be scalar or SETOF unknown_table_name
+                py_return_type, ret_import = _map_sql_to_python_type(return_type_str)
+                if py_return_type != "Any" or not returns_setof:
+                    # Treat as scalar only if not found in TABLE_SCHEMAS
+                    logging.debug(
+                        f"  -> Function '{sql_name}' returns SCALAR or unknown type: {return_type_str} -> {py_return_type}"
+                    )
+                    return_props['return_type'] = py_return_type
+                    if ret_import:
+                        for imp in ret_import.split("\n"):
+                            if imp:
+                                required_imports.add(imp)
                 else:
+                    # Assume SETOF unknown type is SETOF table_name (schema not found)
+                    # Keep existing logic for SETOF <unknown_table>
+                    table_name_return = return_type_str # Original name
+                    normalized_table_name = table_name_return.split(".")[-1] # Normalized name
+                    logging.debug(
+                        f"  -> Function '{sql_name}' returns SETOF {table_name_return}. Schema NOT FOUND for '{normalized_table_name}'."
+                    )
+                    return_props['setof_table_name'] = normalized_table_name # Still record the name
+
                     logging.warning(
-                        f"    Schema not found for table '{normalized_table_name}'. Generating placeholder dataclass.")
-                    return_props['returns_table'] = True
+                        f"    Schema not found for table '{normalized_table_name}'. Generating placeholder dataclass."
+                    )
+                    return_props['returns_table'] = True # Treat as table for placeholder generation
                     return_props['return_type'] = "DataclassPlaceholder"
                     # Generate minimal placeholder column info
                     return_props['return_columns'] = [
                         ReturnColumn(
                             name="unknown",
-                            sql_type=table_name_return,
+                            sql_type=table_name_return, # Use original name in placeholder
                             python_type="Any"
                         )
                     ]

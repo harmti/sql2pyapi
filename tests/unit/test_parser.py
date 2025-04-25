@@ -385,94 +385,176 @@ def test_find_preceding_comment(lines: List[str], func_start_line_idx: int, expe
 
 # --- Tests for _parse_return_clause ---
 
-# Helper to create a match object for testing
+# Function to create a mock regex match object
 def create_match(sql: str) -> Optional[re.Match]:
     # Access regex via module
     return parser.FUNCTION_REGEX.search(sql)
 
-# Define some sample return columns for mocking table schemas
-sample_user_columns = [
-    ReturnColumn(name='user_id', sql_type='int', python_type='int', is_optional=False),
-    ReturnColumn(name='email', sql_type='text', python_type='Optional[str]', is_optional=True)
-]
-sample_user_imports = {"from typing import Optional"}
-
-# Test cases: (function_sql, initial_imports, expected_props, expected_imports_delta)
-# expected_imports_delta only contains *new* imports added by _parse_return_clause
+# Test cases for _parse_return_clause
+# (sql_fragment, initial_imports, expected_props, expected_imports_delta)
 parse_return_test_cases = [
-    # RETURNS void
-    ("CREATE FUNCTION do_nothing() RETURNS void AS $$", set(), 
-     {'return_type': 'None', 'returns_table': False, 'return_columns': [], 'returns_record': False, 'setof_table_name': None},
-     set()), 
-    # RETURNS scalar
-    ("CREATE FUNCTION get_count() RETURNS int AS $$", {"psycopg"}, 
-     {'return_type': 'int', 'returns_table': False, 'return_columns': [], 'returns_record': False, 'setof_table_name': None},
-     set()),
-    ("CREATE FUNCTION get_id() RETURNS uuid AS $$", {"psycopg"},
-     {'return_type': 'UUID', 'returns_table': False, 'return_columns': [], 'returns_record': False, 'setof_table_name': None},
-     {"from uuid import UUID"}),
-    # RETURNS SETOF scalar
-    ("CREATE FUNCTION get_scores() RETURNS SETOF int AS $$", {"psycopg"},
-     {'return_type': 'int', 'returns_table': False, 'return_columns': [], 'returns_record': False, 'setof_table_name': None},
-     set()),
-    # RETURNS TABLE
-    ("CREATE FUNCTION get_data() RETURNS TABLE(id int, name text) AS $$", {"psycopg"},
-     {'return_type': 'DataclassPlaceholder', 'returns_table': True, 
-      'return_columns': [ReturnColumn('id', 'int', 'Optional[int]', True), ReturnColumn('name', 'text', 'Optional[str]', True)], 
-      'returns_record': False, 'setof_table_name': None},
-     {"from dataclasses import dataclass", "from typing import Optional"}),
-    # RETURNS TABLE with NOT NULL
-    ("CREATE FUNCTION get_items() RETURNS TABLE(item_id uuid NOT NULL, value text) AS $$", {"psycopg"},
-     {'return_type': 'DataclassPlaceholder', 'returns_table': True, 
-      'return_columns': [ReturnColumn('item_id', 'uuid', 'UUID', False), ReturnColumn('value', 'text', 'Optional[str]', True)], 
-      'returns_record': False, 'setof_table_name': None},
-     {"from dataclasses import dataclass", "from uuid import UUID", "from typing import Optional"}),
-    # RETURNS record
-    ("CREATE FUNCTION get_pair() RETURNS record AS $$", {"psycopg"},
-     {'return_type': 'Tuple', 'returns_table': False, 'return_columns': [], 'returns_record': True, 'setof_table_name': None},
-     {"from typing import Tuple"}),
-    # RETURNS SETOF record
-    ("CREATE FUNCTION get_pairs() RETURNS SETOF record AS $$", {"psycopg"},
-     {'return_type': 'Tuple', 'returns_table': False, 'return_columns': [], 'returns_record': True, 'setof_table_name': None},
-     {"from typing import Tuple"}),
-    # RETURNS SETOF table_name (schema found)
-    ("CREATE FUNCTION get_users() RETURNS SETOF users AS $$", {"psycopg"},
-     {'return_type': 'DataclassPlaceholder', 'returns_table': True, 'return_columns': sample_user_columns, 'returns_record': False, 'setof_table_name': 'users'},
-     {"from dataclasses import dataclass", "from typing import Optional"}),
-    # RETURNS SETOF table_name (schema not found)
-    ("CREATE FUNCTION get_products() RETURNS SETOF products AS $$", {"psycopg"},
-     {'return_type': 'DataclassPlaceholder', 'returns_table': True, 
-      'return_columns': [ReturnColumn(name='unknown', sql_type='products', python_type='Any')], 
-      'returns_record': False, 'setof_table_name': 'products'},
-     {"from dataclasses import dataclass", "from typing import Any"}),
+    # VOID return
+    (
+        "CREATE FUNCTION my_func() RETURNS void AS $$ ... $$",
+        set(),
+        {'return_type': 'None', 'returns_table': False, 'return_columns': [], 'returns_record': False, 'setof_table_name': None},
+        set()
+    ),
+    # Scalar return (int)
+    (
+        "CREATE FUNCTION get_count() RETURNS integer AS $$ ... $$",
+        set(),
+        {'return_type': 'int', 'returns_table': False, 'return_columns': [], 'returns_record': False, 'setof_table_name': None},
+        set()
+    ),
+    # Scalar return (uuid)
+    (
+        "CREATE FUNCTION generate_id() RETURNS uuid AS $$ ... $$",
+        set(),
+        {'return_type': 'UUID', 'returns_table': False, 'return_columns': [], 'returns_record': False, 'setof_table_name': None},
+        {"from uuid import UUID"}
+    ),
+    # RECORD return
+    (
+        "CREATE FUNCTION get_pair() RETURNS record AS $$ ... $$",
+        set(),
+        {'return_type': 'Tuple', 'returns_table': False, 'return_columns': [], 'returns_record': True, 'setof_table_name': None},
+        {"from typing import Tuple"}
+    ),
+    # Explicit RETURNS TABLE
+    (
+        "CREATE FUNCTION get_user_details() RETURNS TABLE(id int PRIMARY KEY, name text) AS $$ ... $$", # Added PRIMARY KEY
+        set(),
+        {'return_type': 'DataclassPlaceholder', 'returns_table': True,
+         'return_columns': [
+             ReturnColumn(name='id', sql_type='int', python_type='int', is_optional=False), # PK implies NOT NULL
+             ReturnColumn(name='name', sql_type='text', python_type='Optional[str]', is_optional=True)
+         ],
+         'returns_record': False, 'setof_table_name': None},
+        {"from dataclasses import dataclass", "from typing import Optional"} # Optional comes from name text default
+    ),
+    # SETOF scalar
+    (
+        "CREATE FUNCTION get_all_ids() RETURNS SETOF integer AS $$ ... $$",
+        set(),
+        {'return_type': 'int', 'returns_table': False, 'return_columns': [], 'returns_record': False, 'setof_table_name': None},
+        set() # List import added later
+    ),
+    # SETOF record
+    (
+        "CREATE FUNCTION get_all_pairs() RETURNS SETOF record AS $$ ... $$",
+        set(),
+        {'return_type': 'Tuple', 'returns_table': False, 'return_columns': [], 'returns_record': True, 'setof_table_name': None},
+        {"from typing import Tuple"} # List import added later
+    ),
+    # SETOF table_name (schema FOUND) - MOCK needed
+    (
+        "CREATE FUNCTION get_all_users() RETURNS SETOF users AS $$ ... $$",
+        set(),
+        {'return_type': 'DataclassPlaceholder', 'returns_table': True,
+         'return_columns': [ # This comes from mocked TABLE_SCHEMAS
+             ReturnColumn(name='user_id', sql_type='uuid', python_type='UUID', is_optional=False),
+             ReturnColumn(name='email', sql_type='text', python_type='Optional[str]', is_optional=True)
+         ],
+         'returns_record': False, 'setof_table_name': 'users'},
+        {"from dataclasses import dataclass", "from uuid import UUID", "from typing import Optional"} # From mocked schema + dataclass
+    ),
+     # SETOF table_name (schema NOT FOUND) - Use 'widgets'
+    (
+        "CREATE FUNCTION get_all_widgets() RETURNS SETOF widgets AS $$ ... $$",
+        set(),
+        {'return_type': 'DataclassPlaceholder', 'returns_table': True,
+         'return_columns': [ # Placeholder column
+             ReturnColumn(name='unknown', sql_type='widgets', python_type='Any')
+         ],
+         'returns_record': False, 'setof_table_name': 'widgets'},
+        {"from dataclasses import dataclass", "from typing import Any"} # Any comes from placeholder
+    ),
+    # NEW: RETURNS table_name (schema FOUND) - MOCK needed
+    (
+        "CREATE FUNCTION get_one_user(id int) RETURNS users AS $$ ... $$",
+        set(),
+        {'return_type': 'DataclassPlaceholder', 'returns_table': True,
+         'return_columns': [ # This comes from mocked TABLE_SCHEMAS
+             ReturnColumn(name='user_id', sql_type='uuid', python_type='UUID', is_optional=False),
+             ReturnColumn(name='email', sql_type='text', python_type='Optional[str]', is_optional=True)
+         ],
+         'returns_record': False, 'setof_table_name': None}, # NOTE: setof_table_name is None here
+        {"from dataclasses import dataclass", "from uuid import UUID", "from typing import Optional"} # From mocked schema + dataclass
+    ),
+     # NEW: RETURNS table_name (schema NOT FOUND) - Use 'widgets'
+    (
+        "CREATE FUNCTION get_one_widget(pid int) RETURNS widgets AS $$ ... $$",
+        set(),
+        # Should fall back to scalar Any mapping if schema not found
+        {'return_type': 'Any', 'returns_table': False, 'return_columns': [], 'returns_record': False, 'setof_table_name': None},
+        {"from typing import Any"}
+    ),
+    # NEW: RETURNS schema.table_name (schema FOUND) - MOCK needed
+    (
+        "CREATE FUNCTION get_one_product_schema(pid int) RETURNS store.products AS $$ ... $$",
+        set(),
+        {'return_type': 'DataclassPlaceholder', 'returns_table': True,
+         'return_columns': [ # Mocked schema for 'products'
+             ReturnColumn(name='product_id', sql_type='int', python_type='int', is_optional=False),
+             ReturnColumn(name='name', sql_type='varchar', python_type='Optional[str]', is_optional=True)
+         ],
+         'returns_record': False, 'setof_table_name': None},
+        {"from dataclasses import dataclass", "from typing import Optional"}
+    ),
+    # NEW: SETOF schema.table_name (schema FOUND) - MOCK needed
+    (
+        "CREATE FUNCTION get_all_products_schema() RETURNS SETOF store.products AS $$ ... $$",
+        set(),
+        {'return_type': 'DataclassPlaceholder', 'returns_table': True,
+         'return_columns': [ # Mocked schema for 'products'
+             ReturnColumn(name='product_id', sql_type='int', python_type='int', is_optional=False),
+             ReturnColumn(name='name', sql_type='varchar', python_type='Optional[str]', is_optional=True)
+         ],
+         'returns_record': False, 'setof_table_name': 'products'}, # NOTE: setof_table_name uses normalized name
+        {"from dataclasses import dataclass", "from typing import Optional"}
+    ),
+
 ]
+
+# Mock schemas for tests needing them
+MOCK_TABLE_SCHEMAS = {
+    'users': [
+        ReturnColumn(name='user_id', sql_type='uuid', python_type='UUID', is_optional=False),
+        ReturnColumn(name='email', sql_type='text', python_type='Optional[str]', is_optional=True)
+    ],
+    'products': [ # Used for store.products tests
+        ReturnColumn(name='product_id', sql_type='int', python_type='int', is_optional=False),
+        ReturnColumn(name='name', sql_type='varchar', python_type='Optional[str]', is_optional=True)
+    ]
+}
+MOCK_TABLE_SCHEMA_IMPORTS = {
+    'users': {"from uuid import UUID", "from typing import Optional"},
+    'products': {"from typing import Optional"}
+}
 
 @pytest.mark.parametrize("function_sql, initial_imports, expected_props, expected_imports_delta", parse_return_test_cases)
 def test_parse_return_clause(function_sql: str, initial_imports: set, expected_props: dict, expected_imports_delta: set):
-    """Tests the _parse_return_clause function with various RETURNS types."""
+    """Tests the _parse_return_clause function with various RETURNS clauses."""
     match = create_match(function_sql)
-    assert match is not None, f"Test setup failed: regex did not match SQL: {function_sql}"
+    assert match is not None, f"Regex failed to match test SQL: {function_sql}"
 
-    # Patch globals *inside* the test using context managers
-    # Use copies of sample data to prevent mutation across tests
-    patched_schemas = copy.deepcopy({'users': sample_user_columns})
-    patched_imports = copy.deepcopy({'users': sample_user_imports})
+    # Use patch to temporarily replace the global schema dicts for relevant tests
+    with patch.dict(parser.TABLE_SCHEMAS, MOCK_TABLE_SCHEMAS, clear=True), \
+         patch.dict(parser.TABLE_SCHEMA_IMPORTS, MOCK_TABLE_SCHEMA_IMPORTS, clear=True):
 
-    with patch.object(parser, 'TABLE_SCHEMAS', patched_schemas, create=True), \
-         patch.object(parser, 'TABLE_SCHEMA_IMPORTS', patched_imports, create=True):
-        
-        return_props, result_imports = parser._parse_return_clause(match, initial_imports)
+        # Make a deep copy of initial imports to avoid modification across tests
+        initial_imports_copy = copy.deepcopy(initial_imports)
 
-        # Make copies for comparison to avoid modifying originals during asserts
-        expected_props_copy = copy.deepcopy(expected_props)
-        return_props_copy = copy.deepcopy(return_props)
+        return_props, required_imports = _parse_return_clause(match, initial_imports_copy)
 
-        # Check the returned properties dictionary parts
-        actual_cols = sorted(return_props_copy.pop('return_columns', []), key=lambda c: c.name)
-        expected_cols = sorted(expected_props_copy.pop('return_columns', []), key=lambda c: c.name)
-        assert actual_cols == expected_cols
-        assert return_props_copy == expected_props_copy # Compare remaining props
+    # Compare the dictionaries of parsed properties
+    assert return_props == expected_props, f"Mismatch in return properties for: {function_sql}"
 
-        # Check that only the expected *new* imports were added
-        newly_added_imports = result_imports - initial_imports
-        assert newly_added_imports == expected_imports_delta 
+    # Compare the required imports (check only the difference added by the return clause)
+    # Note: This assumes initial_imports_copy wasn't modified by the function itself (it shouldn't be)
+    calculated_delta = required_imports - initial_imports_copy
+    assert calculated_delta == expected_imports_delta, f"Mismatch in required imports delta for: {function_sql}"
+
+
+# ... (Keep rest of the file, e.g., tests for parse_sql if any) ... 
