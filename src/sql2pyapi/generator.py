@@ -154,6 +154,7 @@ def _generate_function(func: ParsedFunction, class_name_map: Dict[str, str]) -> 
         body_lines.append("    row = await cur.fetchone()")
         body_lines.append("    if row is None:")
         body_lines.append("        return None")
+        # All row processing happens after the None check
         if func.returns_table:
             body_lines.append(f"    # Ensure dataclass '{final_dataclass_name}' is defined above.")
             # Add logic to handle both tuple and dict rows
