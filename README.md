@@ -63,32 +63,29 @@ We recommend using `uv` for managing dependencies and virtual environments.
 
 ## Usage
 
-The tool provides a command-line interface `sql2py`.
+The tool provides a command-line interface `sql2pyapi`.
 
-**Basic Usage:**
-
-```bash
-sql2py <input_sql_file> <output_python_file>
-```
-
-*   `<input_sql_file>`: Path to the `.sql` file containing `CREATE FUNCTION` (and optionally `CREATE TABLE`) statements.
-*   `<output_python_file>`: Path where the generated Python code will be written.
-
-**Example:**
+### Basic Usage
 
 ```bash
-sql2py path/to/your/functions.sql path/to/your/generated_api.py
+sql2pyapi <input_sql_file> <output_python_file>
 ```
 
-**Using a Separate Schema File:**
+Replace `<input_sql_file>` with the path to your SQL file containing function definitions and `<output_python_file>` with the desired path for the generated Python API module.
 
-If your `CREATE TABLE` definitions are in a separate file, you can provide it using the `--schema-file` option:
+Example:
 
 ```bash
-sql2py functions.sql generated_api.py --schema-file schema.sql
+sql2pyapi path/to/your/functions.sql path/to/your/generated_api.py
 ```
 
-This is useful for resolving `SETOF table_name` return types when the table definitions are not in the same file as the functions.
+### Using a Schema File
+
+If your functions depend on custom types or tables defined in separate files, you can provide a schema file using the `--schema-file` option:
+
+```bash
+sql2pyapi functions.sql generated_api.py --schema-file schema.sql
+```
 
 ## Limitations and Future Work
 

@@ -3,9 +3,9 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "sql2py"
+name = "sql2pyapi"
 version = "0.1.0"
-description = "Generate Python async API wrappers from PostgreSQL function definitions."
+description = "Generate Python API wrappers for SQL functions"
 authors = [
     { name = "Timo Harmonen", email = "timo.harmonen@iki.fi" },
 ]
@@ -35,20 +35,20 @@ dev = [
 ]
 
 [project.urls]
-"Homepage" = "https://github.com/harmti/sql2py"
+"Homepage" = "https://github.com/harmti/sql2pyapi"
 "Bug Tracker" = "" # Add issue tracker URL if available
 
 [project.scripts]
-sql2py = "sql2py.cli:app"
+sql2pyapi = "sql2pyapi.cli:app"
 
 [tool.hatch.version]
-path = "src/sql2py/__init__.py" # Optional: manage version in __init__.py
+path = "src/sql2pyapi/__init__.py" # Optional: manage version in __init__.py
 
 [tool.hatch.build.targets.sdist]
 include = ["/src", "/pyproject.toml", "/README.md"]
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/sql2py"]
+packages = ["src/sql2pyapi"]
 
 [tool.ruff]
 line-length = 120
