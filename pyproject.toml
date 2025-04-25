@@ -30,6 +30,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0.0", # Or pin to a specific version range if needed
+    "pytest-asyncio", # Added for testing async functions
     "ruff>=0.5.5",
 ]
 
