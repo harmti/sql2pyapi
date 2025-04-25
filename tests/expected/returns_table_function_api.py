@@ -19,4 +19,6 @@ async def get_user_basic_info(conn: AsyncConnection, user_id: UUID) -> Optional[
         if row is None:
             return None
         # Ensure dataclass 'UserBasicInfo' is defined above.
-        return UserBasicInfo(*row)
+        colnames = [desc[0] for desc in cur.description]
+        row_dict = dict(zip(colnames, row)) if not isinstance(row, dict) else row
+        return UserBasicInfo(**row_dict)

@@ -17,4 +17,11 @@ async def get_undefined_table_data(conn: AsyncConnection) -> List[SomeUndefinedT
         await cur.execute("SELECT * FROM get_undefined_table_data()", [])
         rows = await cur.fetchall()
         # Ensure dataclass 'SomeUndefinedTable' is defined above.
-        return [SomeUndefinedTable(*row) for row in rows] if rows else []
+        if not rows:
+            return []
+        colnames = [desc[0] for desc in cur.description]
+        processed_rows = [
+            dict(zip(colnames, r)) if not isinstance(r, dict) else r
+            for r in rows
+        ]
+        return [SomeUndefinedTable(**row_dict) for row_dict in processed_rows]

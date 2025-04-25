@@ -19,4 +19,11 @@ async def get_all_products(conn: AsyncConnection) -> List[Product]:
         await cur.execute("SELECT * FROM get_all_products()", [])
         rows = await cur.fetchall()
         # Ensure dataclass 'Product' is defined above.
-        return [Product(*row) for row in rows] if rows else []
+        if not rows:
+            return []
+        colnames = [desc[0] for desc in cur.description]
+        processed_rows = [
+            dict(zip(colnames, r)) if not isinstance(r, dict) else r
+            for r in rows
+        ]
+        return [Product(**row_dict) for row_dict in processed_rows]

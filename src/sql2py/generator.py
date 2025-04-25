@@ -110,7 +110,15 @@ def _generate_function(func: ParsedFunction, class_name_map: Dict[str, str]) -> 
         body_lines.append("    rows = await cur.fetchall()")
         if func.returns_table:
             body_lines.append(f"    # Ensure dataclass '{final_dataclass_name}' is defined above.")
-            body_lines.append(f"    return [{final_dataclass_name}(*row) for row in rows] if rows else []")
+            # Add logic to handle both tuple and dict rows
+            body_lines.append("    if not rows:")
+            body_lines.append("        return []")
+            body_lines.append("    colnames = [desc[0] for desc in cur.description]")
+            body_lines.append("    processed_rows = [")
+            body_lines.append("        dict(zip(colnames, r)) if not isinstance(r, dict) else r")
+            body_lines.append("        for r in rows")
+            body_lines.append(f"    ]")
+            body_lines.append(f"    return [{final_dataclass_name}(**row_dict) for row_dict in processed_rows]")
         elif func.returns_record:
             body_lines.append("    # Return list of tuples for SETOF record")
             body_lines.append("    return rows")
@@ -123,7 +131,10 @@ def _generate_function(func: ParsedFunction, class_name_map: Dict[str, str]) -> 
         body_lines.append("        return None")
         if func.returns_table:
             body_lines.append(f"    # Ensure dataclass '{final_dataclass_name}' is defined above.")
-            body_lines.append(f"    return {final_dataclass_name}(*row)")
+            # Add logic to handle both tuple and dict rows
+            body_lines.append("    colnames = [desc[0] for desc in cur.description]")
+            body_lines.append("    row_dict = dict(zip(colnames, row)) if not isinstance(row, dict) else row")
+            body_lines.append(f"    return {final_dataclass_name}(**row_dict)")
         elif func.returns_record:
             body_lines.append("    # Return tuple for record type")
             body_lines.append("    return row")

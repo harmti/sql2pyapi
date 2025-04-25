@@ -32,7 +32,9 @@ async def create_user(conn: AsyncConnection, clerk_id: str, email: Optional[str]
         if row is None:
             return None
         # Ensure dataclass 'CreateUser' is defined above.
-        return CreateUser(*row)
+        colnames = [desc[0] for desc in cur.description]
+        row_dict = dict(zip(colnames, row)) if not isinstance(row, dict) else row
+        return CreateUser(**row_dict)
 
 async def get_user_by_clerk_id(conn: AsyncConnection, clerk_id: str) -> List[User]:
     """Function to get a user by their clerk_id"""
@@ -40,7 +42,14 @@ async def get_user_by_clerk_id(conn: AsyncConnection, clerk_id: str) -> List[Use
         await cur.execute("SELECT * FROM get_user_by_clerk_id(%s)", [clerk_id])
         rows = await cur.fetchall()
         # Ensure dataclass 'User' is defined above.
-        return [User(*row) for row in rows] if rows else []
+        if not rows:
+            return []
+        colnames = [desc[0] for desc in cur.description]
+        processed_rows = [
+            dict(zip(colnames, r)) if not isinstance(r, dict) else r
+            for r in rows
+        ]
+        return [User(**row_dict) for row_dict in processed_rows]
 
 async def get_user_by_id(conn: AsyncConnection, id: UUID) -> List[User]:
     """Function to get a user by their internal id"""
@@ -48,7 +57,14 @@ async def get_user_by_id(conn: AsyncConnection, id: UUID) -> List[User]:
         await cur.execute("SELECT * FROM get_user_by_id(%s)", [id])
         rows = await cur.fetchall()
         # Ensure dataclass 'User' is defined above.
-        return [User(*row) for row in rows] if rows else []
+        if not rows:
+            return []
+        colnames = [desc[0] for desc in cur.description]
+        processed_rows = [
+            dict(zip(colnames, r)) if not isinstance(r, dict) else r
+            for r in rows
+        ]
+        return [User(**row_dict) for row_dict in processed_rows]
 
 async def get_users(conn: AsyncConnection) -> List[User]:
     """Function to get all non-deleted users"""
@@ -56,7 +72,14 @@ async def get_users(conn: AsyncConnection) -> List[User]:
         await cur.execute("SELECT * FROM get_users()", [])
         rows = await cur.fetchall()
         # Ensure dataclass 'User' is defined above.
-        return [User(*row) for row in rows] if rows else []
+        if not rows:
+            return []
+        colnames = [desc[0] for desc in cur.description]
+        processed_rows = [
+            dict(zip(colnames, r)) if not isinstance(r, dict) else r
+            for r in rows
+        ]
+        return [User(**row_dict) for row_dict in processed_rows]
 
 async def update_user(conn: AsyncConnection, id: UUID, email: Optional[str] = None, email_verified: Optional[bool] = None, first_name: Optional[str] = None, last_name: Optional[str] = None, last_sign_in_at: Optional[datetime] = None) -> List[User]:
     """Function to update user details"""
@@ -64,7 +87,14 @@ async def update_user(conn: AsyncConnection, id: UUID, email: Optional[str] = No
         await cur.execute("SELECT * FROM update_user(%s, %s, %s, %s, %s, %s)", [id, email, email_verified, first_name, last_name, last_sign_in_at])
         rows = await cur.fetchall()
         # Ensure dataclass 'User' is defined above.
-        return [User(*row) for row in rows] if rows else []
+        if not rows:
+            return []
+        colnames = [desc[0] for desc in cur.description]
+        processed_rows = [
+            dict(zip(colnames, r)) if not isinstance(r, dict) else r
+            for r in rows
+        ]
+        return [User(**row_dict) for row_dict in processed_rows]
 
 async def delete_user(conn: AsyncConnection, id: UUID) -> Optional[UUID]:
     """Function to mark a user as deleted"""
