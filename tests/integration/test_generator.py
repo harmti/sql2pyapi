@@ -32,13 +32,13 @@ def run_cli_tool(functions_sql: Path, output_py: Path, schema_sql: Path = None):
     return result
 
 
-def test_user_generation_with_schema(tmp_path):
-    """Test generating the user API with a separate schema file."""
-    functions_sql_path = FIXTURES_DIR / "users2.sql"
+def test_func2_generation_with_schema(tmp_path):
+    """Test generating the func2 API with a separate schema file."""
+    functions_sql_path = FIXTURES_DIR / "func2.sql"
     schema_sql_path = FIXTURES_DIR / "schema2.sql"
-    expected_output_path = EXPECTED_DIR / "users2_api.py"
+    expected_output_path = EXPECTED_DIR / "func2_api.py"
     # Use pytest's tmp_path fixture for the output file
-    actual_output_path = tmp_path / "users2_api.py"
+    actual_output_path = tmp_path / "func2_api.py"
 
     # Run the generator tool
     run_cli_tool(functions_sql_path, actual_output_path, schema_sql_path)
