@@ -37,71 +37,69 @@ map_type_test_cases = [
     ("bool", False, "bool", set()),
     ("bytea", False, "bytes", set()),
     # Types requiring imports
-    ("uuid", False, "UUID", {"from uuid import UUID"}),
-    ("timestamp", False, "datetime", {"from datetime import datetime"}),
-    ("timestamp without time zone", False, "datetime", {"from datetime import datetime"}),
-    ("timestamptz", False, "datetime", {"from datetime import datetime"}),
-    ("timestamp with time zone", False, "datetime", {"from datetime import datetime"}),
-    ("date", False, "date", {"from datetime import date"}),
-    ("numeric", False, "Decimal", {"from decimal import Decimal"}),
-    ("decimal", False, "Decimal", {"from decimal import Decimal"}),
+    ("uuid", False, "UUID", {"UUID"}),
+    ("timestamp", False, "datetime", {"datetime"}),
+    ("timestamp without time zone", False, "datetime", {"datetime"}),
+    ("timestamptz", False, "datetime", {"datetime"}),
+    ("timestamp with time zone", False, "datetime", {"datetime"}),
+    ("date", False, "date", {"date"}),
+    ("numeric", False, "Decimal", {"Decimal"}),
+    ("decimal", False, "Decimal", {"Decimal"}),
     # JSON types
-    ("json", False, "Dict[str, Any]", {"from typing import Dict", "from typing import Any"}),
-    ("jsonb", False, "Dict[str, Any]", {"from typing import Dict", "from typing import Any"}),
+    ("json", False, "Dict[str, Any]", {"Dict", "Any"}),
+    ("jsonb", False, "Dict[str, Any]", {"Dict", "Any"}),
     # Unknown type
-    ("some_unknown_type", False, "Any", {"from typing import Any"}),
+    ("some_unknown_type", False, "Any", {"Any"}),
     # Case insensitivity and whitespace
     (" INTEGER ", False, "int", set()),
     (" VARCHAR ", False, "str", set()),
     # Optional types (basic)
-    ("integer", True, "Optional[int]", {"from typing import Optional"}),
-    ("text", True, "Optional[str]", {"from typing import Optional"}),
-    ("boolean", True, "Optional[bool]", {"from typing import Optional"}),
+    ("integer", True, "Optional[int]", {"Optional"}),
+    ("text", True, "Optional[str]", {"Optional"}),
+    ("boolean", True, "Optional[bool]", {"Optional"}),
     # Optional types (requiring imports)
-    ("uuid", True, "Optional[UUID]", {"from typing import Optional", "from uuid import UUID"}),
-    ("date", True, "Optional[date]", {"from typing import Optional", "from datetime import date"}),
-    ("numeric", True, "Optional[Decimal]", {"from typing import Optional", "from decimal import Decimal"}),
-    ("jsonb", True, "Optional[Dict[str, Any]]", {"from typing import Optional", "from typing import Dict", "from typing import Any"}),
+    ("uuid", True, "Optional[UUID]", {"Optional", "UUID"}),
+    ("date", True, "Optional[date]", {"Optional", "date"}),
+    ("numeric", True, "Optional[Decimal]", {"Optional", "Decimal"}),
+    ("jsonb", True, "Optional[Dict[str, Any]]", {"Optional", "Dict", "Any"}),
     # Optional unknown type maps to Any (not Optional[Any])
-    ("some_unknown_type", True, "Any", {"from typing import Any"}),
+    ("some_unknown_type", True, "Any", {"Any"}),
     # Array types (basic)
-    ("integer[]", False, "List[int]", {"from typing import List"}),
-    ("text[]", False, "List[str]", {"from typing import List"}),
-    ("varchar[]", False, "List[str]", {"from typing import List"}),
+    ("integer[]", False, "List[int]", {"List"}),
+    ("text[]", False, "List[str]", {"List"}),
+    ("varchar[]", False, "List[str]", {"List"}),
     # Array types (requiring imports)
-    ("uuid[]", False, "List[UUID]", {"from typing import List", "from uuid import UUID"}),
-    ("date[]", False, "List[date]", {"from typing import List", "from datetime import date"}),
-    ("numeric[]", False, "List[Decimal]", {"from typing import List", "from decimal import Decimal"}),
-    ("jsonb[]", False, "List[Dict[str, Any]]", {"from typing import List", "from typing import Dict", "from typing import Any"}),
+    ("uuid[]", False, "List[UUID]", {"List", "UUID"}),
+    ("date[]", False, "List[date]", {"List", "date"}),
+    ("numeric[]", False, "List[Decimal]", {"List", "Decimal"}),
+    ("jsonb[]", False, "List[Dict[str, Any]]", {"List", "Dict", "Any"}),
     # Optional array types (Now expecting Optional[List[T]])
-    ("integer[]", True, "Optional[List[int]]", {"from typing import List", "from typing import Optional"}),
-    ("uuid[]", True, "Optional[List[UUID]]", {"from typing import List", "from uuid import UUID", "from typing import Optional"}),
+    ("integer[]", True, "Optional[List[int]]", {"List", "Optional"}),
+    ("uuid[]", True, "Optional[List[UUID]]", {"List", "UUID", "Optional"}),
     # Complex type names (like varchar(N))
     ("character varying(255)", False, "str", set()),
     ("varchar(100)", False, "str", set()),
-    ("numeric(10, 2)", False, "Decimal", {"from decimal import Decimal"}),
-    ("decimal(5, 0)", False, "Decimal", {"from decimal import Decimal"}),
-    ("timestamp(0) without time zone", False, "datetime", {"from datetime import datetime"}),
-    ("timestamp(6) with time zone", False, "datetime", {"from datetime import datetime"}),
+    ("numeric(10, 2)", False, "Decimal", {"Decimal"}),
+    ("decimal(5, 0)", False, "Decimal", {"Decimal"}),
+    ("timestamp(0) without time zone", False, "datetime", {"datetime"}),
+    ("timestamp(6) with time zone", False, "datetime", {"datetime"}),
     # Optional complex types
-    ("character varying(50)", True, "Optional[str]", {"from typing import Optional"}),
-    ("numeric(8, 4)", True, "Optional[Decimal]", {"from typing import Optional", "from decimal import Decimal"}),
+    ("character varying(50)", True, "Optional[str]", {"Optional"}),
+    ("numeric(8, 4)", True, "Optional[Decimal]", {"Optional", "Decimal"}),
 ]
 
 
 @pytest.mark.parametrize("sql_type, is_optional, expected_py_type, expected_imports", map_type_test_cases)
 def test_map_sql_to_python_type(sql_type: str, is_optional: bool, expected_py_type: str, expected_imports: Set[str]):
     """Tests the _map_sql_to_python_type function with various inputs."""
-    py_type, imports_str = _map_sql_to_python_type(sql_type, is_optional)
+    py_type, imports = _map_sql_to_python_type(sql_type, is_optional)
 
     # Check the Python type
     assert py_type == expected_py_type
 
     # Check the imports
-    # Convert the returned string of imports (or None) into a set for comparison
-    returned_imports = set(imports_str.split('\n')) if imports_str else set()
-    # Remove empty strings that might result from splitting None or empty string
-    returned_imports.discard('')
+    # The function now returns a set directly instead of a string
+    returned_imports = imports
 
     assert returned_imports == expected_imports
 
@@ -132,16 +130,16 @@ parse_params_test_cases = [
         SQLParameter('_value', 'value', 'int', 'int', False)
     ], set()),
     # Params with default values (implies optional)
-    ("p_count int DEFAULT 0", [SQLParameter('p_count', 'count', 'int', 'Optional[int]', True)], {"from typing import Optional"}),
-    ("p_tag text DEFAULT 'hello'", [SQLParameter('p_tag', 'tag', 'text', 'Optional[str]', True)], {"from typing import Optional"}),
+    ("p_count int DEFAULT 0", [SQLParameter('p_count', 'count', 'int', 'Optional[int]', True)], {"Optional"}),
+    ("p_tag text DEFAULT 'hello'", [SQLParameter('p_tag', 'tag', 'text', 'Optional[str]', True)], {"Optional"}),
     ("p_active boolean DEFAULT true, p_ratio numeric DEFAULT 0.5", [
         SQLParameter('p_active', 'active', 'boolean', 'Optional[bool]', True),
         SQLParameter('p_ratio', 'ratio', 'numeric', 'Optional[Decimal]', True)
-    ], {"from typing import Optional", "from decimal import Decimal"}),
+    ], {"Optional", "Decimal"}),
     # Params with complex types
-    ("p_ids uuid[]", [SQLParameter('p_ids', 'ids', 'uuid[]', 'List[UUID]', False)], {"from typing import List", "from uuid import UUID"}),
-    ("p_data jsonb", [SQLParameter('p_data', 'data', 'jsonb', 'Dict[str, Any]', False)], {"from typing import Dict", "from typing import Any"}),
-    ("p_dates date[] DEFAULT NULL", [SQLParameter('p_dates', 'dates', 'date[]', 'Optional[List[date]]', True)], {"from typing import List", "from datetime import date", "from typing import Optional"}),
+    ("p_ids uuid[]", [SQLParameter('p_ids', 'ids', 'uuid[]', 'List[UUID]', False)], {"List", "UUID"}),
+    ("p_data jsonb", [SQLParameter('p_data', 'data', 'jsonb', 'Dict[str, Any]', False)], {"Dict", "Any"}),
+    ("p_dates date[] DEFAULT NULL", [SQLParameter('p_dates', 'dates', 'date[]', 'Optional[List[date]]', True)], {"List", "date", "Optional"}),
     # Params with IN/OUT/INOUT modes (current parser ignores mode but should parse name/type)
     ("IN p_user_id int", [SQLParameter('p_user_id', 'user_id', 'int', 'int', False)], set()),
     ("OUT p_result text", [SQLParameter('p_result', 'result', 'text', 'str', False)], set()),
@@ -151,10 +149,10 @@ parse_params_test_cases = [
         SQLParameter('p_id', 'id', 'int', 'int', False),
         SQLParameter('p_name', 'name', 'text', 'Optional[str]', True),
         SQLParameter('p_values', 'values', 'int[]', 'List[int]', False)
-    ], {"from typing import Optional", "from typing import List"}),
+    ], {"Optional", "List"}),
     # Types with precision/scale
-    ("p_price numeric(10, 2)", [SQLParameter('p_price', 'price', 'numeric(10,2)', 'Decimal', False)], {"from decimal import Decimal"}),
-    ("p_code character varying(50) DEFAULT 'DEFAULT'", [SQLParameter('p_code', 'code', 'character varying(50)', 'Optional[str]', True)], {"from typing import Optional"}),
+    ("p_price numeric(10, 2)", [SQLParameter('p_price', 'price', 'numeric(10,2)', 'Decimal', False)], {"Decimal"}),
+    ("p_code character varying(50) DEFAULT 'DEFAULT'", [SQLParameter('p_code', 'code', 'character varying(50)', 'Optional[str]', True)], {"Optional"}),
 ]
 
 
@@ -178,19 +176,19 @@ parse_columns_test_cases = [
     ("", [], set()),
     ("  ", [], set()),
     # Single simple column (default: optional=True)
-    ("id integer", [ReturnColumn('id', 'integer', 'Optional[int]', True)], {"from typing import Optional"}),
+    ("id integer", [ReturnColumn('id', 'integer', 'Optional[int]', True)], {"Optional"}),
     # Multiple simple columns
     ("name text, created_at timestamp", [
         ReturnColumn('name', 'text', 'Optional[str]', True),
         ReturnColumn('created_at', 'timestamp', 'Optional[datetime]', True),
-    ], {"from typing import Optional", "from datetime import datetime"}),
+    ], {"Optional", "datetime"}),
     # Newline separated
     ("name text\nvalue numeric", [
         ReturnColumn('name', 'text', 'Optional[str]', True),
         ReturnColumn('value', 'numeric', 'Optional[Decimal]', True),
-    ], {"from typing import Optional", "from decimal import Decimal"}),
+    ], {"Optional", "Decimal"}),
     # NOT NULL constraint
-    ("user_id uuid NOT NULL", [ReturnColumn('user_id', 'uuid', 'UUID', False)], {"from uuid import UUID"}),
+    ("user_id uuid NOT NULL", [ReturnColumn('user_id', 'uuid', 'UUID', False)], {"UUID"}),
     # PRIMARY KEY constraint (implies NOT NULL)
     ("item_id bigint PRIMARY KEY", [ReturnColumn('item_id', 'bigint', 'int', False)], set()),
     # Mixed nullability
@@ -198,30 +196,30 @@ parse_columns_test_cases = [
         ReturnColumn('id', 'int', 'int', False),
         ReturnColumn('description', 'text', 'Optional[str]', True),
         ReturnColumn('is_active', 'boolean', 'bool', False),
-    ], {"from typing import Optional"}),
+    ], {"Optional"}),
     # With comments
     ("col1 int, -- This is a comment\ncol2 text -- Another comment", [
         ReturnColumn('col1', 'int', 'Optional[int]', True),
         ReturnColumn('col2', 'text', 'Optional[str]', True),
-    ], {"from typing import Optional"}),
+    ], {"Optional"}),
     # Types with precision/scale
-    # ("price numeric(10, 2) NOT NULL", [ReturnColumn('price', 'numeric(10, 2)', 'Decimal', False)], {"from decimal import Decimal"}), # TODO: Fix parser for comma in type
-    ("code character varying(50)", [ReturnColumn('code', 'character varying(50)', 'Optional[str]', True)], {"from typing import Optional"}),
+    # ("price numeric(10, 2) NOT NULL", [ReturnColumn('price', 'numeric(10, 2)', 'Decimal', False)], {"Decimal"}), # TODO: Fix parser for comma in type
+    ("code character varying(50)", [ReturnColumn('code', 'character varying(50)', 'Optional[str]', True)], {"Optional"}),
     # Array types
-    ("tags text[]", [ReturnColumn('tags', 'text[]', 'Optional[List[str]]', True)], {"from typing import Optional", "from typing import List"}),
-    ("scores integer[] NOT NULL", [ReturnColumn('scores', 'integer[]', 'List[int]', False)], {"from typing import List"}),
+    ("tags text[]", [ReturnColumn('tags', 'text[]', 'Optional[List[str]]', True)], {"Optional", "List"}),
+    ("scores integer[] NOT NULL", [ReturnColumn('scores', 'integer[]', 'List[int]', False)], {"List"}),
     # Constraints to ignore
     ("id serial PRIMARY KEY, name varchar UNIQUE, email text NOT NULL CHECK (email <> ''), age int DEFAULT 18", [
         ReturnColumn('id', 'serial', 'int', False),
         ReturnColumn('name', 'varchar', 'Optional[str]', True),
         ReturnColumn('email', 'text', 'str', False),
         ReturnColumn('age', 'int', 'Optional[int]', True),
-    ], {"from typing import Optional"}),
+    ], {"Optional"}),
     # Quoted identifiers
     ('"user Name" text, "order" int NOT NULL', [
         ReturnColumn('user Name', 'text', 'Optional[str]', True),
         ReturnColumn('order', 'int', 'int', False),
-    ], {"from typing import Optional"})
+    ], {"Optional"})
 
 ]
 
@@ -412,14 +410,14 @@ parse_return_test_cases = [
         "CREATE FUNCTION generate_id() RETURNS uuid AS $$ ... $$",
         set(),
         {'return_type': 'UUID', 'returns_table': False, 'return_columns': [], 'returns_record': False, 'setof_table_name': None},
-        {"from uuid import UUID"}
+        {"UUID"}
     ),
     # RECORD return
     (
         "CREATE FUNCTION get_pair() RETURNS record AS $$ ... $$",
         set(),
         {'return_type': 'Tuple', 'returns_table': False, 'return_columns': [], 'returns_record': True, 'setof_table_name': None},
-        {"from typing import Tuple"}
+        {"Tuple"}
     ),
     # Explicit RETURNS TABLE
     (
@@ -431,7 +429,7 @@ parse_return_test_cases = [
              ReturnColumn(name='name', sql_type='text', python_type='Optional[str]', is_optional=True)
          ],
          'returns_record': False, 'setof_table_name': None},
-        {"from dataclasses import dataclass", "from typing import Optional"} # Optional comes from name text default
+        {"dataclass", "Optional"} # Optional comes from name text default
     ),
     # SETOF scalar
     (
@@ -445,7 +443,7 @@ parse_return_test_cases = [
         "CREATE FUNCTION get_all_pairs() RETURNS SETOF record AS $$ ... $$",
         set(),
         {'return_type': 'Tuple', 'returns_table': False, 'return_columns': [], 'returns_record': True, 'setof_table_name': None},
-        {"from typing import Tuple"} # List import added later
+        {"Tuple"} # List import added later
     ),
     # SETOF table_name (schema FOUND) - MOCK needed
     (
@@ -457,7 +455,7 @@ parse_return_test_cases = [
              ReturnColumn(name='email', sql_type='text', python_type='Optional[str]', is_optional=True)
          ],
          'returns_record': False, 'setof_table_name': 'users'},
-        {"from dataclasses import dataclass", "from uuid import UUID", "from typing import Optional"} # From mocked schema + dataclass
+        {"dataclass", "UUID", "Optional"} # From mocked schema + dataclass
     ),
      # SETOF table_name (schema NOT FOUND) - Use 'widgets'
     (
@@ -468,7 +466,7 @@ parse_return_test_cases = [
              ReturnColumn(name='unknown', sql_type='widgets', python_type='Any')
          ],
          'returns_record': False, 'setof_table_name': 'widgets'},
-        {"from dataclasses import dataclass", "from typing import Any"} # Any comes from placeholder
+        {"dataclass", "Any"} # Any comes from placeholder
     ),
     # NEW: RETURNS table_name (schema FOUND) - MOCK needed
     (
@@ -480,7 +478,7 @@ parse_return_test_cases = [
              ReturnColumn(name='email', sql_type='text', python_type='Optional[str]', is_optional=True)
          ],
          'returns_record': False, 'setof_table_name': None}, # NOTE: setof_table_name is None here
-        {"from dataclasses import dataclass", "from uuid import UUID", "from typing import Optional"} # From mocked schema + dataclass
+        {"dataclass", "UUID", "Optional"} # From mocked schema + dataclass
     ),
      # NEW: RETURNS table_name (schema NOT FOUND) - Use 'widgets'
     (
@@ -488,7 +486,7 @@ parse_return_test_cases = [
         set(),
         # Should fall back to scalar Any mapping if schema not found
         {'return_type': 'Any', 'returns_table': False, 'return_columns': [], 'returns_record': False, 'setof_table_name': None},
-        {"from typing import Any"}
+        {"Any"}
     ),
     # NEW: RETURNS schema.table_name (schema FOUND) - MOCK needed
     (
@@ -500,7 +498,7 @@ parse_return_test_cases = [
              ReturnColumn(name='name', sql_type='varchar', python_type='Optional[str]', is_optional=True)
          ],
          'returns_record': False, 'setof_table_name': None},
-        {"from dataclasses import dataclass", "from typing import Optional"}
+        {"dataclass", "Optional"}
     ),
     # NEW: SETOF schema.table_name (schema FOUND) - MOCK needed
     (
@@ -511,8 +509,8 @@ parse_return_test_cases = [
              ReturnColumn(name='product_id', sql_type='int', python_type='int', is_optional=False),
              ReturnColumn(name='name', sql_type='varchar', python_type='Optional[str]', is_optional=True)
          ],
-         'returns_record': False, 'setof_table_name': 'products'}, # NOTE: setof_table_name uses normalized name
-        {"from dataclasses import dataclass", "from typing import Optional"}
+         'returns_record': False, 'setof_table_name': 'store.products'}, # NOTE: setof_table_name should include schema
+        {"dataclass", "Optional"}
     ),
 
 ]
@@ -529,8 +527,8 @@ MOCK_TABLE_SCHEMAS = {
     ]
 }
 MOCK_TABLE_SCHEMA_IMPORTS = {
-    'users': {"from uuid import UUID", "from typing import Optional"},
-    'products': {"from typing import Optional"}
+    'users': {"UUID", "Optional"},
+    'products': {"Optional"}
 }
 
 @pytest.mark.parametrize("function_sql, initial_imports, expected_props, expected_imports_delta", parse_return_test_cases)

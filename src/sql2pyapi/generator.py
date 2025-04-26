@@ -14,6 +14,15 @@ from .constants import *
 # Define PYTHON_IMPORTS locally as well for fallback cases
 PYTHON_IMPORTS = {
     "Any": "from typing import Any",
+    "List": "from typing import List",
+    "Optional": "from typing import Optional",
+    "Dict": "from typing import Dict",
+    "Tuple": "from typing import Tuple",
+    "UUID": "from uuid import UUID",
+    "datetime": "from datetime import datetime",
+    "date": "from datetime import date",
+    "Decimal": "from decimal import Decimal",
+    "dataclass": "from dataclasses import dataclass"
     # Add others if needed directly by generator logic, but prefer parser-provided imports
 }
 
@@ -418,13 +427,19 @@ def generate_python_code(
     processed_tables = set()
     for func in functions:
         # Update all_imports with requirements from this function FIRST
-        all_imports.update(func.required_imports)
+        # Convert import names to full import statements
+        for import_name in func.required_imports:
+            if import_name in PYTHON_IMPORTS:
+                all_imports.add(PYTHON_IMPORTS[import_name])
+            else:
+                # If we don't have a mapping, just add the name as-is (for debugging)
+                all_imports.add(import_name)
 
         target_dataclass_name = None
         table_key = None  # Key for tracking processed tables (normalized name)
 
         if func.returns_table:
-            all_imports.add("from dataclasses import dataclass")  # Needed if any table is returned
+            all_imports.add(PYTHON_IMPORTS["dataclass"])  # Needed if any table is returned
             if func.setof_table_name:
                 table_key = func.setof_table_name  # Already normalized by parser
                 target_dataclass_name = _to_singular_camel_case(table_key)
@@ -434,7 +449,15 @@ def generate_python_code(
                     processed_tables.add(table_key)
                     # Get imports FOR THE FIELDS using the PASSED dictionary
                     schema_imports = table_schema_imports.get(table_key, set())
-                    imports_per_dataclass[target_dataclass_name] = schema_imports  # Use new name
+                    # Convert import names to full import statements
+                    converted_imports = set()
+                    for import_name in schema_imports:
+                        if import_name in PYTHON_IMPORTS:
+                            converted_imports.add(PYTHON_IMPORTS[import_name])
+                        else:
+                            # If we don't have a mapping, just add the name as-is (for debugging)
+                            converted_imports.add(import_name)
+                    imports_per_dataclass[target_dataclass_name] = converted_imports  # Use new name
 
                     if func.return_columns and func.return_columns[0].name != "unknown":
                         dataclass_defs[target_dataclass_name] = _generate_dataclass(
@@ -474,7 +497,15 @@ def generate_python_code(
                 # Crucially, always associate the required imports for this function's 
                 # specific return type with the dataclass name, even if the def was skipped.
                 # This ensures the imports are collected correctly later.
-                imports_per_dataclass[target_dataclass_name] = func.required_imports # Use new name
+                # Convert import names to full import statements
+                converted_imports = set()
+                for import_name in func.required_imports:
+                    if import_name in PYTHON_IMPORTS:
+                        converted_imports.add(PYTHON_IMPORTS[import_name])
+                    else:
+                        # If we don't have a mapping, just add the name as-is (for debugging)
+                        converted_imports.add(import_name)
+                imports_per_dataclass[target_dataclass_name] = converted_imports # Use new name
 
     # Add all necessary field type imports from generated dataclasses
     # Now this loop should not encounter a NameError

@@ -3,7 +3,8 @@ from pathlib import Path
 import logging
 from typing import Optional
 
-from .parser import parse_sql, SQLParsingError
+from .parser import parse_sql
+from .errors import SQL2PyAPIError
 from .generator import generate_python_code
 
 # Configure logging
@@ -71,7 +72,7 @@ def main(
         # Pass schema imports to the generator
         python_code = generate_python_code(functions, table_schema_imports, source_sql_file=sql_file.name)
 
-    except SQLParsingError as e:
+    except SQL2PyAPIError as e:
         logging.error(f"Failed to parse SQL: {e}")
         raise typer.Exit(code=1)
     except Exception as e:
