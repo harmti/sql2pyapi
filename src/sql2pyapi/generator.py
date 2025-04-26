@@ -1,19 +1,40 @@
+# ===== SECTION: IMPORTS AND SETUP =====
+# Standard library and third-party imports
 from typing import List, Dict
-from .parser import ParsedFunction, ReturnColumn
 import textwrap
 import inflection  # Using inflection library for plural->singular
 from pathlib import Path
 import os
 
+# Local imports
+from .parser import ParsedFunction, ReturnColumn
+
+# ===== SECTION: CONSTANTS AND CONFIGURATION =====
 # Define PYTHON_IMPORTS locally as well for fallback cases
 PYTHON_IMPORTS = {
     "Any": "from typing import Any",
     # Add others if needed directly by generator logic, but prefer parser-provided imports
 }
 
+# ===== SECTION: UTILITY FUNCTIONS =====
+# Helper functions for name transformation and code generation
 
 def _to_singular_camel_case(name: str) -> str:
-    """Converts snake_case plural to SingularCamelCase."""
+    """
+    Converts snake_case plural table names to SingularCamelCase for dataclass names.
+    
+    Args:
+        name (str): The snake_case table name, typically plural (e.g., 'user_accounts')
+        
+    Returns:
+        str: A singular CamelCase name suitable for a dataclass (e.g., 'UserAccount')
+        
+    Examples:
+        >>> _to_singular_camel_case('users')
+        'User'
+        >>> _to_singular_camel_case('order_items')
+        'OrderItem'
+    """
     if not name:
         return "ResultRow"
     # Simple pluralization check (can be improved)
@@ -23,8 +44,27 @@ def _to_singular_camel_case(name: str) -> str:
     return inflection.camelize(singular_snake)
 
 
+# ===== SECTION: DATACLASS GENERATION =====
+# Functions for generating Python dataclasses from SQL table definitions
+
 def _generate_dataclass(class_name: str, columns: List[ReturnColumn], make_fields_optional: bool = False) -> str:
-    """Generates a dataclass string given a name and columns."""
+    """
+    Generates a Python dataclass definition string based on SQL column definitions.
+    
+    Args:
+        class_name (str): Name for the generated dataclass
+        columns (List[ReturnColumn]): Column definitions extracted from SQL
+        make_fields_optional (bool): Whether to make all fields Optional, regardless of
+                                    their nullability in the database schema
+    
+    Returns:
+        str: Python code for the dataclass definition as a string
+    
+    Notes:
+        - If columns list is empty or only contains an 'unknown' column, a TODO comment
+          will be generated instead of a complete dataclass
+        - Column types are mapped from SQL to Python types by the parser
+    """
     if not columns or (len(columns) == 1 and columns[0].name == "unknown"):
         # Handle case where schema wasn't found or columns couldn't be parsed
         sql_table_name = columns[0].sql_type if columns else "unknown_table"
@@ -54,8 +94,30 @@ class {class_name}:
 """
 
 
+# ===== SECTION: FUNCTION GENERATION =====
+# Functions for generating Python async functions from SQL function definitions
+
 def _generate_function(func: ParsedFunction, class_name_map: Dict[str, str]) -> str:
-    """Generates the Python async function string."""
+    """
+    Generates a Python async function string from a parsed SQL function definition.
+    
+    This is the core code generation function that creates Python wrapper functions
+    for PostgreSQL functions. It handles different return types (scalar, record, table),
+    parameter ordering, docstring generation, and proper NULL handling.
+    
+    Args:
+        func (ParsedFunction): The parsed SQL function definition
+        class_name_map (Dict[str, str]): Mapping of SQL table names to Python class names
+    
+    Returns:
+        str: Python code for the async function as a string
+    
+    Notes:
+        - Parameters are sorted with required parameters first, then optional ones
+        - Return type is determined based on the SQL function's return type
+        - Special handling is implemented for different PostgreSQL return styles
+        - NULL handling is carefully implemented for both None rows and composite NULL rows
+    """
     
     # Sort parameters: non-optional first, then optional
     non_optional_params = [p for p in func.params if not p.is_optional]
@@ -188,12 +250,35 @@ async def {func.python_name}({params_str_py}) -> {return_type_hint}:
     return func_def
 
 
+# ===== SECTION: MAIN CODE GENERATION =====
+# Main entry point for generating the complete Python module
+
 def generate_python_code(
     functions: List[ParsedFunction],
     table_schema_imports: Dict[str, set],  # Accept the schema imports
     source_sql_file: str = "",
 ) -> str:
-    """Generates the full Python module code as a string."""
+    """
+    Generates the full Python module code as a string.
+    
+    This is the main entry point for code generation. It processes all parsed SQL functions
+    and generates a complete Python module with imports, dataclass definitions, and
+    async function implementations.
+    
+    Args:
+        functions (List[ParsedFunction]): List of parsed SQL function definitions
+        table_schema_imports (Dict[str, set]): Imports needed for table schemas
+        source_sql_file (str, optional): Name of the source SQL file for header comment
+    
+    Returns:
+        str: Complete Python module code as a string
+    
+    Notes:
+        - Imports are automatically collected based on types used
+        - Dataclasses are generated for table returns and complex types
+        - Each SQL function gets a corresponding async Python function
+        - The output follows a consistent structure: imports → dataclasses → functions
+    """
 
     all_imports = set()
     dataclass_defs = {}
