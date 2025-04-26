@@ -161,6 +161,26 @@ def _map_sql_to_python_type(sql_type: str, is_optional: bool = False, context: s
     Raises:
         TypeMappingError: If the SQL type cannot be mapped to a Python type
     """
+    # Check if this is a schema-qualified name (e.g., public.companies)
+    # or a table name that exists in our schemas
+    if '.' in sql_type and not sql_type.endswith('[]'):
+        # This is a schema-qualified name, extract the table part
+        table_name = sql_type
+        normalized_table_name = table_name.split('.')[-1]
+        
+        # Check if we have this table in our schemas
+        if table_name in TABLE_SCHEMAS or normalized_table_name in TABLE_SCHEMAS:
+            # This is likely a table reference, not a primitive type
+            # We'll return 'Any' and let the caller handle it as a table reference
+            return "Any", {"Any"}
+    else:
+        # Check if this is a non-qualified table name
+        normalized_table_name = sql_type.strip()
+        if normalized_table_name in TABLE_SCHEMAS:
+            # This is a table reference, not a primitive type
+            # We'll return 'Any' and let the caller handle it as a table reference
+            return "Any", {"Any"}
+    
     # Handle array types (e.g., text[], integer[])
     is_array = False
     
@@ -376,6 +396,11 @@ def _parse_create_table(sql_content: str):
         r"\)\s*(?:INHERITS|WITH|TABLESPACE|;)",  # Stop at known clauses after ) or semicolon
         re.IGNORECASE | re.DOTALL | re.MULTILINE,
     )
+    
+    # Debug: Log the current state of TABLE_SCHEMAS before parsing
+    logging.debug(f"TABLE_SCHEMAS before parsing: {list(TABLE_SCHEMAS.keys())}")
+    logging.debug(f"TABLE_SCHEMA_IMPORTS before parsing: {list(TABLE_SCHEMA_IMPORTS.keys())}")
+
 
     for match in table_regex.finditer(sql_content):
         table_name = match.group(1).strip()
@@ -391,13 +416,21 @@ def _parse_create_table(sql_content: str):
         try:
             columns, required_imports = _parse_column_definitions(col_defs_str_cleaned)
             if columns:
-                # Use normalized name (remove schema if present) for storage key?
+                # Store under both the normalized name and the fully qualified name
                 normalized_table_name = table_name.split(".")[-1]
+                
+                # Store under normalized name (without schema)
                 TABLE_SCHEMAS[normalized_table_name] = columns
                 TABLE_SCHEMA_IMPORTS[normalized_table_name] = required_imports
-                logging.debug(
-                    f"  -> Parsed {len(columns)} columns for table {normalized_table_name} (from {table_name})"
-                )
+                
+                # Also store under the fully qualified name if it's different
+                if table_name != normalized_table_name:
+                    TABLE_SCHEMAS[table_name] = columns
+                    TABLE_SCHEMA_IMPORTS[table_name] = required_imports
+                    logging.debug(f"  -> Stored schema under both '{normalized_table_name}' and '{table_name}'")
+                else:
+                    logging.debug(f"  -> Parsed {len(columns)} columns for table {normalized_table_name}")
+                
             else:
                 logging.warning(
                     f"  -> No columns parsed for table {table_name} from definition: '{col_defs_str_cleaned[:100]}...'"
@@ -780,7 +813,13 @@ def _parse_return_clause(match: re.Match, initial_imports: set, function_name: s
                     pass
                     
                 # Try to look up the table schema
+                # Store the original schema-qualified name for reference
                 return_props['setof_table_name'] = return_type_str
+                
+                # Debug logging for table schemas
+                logging.debug(f"  -> Looking for table schema: '{return_type_str}' or '{normalized_table_name}'")
+                # Check if we have the schema for this table
+                # First try with the normalized name (without schema)
                 if normalized_table_name in TABLE_SCHEMAS:
                     return_props['return_columns'] = TABLE_SCHEMAS[normalized_table_name]
                     return_props['returns_table'] = True
@@ -788,11 +827,24 @@ def _parse_return_clause(match: re.Match, initial_imports: set, function_name: s
                     if normalized_table_name in TABLE_SCHEMA_IMPORTS:
                         required_imports.update(TABLE_SCHEMA_IMPORTS[normalized_table_name])
                     required_imports.add("dataclass")
+                    # Log that we're using the table schema without the schema qualifier
+                    logging.debug(f"  -> Using schema for '{normalized_table_name}' (from '{return_type_str}')")
+                # Try with the full schema-qualified name as a fallback
+                elif return_type_str in TABLE_SCHEMAS:
+                    return_props['return_columns'] = TABLE_SCHEMAS[return_type_str]
+                    return_props['returns_table'] = True
+                    return_props['return_type'] = "DataclassPlaceholder"
+                    if return_type_str in TABLE_SCHEMA_IMPORTS:
+                        required_imports.update(TABLE_SCHEMA_IMPORTS[return_type_str])
+                    required_imports.add("dataclass")
+                    logging.debug(f"  -> Using schema for fully qualified name '{return_type_str}'")
                 else:
+                    # No schema found for either name
                     error_msg = f"Table schema not found for SETOF {return_type_str}"
                     if function_name:
                         error_msg += f" in function '{function_name}'"
                     logging.warning(error_msg)
+                    
                     # Generate a placeholder for unknown table
                     return_props['returns_table'] = True
                     return_props['return_type'] = "DataclassPlaceholder"
@@ -808,14 +860,24 @@ def _parse_return_clause(match: re.Match, initial_imports: set, function_name: s
             # --- END NEW ---
             else:
                 # First check if this is a table name (not a scalar type)
+                # Try with the normalized name first (without schema qualifier)
                 if normalized_table_name in TABLE_SCHEMAS:
                     # It's a table name we know about
-                    logging.debug(f"  -> Function '{sql_name}' returns table {return_type_str}")
+                    logging.debug(f"  -> Function '{sql_name}' returns table {return_type_str} (using '{normalized_table_name}')")
                     return_props['return_columns'] = TABLE_SCHEMAS[normalized_table_name]
                     return_props['returns_table'] = True
                     return_props['return_type'] = "DataclassPlaceholder"
                     if normalized_table_name in TABLE_SCHEMA_IMPORTS:
                         required_imports.update(TABLE_SCHEMA_IMPORTS[normalized_table_name])
+                    required_imports.add("dataclass")
+                # Try with the full schema-qualified name as a fallback
+                elif return_type_str in TABLE_SCHEMAS:
+                    logging.debug(f"  -> Function '{sql_name}' returns table with fully qualified name {return_type_str}")
+                    return_props['return_columns'] = TABLE_SCHEMAS[return_type_str]
+                    return_props['returns_table'] = True
+                    return_props['return_type'] = "DataclassPlaceholder"
+                    if return_type_str in TABLE_SCHEMA_IMPORTS:
+                        required_imports.update(TABLE_SCHEMA_IMPORTS[return_type_str])
                     required_imports.add("dataclass")
                 else:
                     # Try to map it as a scalar type
@@ -876,17 +938,18 @@ def _parse_return_clause(match: re.Match, initial_imports: set, function_name: s
 def parse_sql(sql_content: str, schema_content: Optional[str] = None) -> Tuple[List[ParsedFunction], Dict[str, set]]:
     """
     Parses SQL content, optionally using a separate schema file.
-
+    
     Args:
         sql_content: String containing CREATE FUNCTION statements (and potentially CREATE TABLE).
         schema_content: Optional string containing CREATE TABLE statements.
-
+    
     Returns:
         A tuple containing:
           - list of ParsedFunction objects.
           - dictionary mapping table names to required imports for their schemas.
     """
     global TABLE_SCHEMAS, TABLE_SCHEMA_IMPORTS
+    # Clear existing schemas to avoid conflicts
     TABLE_SCHEMAS = {}
     TABLE_SCHEMA_IMPORTS = {}
 
@@ -899,12 +962,14 @@ def parse_sql(sql_content: str, schema_content: Optional[str] = None) -> Tuple[L
     if schema_content:  # Use original schema_content
         logging.info("Parsing CREATE TABLE statements from schema file...")
         _parse_create_table(schema_content)
-    # Also parse tables from the main file in case they are defined there
+    #    # Parse all CREATE TABLE statements first to build up the schema cache
     logging.info("Parsing CREATE TABLE statements from main functions file...")
     _parse_create_table(sql_content)  # Use original sql_content
 
     # --- Second Pass: Parse CREATE FUNCTION statements (only from main file) ---
     logging.info("Parsing CREATE FUNCTION statements...")
+    logging.debug(f"  -> TABLE_SCHEMAS keys after parsing tables: {list(TABLE_SCHEMAS.keys())}")
+    logging.debug(f"  -> TABLE_SCHEMA_IMPORTS keys after parsing tables: {list(TABLE_SCHEMA_IMPORTS.keys())}")
 
     # Use module-level regex here
     for match in FUNCTION_REGEX.finditer(sql_content):
