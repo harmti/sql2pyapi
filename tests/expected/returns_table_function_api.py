@@ -23,4 +23,7 @@ async def get_user_basic_info(conn: AsyncConnection, user_id: UUID) -> Optional[
         # Ensure dataclass 'GetUserBasicInfoResult' is defined above.
         colnames = [desc[0] for desc in cur.description]
         row_dict = dict(zip(colnames, row)) if not isinstance(row, dict) else row
+        # Check for 'empty' composite rows (all values are None)
+        if all(value is None for value in row_dict.values()):
+            return None
         return GetUserBasicInfoResult(**row_dict)

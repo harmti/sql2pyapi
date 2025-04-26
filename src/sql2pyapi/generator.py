@@ -160,6 +160,10 @@ def _generate_function(func: ParsedFunction, class_name_map: Dict[str, str]) -> 
             # Add logic to handle both tuple and dict rows
             body_lines.append("    colnames = [desc[0] for desc in cur.description]")
             body_lines.append("    row_dict = dict(zip(colnames, row)) if not isinstance(row, dict) else row")
+            # Handle PostgreSQL composite type returns with all NULL values
+            body_lines.append("    # Check for 'empty' composite rows (all values are None)")
+            body_lines.append("    if all(value is None for value in row_dict.values()):")
+            body_lines.append("        return None")
             body_lines.append(f"    return {final_dataclass_name}(**row_dict)")
         elif func.returns_record:
             body_lines.append("    # Return tuple for record type")

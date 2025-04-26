@@ -23,4 +23,7 @@ async def function_with_returns_table_comments(conn: AsyncConnection, filter: st
         # Ensure dataclass 'FunctionWithReturnsTableCommentsResult' is defined above.
         colnames = [desc[0] for desc in cur.description]
         row_dict = dict(zip(colnames, row)) if not isinstance(row, dict) else row
+        # Check for 'empty' composite rows (all values are None)
+        if all(value is None for value in row_dict.values()):
+            return None
         return FunctionWithReturnsTableCommentsResult(**row_dict)
