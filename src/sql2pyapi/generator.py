@@ -1,13 +1,14 @@
 # ===== SECTION: IMPORTS AND SETUP =====
 # Standard library and third-party imports
-from typing import List, Dict
+from typing import List, Dict, Tuple, Optional
 import textwrap
 import inflection  # Using inflection library for plural->singular
 from pathlib import Path
 import os
 
 # Local imports
-from .parser import ParsedFunction, ReturnColumn
+from .parser import ParsedFunction, ReturnColumn, SQLParameter
+from .constants import *
 
 # ===== SECTION: CONSTANTS AND CONFIGURATION =====
 # Define PYTHON_IMPORTS locally as well for fallback cases
@@ -97,39 +98,199 @@ class {class_name}:
 # ===== SECTION: FUNCTION GENERATION =====
 # Functions for generating Python async functions from SQL function definitions
 
-def _generate_function(func: ParsedFunction, class_name_map: Dict[str, str]) -> str:
+def _generate_parameter_list(func_params: List[SQLParameter]) -> Tuple[List[SQLParameter], str]:
     """
-    Generates a Python async function string from a parsed SQL function definition.
-    
-    This is the core code generation function that creates Python wrapper functions
-    for PostgreSQL functions. It handles different return types (scalar, record, table),
-    parameter ordering, docstring generation, and proper NULL handling.
+    Generates a sorted parameter list and parameter string for a Python function.
     
     Args:
-        func (ParsedFunction): The parsed SQL function definition
-        class_name_map (Dict[str, str]): Mapping of SQL table names to Python class names
-    
+        func_params (List[SQLParameter]): The parameters from the parsed SQL function
+        
     Returns:
-        str: Python code for the async function as a string
-    
-    Notes:
-        - Parameters are sorted with required parameters first, then optional ones
-        - Return type is determined based on the SQL function's return type
-        - Special handling is implemented for different PostgreSQL return styles
-        - NULL handling is carefully implemented for both None rows and composite NULL rows
+        Tuple[List[SQLParameter], str]: A tuple containing:
+            - The sorted parameters list (required params first, then optional)
+            - The formatted parameter string for the Python function signature
     """
-    
     # Sort parameters: non-optional first, then optional
-    non_optional_params = [p for p in func.params if not p.is_optional]
-    optional_params = [p for p in func.params if p.is_optional]
+    non_optional_params = [p for p in func_params if not p.is_optional]
+    optional_params = [p for p in func_params if p.is_optional]
     sorted_params = non_optional_params + optional_params
 
+    # Build the parameter list string for the Python function signature
     params_list_py = ["conn: AsyncConnection"]
     for p in sorted_params:
         params_list_py.append(f"{p.python_name}: {p.python_type}{' = None' if p.is_optional else ''}")
     params_str_py = ", ".join(params_list_py)
+    
+    return sorted_params, params_str_py
 
-    # --- Determine return type hint ---
+
+def _generate_docstring(func: ParsedFunction) -> str:
+    """
+    Generates a properly formatted docstring for a Python function.
+    
+    Args:
+        func (ParsedFunction): The parsed SQL function definition
+        
+    Returns:
+        str: The formatted docstring with proper indentation
+    
+    Notes:
+        - Uses the SQL comment if available, otherwise generates a default docstring
+        - Handles both single-line and multi-line docstrings with proper indentation
+    """
+    docstring_lines = []
+    if func.sql_comment:
+        comment_lines = func.sql_comment.strip().splitlines()
+        if len(comment_lines) == 1:
+            # Single line docstring
+            docstring_lines.append(f'    """{comment_lines[0]}"""')
+        else:
+            # Multi-line docstring
+            docstring_lines.append(f'    """{comment_lines[0]}')  # First line on same line as opening quotes
+            # Indent subsequent lines relative to the function body (4 spaces)
+            for line in comment_lines[1:]:
+                docstring_lines.append(f"    {line}")  # Add 4 spaces for base indentation
+            docstring_lines.append('    """')  # Closing quotes on new line, indented
+    else:
+        # Default docstring
+        docstring_lines.append(f'    """Call PostgreSQL function {func.sql_name}()."""')
+
+    return "\n".join(docstring_lines)
+
+
+def _generate_function_body(func: ParsedFunction, final_dataclass_name: Optional[str], sql_args_placeholders: str, python_args_list: str) -> List[str]:
+    """
+    Generates the body of a Python async function based on the SQL function's return type.
+    
+    Args:
+        func (ParsedFunction): The parsed SQL function definition
+        final_dataclass_name (Optional[str]): The name of the dataclass for table returns
+        sql_args_placeholders (str): Placeholders for SQL query parameters
+        python_args_list (str): Python arguments list for the execute call
+        
+    Returns:
+        List[str]: Lines of code for the function body
+    
+    Notes:
+        - Handles different return types: void, scalar, record, table, setof
+        - Implements proper NULL handling for both None rows and composite NULL rows
+        - Uses constants from constants.py for consistent code generation
+    """
+    body_lines = []
+    
+    # Common setup for all function types
+    body_lines.append("async with conn.cursor() as cur:")
+    body_lines.append(
+        f'    await cur.execute("SELECT * FROM {func.sql_name}({sql_args_placeholders})", {python_args_list})'
+    )
+    
+    # Handle different return types
+    if not func.returns_table and func.return_type == "None":
+        # Void function - simplest case
+        body_lines.append("    return None")
+    elif func.returns_setof:
+        # Handle SETOF returns (multiple rows)
+        body_lines.extend(_generate_setof_return_body(func, final_dataclass_name))
+    else:
+        # Handle single row returns
+        body_lines.extend(_generate_single_row_return_body(func, final_dataclass_name))
+        
+    return body_lines
+
+
+def _generate_setof_return_body(func: ParsedFunction, final_dataclass_name: Optional[str]) -> List[str]:
+    """
+    Generates code for handling SETOF returns (multiple rows).
+    
+    Args:
+        func (ParsedFunction): The parsed SQL function definition
+        final_dataclass_name (Optional[str]): The name of the dataclass for table returns
+        
+    Returns:
+        List[str]: Lines of code for handling SETOF returns
+    """
+    body_lines = []
+    body_lines.append("    rows = await cur.fetchall()")
+    
+    if func.returns_table:
+        # SETOF table_name or RETURNS TABLE
+        body_lines.append(f"    # Ensure dataclass '{final_dataclass_name}' is defined above.")
+        body_lines.append("    if not rows:")
+        body_lines.append("        return []")
+        body_lines.append("    colnames = [desc[0] for desc in cur.description]")
+        body_lines.append("    processed_rows = [")
+        body_lines.append("        dict(zip(colnames, r)) if not isinstance(r, dict) else r")
+        body_lines.append("        for r in rows")
+        body_lines.append("    ]")
+        body_lines.append(f"    return [{final_dataclass_name}(**row_dict) for row_dict in processed_rows]")
+    elif func.returns_record:
+        # SETOF record
+        body_lines.append("    # Return list of tuples for SETOF record")
+        body_lines.append("    return rows")
+    else:
+        # SETOF scalar
+        body_lines.append("    # Assuming SETOF returns list of single-element tuples for scalars")
+        body_lines.append("    return [row[0] for row in rows if row]")
+        
+    return body_lines
+
+
+def _generate_single_row_return_body(func: ParsedFunction, final_dataclass_name: Optional[str]) -> List[str]:
+    """
+    Generates code for handling single row returns.
+    
+    Args:
+        func (ParsedFunction): The parsed SQL function definition
+        final_dataclass_name (Optional[str]): The name of the dataclass for table returns
+        
+    Returns:
+        List[str]: Lines of code for handling single row returns
+    """
+    body_lines = []
+    body_lines.append("    row = await cur.fetchone()")
+    body_lines.append("    if row is None:")
+    body_lines.append("        return None")
+    
+    # All row processing happens after the None check
+    if func.returns_table:
+        # Table/composite type return
+        body_lines.append(f"    # Ensure dataclass '{final_dataclass_name}' is defined above.")
+        body_lines.append("    colnames = [desc[0] for desc in cur.description]")
+        body_lines.append("    row_dict = dict(zip(colnames, row)) if not isinstance(row, dict) else row")
+        # Handle PostgreSQL composite type returns with all NULL values
+        body_lines.append("    # Check for 'empty' composite rows (all values are None)")
+        body_lines.append("    if all(value is None for value in row_dict.values()):")
+        body_lines.append("        return None")
+        body_lines.append(f"    return {final_dataclass_name}(**row_dict)")
+    elif func.returns_record:
+        # Record return
+        body_lines.append("    # Return tuple for record type")
+        body_lines.append("    return row")
+    else:
+        # Scalar return
+        body_lines.append("    if isinstance(row, dict):")
+        body_lines.append(f"        # Assumes the key is the function name for dict rows")
+        body_lines.append(f"        return row[{repr(func.sql_name)}]")
+        body_lines.append("    else:")
+        body_lines.append("        # Fallback for tuple-like rows (index 0)")
+        body_lines.append("        return row[0]")
+        
+    return body_lines
+
+
+def _determine_return_type(func: ParsedFunction, class_name_map: Dict[str, str]) -> Tuple[str, Optional[str]]:
+    """
+    Determines the Python return type hint and dataclass name for a SQL function.
+    
+    Args:
+        func (ParsedFunction): The parsed SQL function definition
+        class_name_map (Dict[str, str]): Mapping of SQL table names to Python class names
+        
+    Returns:
+        Tuple[str, Optional[str]]: A tuple containing:
+            - The Python return type hint as a string (e.g., 'int', 'List[User]')
+            - The dataclass name for table returns, or None for scalar/record returns
+    """
     return_type_hint = "None"  # Default
     final_dataclass_name = None
 
@@ -159,84 +320,47 @@ def _generate_function(func: ParsedFunction, class_name_map: Dict[str, str]) -> 
     elif func.return_type != "None":
         # Parser already determined Optional/List wrapping for scalar/record types
         return_type_hint = func.return_type
+        
+    return return_type_hint, final_dataclass_name
+
+
+def _generate_function(func: ParsedFunction, class_name_map: Dict[str, str]) -> str:
+    """
+    Generates a Python async function string from a parsed SQL function definition.
+    
+    This is the core code generation function that creates Python wrapper functions
+    for PostgreSQL functions. It handles different return types (scalar, record, table),
+    parameter ordering, docstring generation, and proper NULL handling.
+    
+    Args:
+        func (ParsedFunction): The parsed SQL function definition
+        class_name_map (Dict[str, str]): Mapping of SQL table names to Python class names
+    
+    Returns:
+        str: Python code for the async function as a string
+    
+    Notes:
+        - Parameters are sorted with required parameters first, then optional ones
+        - Return type is determined based on the SQL function's return type
+        - Special handling is implemented for different PostgreSQL return styles
+        - NULL handling is carefully implemented for both None rows and composite NULL rows
+    """
+    
+    # Generate the parameter list and signature
+    sorted_params, params_str_py = _generate_parameter_list(func.params)
+
+    # Determine return type hint and dataclass name
+    return_type_hint, final_dataclass_name = _determine_return_type(func, class_name_map)
 
     sql_args_placeholders = ", ".join(["%s"] * len(func.params))
     # Use sorted params for the execute call arguments list
     python_args_list = "[" + ", ".join([p.python_name for p in sorted_params]) + "]"
 
-    # Generate the docstring, respecting multi-line formatting and indentation
-    docstring_lines = []
-    if func.sql_comment:
-        comment_lines = func.sql_comment.strip().splitlines()
-        if len(comment_lines) == 1:
-            # Single line docstring
-            docstring_lines.append(f'    """{comment_lines[0]}"""')
-        else:
-            # Multi-line docstring
-            docstring_lines.append(f'    """{comment_lines[0]}')  # First line on same line as opening quotes
-            # Indent subsequent lines relative to the function body (4 spaces)
-            for line in comment_lines[1:]:
-                docstring_lines.append(f"    {line}")  # Add 4 spaces for base indentation
-            docstring_lines.append('    """')  # Closing quotes on new line, indented
-    else:
-        # Default docstring
-        docstring_lines.append(f'    """Call PostgreSQL function {func.sql_name}()."""')
+    # Generate the docstring
+    docstring = _generate_docstring(func)
 
-    docstring = "\n".join(docstring_lines)
-
-    # --- Generate Function Body ---
-    body_lines = []
-    body_lines.append("async with conn.cursor() as cur:")
-    body_lines.append(
-        f'    await cur.execute("SELECT * FROM {func.sql_name}({sql_args_placeholders})", {python_args_list})'
-    )
-
-    if not func.returns_table and func.return_type == "None":
-        body_lines.append("    return None")  # Void function
-    elif func.returns_setof:
-        body_lines.append("    rows = await cur.fetchall()")
-        if func.returns_table:
-            body_lines.append(f"    # Ensure dataclass '{final_dataclass_name}' is defined above.")
-            # Add logic to handle both tuple and dict rows
-            body_lines.append("    if not rows:")
-            body_lines.append("        return []")
-            body_lines.append("    colnames = [desc[0] for desc in cur.description]")
-            body_lines.append("    processed_rows = [")
-            body_lines.append("        dict(zip(colnames, r)) if not isinstance(r, dict) else r")
-            body_lines.append("        for r in rows")
-            body_lines.append(f"    ]")
-            body_lines.append(f"    return [{final_dataclass_name}(**row_dict) for row_dict in processed_rows]")
-        elif func.returns_record:
-            body_lines.append("    # Return list of tuples for SETOF record")
-            body_lines.append("    return rows")
-        else:  # SETOF scalar
-            body_lines.append("    # Assuming SETOF returns list of single-element tuples for scalars")
-            body_lines.append("    return [row[0] for row in rows if row]")
-    else:  # Single row expected
-        body_lines.append("    row = await cur.fetchone()")
-        body_lines.append("    if row is None:")
-        body_lines.append("        return None")
-        # All row processing happens after the None check
-        if func.returns_table:
-            body_lines.append(f"    # Ensure dataclass '{final_dataclass_name}' is defined above.")
-            # Add logic to handle both tuple and dict rows
-            body_lines.append("    colnames = [desc[0] for desc in cur.description]")
-            body_lines.append("    row_dict = dict(zip(colnames, row)) if not isinstance(row, dict) else row")
-            # Handle PostgreSQL composite type returns with all NULL values
-            body_lines.append("    # Check for 'empty' composite rows (all values are None)")
-            body_lines.append("    if all(value is None for value in row_dict.values()):")
-            body_lines.append("        return None")
-            body_lines.append(f"    return {final_dataclass_name}(**row_dict)")
-        elif func.returns_record:
-            body_lines.append("    # Return tuple for record type")
-            body_lines.append("    return row")
-        else:  # Single scalar
-            body_lines.append("    if isinstance(row, dict):")
-            body_lines.append(f"        # Assumes the key is the function name for dict rows")
-            body_lines.append(f"        return row[{repr(func.sql_name)}]")
-            body_lines.append("    else:")
-            body_lines.append("        # Fallback for tuple-like rows (index 0)")
-            body_lines.append("        return row[0]")
+    # Generate the function body based on the return type
+    body_lines = _generate_function_body(func, final_dataclass_name, sql_args_placeholders, python_args_list)
 
     indented_body = textwrap.indent("\n".join(body_lines), prefix="    ")
 
