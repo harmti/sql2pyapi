@@ -423,7 +423,7 @@ def _parse_create_table(sql_content: str):
 
         # Further clean column defs: remove comments that might span lines within the block
         col_defs_str_cleaned = re.sub(r"--.*?$", "", col_defs_str, flags=re.MULTILINE)
-        col_defs_str_cleaned = re.sub(r"/\*.*?\*/", "", col_defs_str_cleaned, flags=re.DOTALL)
+        col_defs_str_cleaned = re.sub(r"/\*.*?\*/", "", col_defs_str_cleaned, flags=re.DOTALL).strip()
         col_defs_str_cleaned = "\n".join(line.strip() for line in col_defs_str_cleaned.splitlines() if line.strip())
 
         logging.info(f"Found CREATE TABLE for: {table_name}")

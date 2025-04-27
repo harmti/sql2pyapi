@@ -347,15 +347,15 @@ find_comment_test_cases = [
         "   Comment D4 */", # Original line has leading space
         "CREATE FUNCTION func_d34() ..."
     ], 2, "Comment D3\nComment D4"), # Cleaned strips internal whitespace/newlines
-    # Comment separated by blank line (should be found)
+    # Comment separated by blank line - Parser currently FINDS this
     ([
-        "-- Comment E",
+        "-- Some comment",
         "",
         "CREATE FUNCTION func_e() ..."
-    ], 2, "Comment E"),
-    # Comment separated by code (should NOT be found)
+    ], 2, "Some comment"),
+    # Comment separated by non-comment code
     ([
-        "-- Comment F",
+        "-- Some comment",
         "SELECT 1;",
         "CREATE FUNCTION func_f() ..."
     ], 2, None),
