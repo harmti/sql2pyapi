@@ -3,6 +3,8 @@ import subprocess
 import sys
 import ast
 from dataclasses import is_dataclass
+import logging
+from sql2pyapi.parser import parse_sql
 
 # Define paths relative to the main tests/ directory
 TESTS_ROOT_DIR = Path(__file__).parent.parent # Go up one level to tests/
@@ -47,6 +49,9 @@ def test_func2_generation_with_schema(tmp_path):
     # --- AST Based Assertions ---
     assert actual_output_path.is_file(), "Generated file was not created."
     actual_content = actual_output_path.read_text()
+    print(f"--- START content of {actual_output_path} ---")
+    print(actual_content)
+    print(f"--- END content of {actual_output_path} ---")
     tree = ast.parse(actual_content)
 
     # 1. Check Imports
@@ -736,7 +741,7 @@ def test_param_comments_function_generation(tmp_path):
             elif node.module == 'uuid' and any(alias.name == 'UUID' for alias in node.names):
                  found_uuid = True
     assert found_typing_optional, "Missing Optional import"
-    assert found_uuid, "Missing UUID import"
+    assert found_uuid, f"Missing UUID import. File content:\n{actual_content}"
     
     # 2. Check function_with_param_comments Function
     func_node = None
@@ -901,93 +906,116 @@ def test_table_col_comments_generation(tmp_path):
 
 def test_returns_table_comments_function_generation(tmp_path):
     """Test handling comments within RETURNS TABLE columns using AST checks."""
+    # Configure logging for this test
+    parser_logger = logging.getLogger('sql2pyapi.parser')
+    original_level = parser_logger.level
+    parser_logger.setLevel(logging.DEBUG)
+    # Add a handler to capture logs if none exists (e.g., print to stderr)
+    # This ensures logs are visible even if root logger isn't configured for DEBUG
+    # Note: This might duplicate logs if a handler is already configured
+    handler = logging.StreamHandler(sys.stderr)
+    formatter = logging.Formatter('%(name)s - %(levelname)s - %(message)s')
+    handler.setFormatter(formatter)
+    # Avoid adding duplicate handlers if test is run multiple times in same session
+    if not any(isinstance(h, logging.StreamHandler) and h.stream == sys.stderr for h in parser_logger.handlers):
+        parser_logger.addHandler(handler)
+        added_handler = True
+    else:
+        added_handler = False
+
     functions_sql_path = FIXTURES_DIR / "returns_table_comments_function.sql"
     # expected_output_path = EXPECTED_DIR / "returns_table_comments_function_api.py"
+    # >>> RESTORED: actual_output_path definition
     actual_output_path = tmp_path / "returns_table_comments_function_api.py"
 
-    run_cli_tool(functions_sql_path, actual_output_path)
+    try: # Use try/finally to ensure logger level is reset
+        # >>> RESTORED: Original CLI call 
+        run_cli_tool(functions_sql_path, actual_output_path)
 
-    # --- AST Based Assertions ---
-    assert actual_output_path.is_file(), "Generated file was not created."
-    actual_content = actual_output_path.read_text()
-    tree = ast.parse(actual_content)
+        # >>> RESTORED: Original AST assertions
+        # --- AST Based Assertions ---
+        assert actual_output_path.is_file(), "Generated file was not created."
+        actual_content = actual_output_path.read_text()
+        tree = ast.parse(actual_content)
 
-    # 1. Check Imports (Optional, UUID, dataclass)
-    found_typing_optional = False
-    found_uuid = False
-    found_dataclass = False
-    for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom):
-            if node.module == 'typing' and any(alias.name == 'Optional' for alias in node.names):
-                found_typing_optional = True
-            elif node.module == 'uuid' and any(alias.name == 'UUID' for alias in node.names):
-                 found_uuid = True
-            elif node.module == 'dataclasses' and any(alias.name == 'dataclass' for alias in node.names):
-                 found_dataclass = True
-    assert found_typing_optional, "Missing Optional import"
-    assert found_uuid, "Missing UUID import"
-    assert found_dataclass, "Missing dataclass import"
-    
-    # 2. Check FunctionWithReturnsTableCommentsResult Dataclass
-    dataclass_node = None
-    for node in ast.walk(tree):
-        if isinstance(node, ast.ClassDef) and node.name == 'FunctionWithReturnsTableCommentsResult':
-            dataclass_node = node
-            break
-    assert dataclass_node is not None, "Dataclass 'FunctionWithReturnsTableCommentsResult' not found"
-    assert any(isinstance(d, ast.Name) and d.id == 'dataclass' for d in dataclass_node.decorator_list), "Dataclass not decorated with @dataclass"
-    
-    expected_fields = {
-        'col_id': 'Optional[UUID]',
-        'col_value': 'Optional[str]',
-        'col_status': 'Optional[bool]'
-    }
-    actual_fields = {stmt.target.id: ast.unparse(stmt.annotation) 
-                     for stmt in dataclass_node.body if isinstance(stmt, ast.AnnAssign)}
-    assert actual_fields == expected_fields, "Dataclass fields mismatch"
+        # 1. Check Imports (Optional, UUID, dataclass)
+        found_typing_optional = False
+        found_uuid = False
+        found_dataclass = False
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom):
+                if node.module == 'typing' and any(alias.name == 'Optional' for alias in node.names):
+                    found_typing_optional = True
+                elif node.module == 'uuid' and any(alias.name == 'UUID' for alias in node.names):
+                     found_uuid = True
+                elif node.module == 'dataclasses' and any(alias.name == 'dataclass' for alias in node.names):
+                     found_dataclass = True
+        assert found_typing_optional, "Missing Optional import"
+        assert found_uuid, f"Missing UUID import. File content:\\n{actual_content}"
+        assert found_dataclass, "Missing dataclass import"
+        
+        # 2. Check FunctionWithReturnsTableCommentsResult Dataclass
+        dataclass_node = None
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ClassDef) and node.name == 'FunctionWithReturnsTableCommentsResult':
+                dataclass_node = node
+                break
+        assert dataclass_node is not None, "Dataclass 'FunctionWithReturnsTableCommentsResult' not found"
+        assert any(isinstance(d, ast.Name) and d.id == 'dataclass' for d in dataclass_node.decorator_list), "Dataclass not decorated with @dataclass"
+        
+        expected_fields = {
+            'col_id': 'Optional[UUID]',
+            'col_value': 'Optional[str]',
+            'col_status': 'Optional[bool]'
+        }
+        actual_fields = {stmt.target.id: ast.unparse(stmt.annotation) 
+                         for stmt in dataclass_node.body if isinstance(stmt, ast.AnnAssign)}
+        assert actual_fields == expected_fields, "Dataclass fields mismatch"
 
-    # 3. Check function_with_returns_table_comments Function
-    func_node = None
-    for node in ast.walk(tree):
-        if isinstance(node, ast.AsyncFunctionDef) and node.name == 'function_with_returns_table_comments':
-            func_node = node
-            break
-    assert func_node is not None, "Async function 'function_with_returns_table_comments' not found"
+        # 3. Check function_with_returns_table_comments Function
+        func_node = None
+        for node in ast.walk(tree):
+            if isinstance(node, ast.AsyncFunctionDef) and node.name == 'function_with_returns_table_comments':
+                func_node = node
+                break
+        assert func_node is not None, "Async function 'function_with_returns_table_comments' not found"
 
-    # Check parameters
-    expected_params = {'conn': 'AsyncConnection', 'filter': 'str'}
-    actual_params = {arg.arg: ast.unparse(arg.annotation) for arg in func_node.args.args}
-    assert actual_params == expected_params, "Parameter mismatch"
+        # Check parameters
+        expected_params = {'conn': 'AsyncConnection', 'filter': 'str'}
+        actual_params = {arg.arg: ast.unparse(arg.annotation) for arg in func_node.args.args}
+        assert actual_params == expected_params, "Parameter mismatch"
 
-    # Check return annotation
-    expected_return = 'Optional[FunctionWithReturnsTableCommentsResult]'
-    actual_return = ast.unparse(func_node.returns)
-    assert actual_return == expected_return, "Return type mismatch"
+        # Check return annotation
+        expected_return = 'Optional[FunctionWithReturnsTableCommentsResult]'
+        actual_return = ast.unparse(func_node.returns)
+        assert actual_return == expected_return, "Return type mismatch"
 
-    # Check docstring (should be default)
-    docstring = ast.get_docstring(func_node)
-    expected_docstring_pattern = "Call PostgreSQL function function_with_returns_table_comments()."
-    assert docstring == expected_docstring_pattern, f"Expected default docstring, got: {docstring}"
+        # Check docstring (should be default)
+        docstring = ast.get_docstring(func_node)
+        expected_docstring_pattern = "Call PostgreSQL function function_with_returns_table_comments()."
+        assert docstring == expected_docstring_pattern, f"Expected default docstring, got: {docstring}"
 
-    # 4. Check Body Logic (Fetchone, Return Dataclass instance)
-    execute_call = None
-    fetchone_call = None
-    return_dataclass_instance = None
-    for node in ast.walk(func_node):
-        if isinstance(node, ast.Await) and isinstance(node.value, ast.Call):
-            call = node.value
-            if isinstance(call.func, ast.Attribute) and call.func.attr == 'execute':
-                execute_call = call
-            elif isinstance(call.func, ast.Attribute) and call.func.attr == 'fetchone':
-                fetchone_call = call
-        elif isinstance(node, ast.Return):
-             if isinstance(node.value, ast.Call) and isinstance(node.value.func, ast.Name) and node.value.func.id == 'FunctionWithReturnsTableCommentsResult':
-                  return_dataclass_instance = node
+        # 4. Check Body Logic (Fetchone, Return Dataclass instance)
+        execute_call = None
+        fetchone_call = None
+        return_dataclass_instance = None
+        for node in ast.walk(func_node):
+            if isinstance(node, ast.Await) and isinstance(node.value, ast.Call):
+                call = node.value
+                if isinstance(call.func, ast.Attribute) and call.func.attr == 'execute':
+                    execute_call = call
+                elif isinstance(call.func, ast.Attribute) and call.func.attr == 'fetchone':
+                    fetchone_call = call
+            elif isinstance(node, ast.Return):
+                 if isinstance(node.value, ast.Call) and isinstance(node.value.func, ast.Name) and node.value.func.id == 'FunctionWithReturnsTableCommentsResult':
+                      return_dataclass_instance = node
 
-    assert execute_call is not None, "cur.execute call not found"
-    assert fetchone_call is not None, "cur.fetchone call not found"
-    assert return_dataclass_instance is not None, "Return FunctionWithReturnsTableCommentsResult(...) call not found"
+        assert execute_call is not None, "cur.execute call not found"
+        assert fetchone_call is not None, "cur.fetchone call not found"
+        assert return_dataclass_instance is not None, "Return FunctionWithReturnsTableCommentsResult(...) call not found"
 
-    # Old assertion removed
-    # assert actual_content == expected_content, \
-    #     f"Generated file content does not match expected.\nExpected:\n{expected_content}\nActual:\n{actual_content}"
+    finally:
+        # Reset logger level and remove handler
+        parser_logger.setLevel(original_level)
+        if added_handler:
+            parser_logger.removeHandler(handler)

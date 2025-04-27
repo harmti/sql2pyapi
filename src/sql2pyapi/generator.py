@@ -502,18 +502,31 @@ def generate_python_code(
                         make_fields_optional=True # Explicit RETURNS TABLE cols default to Optional
                     )
                 
-                # Crucially, always associate the required imports for this function's 
-                # specific return type with the dataclass name, even if the def was skipped.
-                # This ensures the imports are collected correctly later.
-                # Convert import names to full import statements
-                converted_imports = set()
-                for import_name in func.required_imports:
-                    if import_name in PYTHON_IMPORTS:
-                        converted_imports.add(PYTHON_IMPORTS[import_name])
-                    else:
-                        # If we don't have a mapping, just add the name as-is (for debugging)
-                        converted_imports.add(import_name)
-                imports_per_dataclass[target_dataclass_name] = converted_imports # Use new name
+                # FIXED: Collect imports specifically from the return columns for the dataclass
+                dataclass_imports = set()
+                # DEBUG: Print function name and columns being processed
+                # print(f"[GENERATOR DEBUG] Processing RETURNS TABLE for func: {func.sql_name}, dataclass: {target_dataclass_name}")
+                # print(f"[GENERATOR DEBUG]   Columns: {func.return_columns}")
+                for col in func.return_columns:
+                    # Extract base type if Optional or List
+                    base_type = col.python_type
+                    if base_type.startswith("Optional["):
+                        base_type = base_type[len("Optional["):-1]
+                    if base_type.startswith("List["):
+                        base_type = base_type[len("List["):-1]
+                    # Add imports for base type and wrappers
+                    if base_type in PYTHON_IMPORTS:
+                        dataclass_imports.add(PYTHON_IMPORTS[base_type])
+                    if col.python_type.startswith("Optional["):
+                        dataclass_imports.add(PYTHON_IMPORTS["Optional"])
+                    if col.python_type.startswith("List["):
+                        dataclass_imports.add(PYTHON_IMPORTS["List"])
+
+                # Add dataclass import itself
+                dataclass_imports.add(PYTHON_IMPORTS["dataclass"]) 
+                # DEBUG: Print imports collected for this specific dataclass
+                # print(f"[GENERATOR DEBUG]   Collected imports for {target_dataclass_name}: {dataclass_imports}")
+                imports_per_dataclass[target_dataclass_name] = dataclass_imports
 
     # Add all necessary field type imports from generated dataclasses
     # Now this loop should not encounter a NameError
@@ -529,6 +542,8 @@ def generate_python_code(
 
     # --- Assemble code ---
     all_imports.discard(None)
+    # DEBUG: Print the final set of all collected imports before formatting
+    # print(f"[GENERATOR DEBUG] Final all_imports before formatting: {all_imports}")
 
     # Consolidate typing imports for better readability
     # Define standard imports that should always be present if used

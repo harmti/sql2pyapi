@@ -495,6 +495,7 @@ def test_parse_return_clause(function_sql: str, initial_imports: set, expected_p
     full_sql = f"CREATE FUNCTION test_func() {function_sql}"
     match = create_match(full_sql)
     assert match is not None, f"Regex failed to match test SQL: {full_sql}"
+    match_dict = match.groupdict() # Get the dictionary of named groups
 
     # Instantiate parser and set up mock state
     parser_instance = SQLParser()
@@ -502,9 +503,9 @@ def test_parse_return_clause(function_sql: str, initial_imports: set, expected_p
     parser_instance.table_schemas = copy.deepcopy(MOCK_TABLE_SCHEMAS_FOR_RETURNS)
     parser_instance.table_schema_imports = copy.deepcopy(MOCK_TABLE_SCHEMA_IMPORTS_FOR_RETURNS)
 
-    # Call the method on the instance
+    # Call the method on the instance, passing the dictionary
     initial_imports_copy = initial_imports.copy()
-    returns_info, updated_imports = parser_instance._parse_return_clause(match, initial_imports_copy, "test_func")
+    returns_info, updated_imports = parser_instance._parse_return_clause(match_dict, initial_imports_copy, "test_func")
 
     # Assert properties
     for key, expected_value in expected_props.items():
@@ -513,5 +514,38 @@ def test_parse_return_clause(function_sql: str, initial_imports: set, expected_p
     # Assert imports: check only the *new* imports added
     added_imports = updated_imports - initial_imports
     assert added_imports == expected_imports_delta, "Mismatch in added imports"
+
+def test_parse_function_with_double_precision():
+    """Tests parsing a function with DOUBLE PRECISION parameters."""
+    sql = """
+    -- Function with double precision
+    CREATE OR REPLACE FUNCTION test_double(p_lat double precision, p_lon DOUBLE PRECISION)
+    RETURNS double precision
+    LANGUAGE plpgsql
+    AS $$
+    BEGIN
+        RETURN p_lat + p_lon;
+    END;
+    $$;
+    """
+    expected = ParsedFunction(
+        sql_name="test_double",
+        python_name="test_double",
+        params=[
+            SQLParameter(name="p_lat", python_name="lat", sql_type="double precision", python_type="float", is_optional=False),
+            SQLParameter(name="p_lon", python_name="lon", sql_type="DOUBLE PRECISION", python_type="float", is_optional=False),
+        ],
+        return_type="Optional[float]",
+        returns_table=False,
+        returns_setof=False,
+        required_imports={'from psycopg import AsyncConnection', 'Optional'},
+        sql_comment="Function with double precision"
+    )
+    # Use the imported parse_sql function, which returns a list
+    print(f"DEBUG: SQL passed to parse_sql:\\n{sql}\\nDEBUG END")
+    results = parse_sql(sql)
+    assert len(results[0]) == 1
+    assert results[0][0] == expected
+    assert results[1] == {} # No table imports expected
 
 # ... (Keep rest of the file, e.g., tests for parse_sql if any) ... 

@@ -31,6 +31,7 @@ TYPE_MAP = {
     "json": "dict",  # Or Any, depending on usage
     "jsonb": "dict",  # Or Any
     "bytea": "bytes",
+    "double precision": "float", # Map double precision to float
     # Add more mappings as needed
 }
 

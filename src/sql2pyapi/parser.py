@@ -8,6 +8,7 @@ import math # Keep math if used elsewhere, otherwise remove
 from pathlib import Path
 import copy
 from typing import List, Dict, Optional, Tuple, Set # Keep base typing imports needed by parser itself
+import sys
 
 # Import custom error classes
 from .errors import ParsingError, FunctionParsingError, TableParsingError, TypeMappingError, ReturnTypeError
@@ -31,11 +32,19 @@ from .comment_parser import find_preceding_comment, COMMENT_REGEX as COMMENT_REG
 # ===== SECTION: REGEX DEFINITIONS =====
 # These remain at module level as they don't depend on instance state
 FUNCTION_REGEX = re.compile(
-    r"CREATE(?:\s+OR\s+REPLACE)?\s+FUNCTION\s+([a-zA-Z0-9_.]+)"
-    r"\s*\(([^)]*)\)"
-    r"\s+RETURNS\s+(?:(SETOF)\s+)?(?:(TABLE)\s*\((.*?)\)|([a-zA-Z0-9_.()\[\]]+))" # Groups 3,4,5,6 relate to returns
-    r"(.*?)(?:AS\s+\$\$|AS\s+\'|LANGUAGE\s+\w+)", # <<< REVERTED TO ORIGINAL
-    re.IGNORECASE | re.DOTALL | re.MULTILINE,
+    r"""
+    CREATE(?:\s+OR\s+REPLACE)?\s+FUNCTION\s+
+    (?P<func_name>[a-zA-Z0-9_.]+)              # Function name (Group 'func_name')
+    \s*\(                                     # Opening parenthesis for params
+    (?P<params>[^)]*)                          # Parameters (Group 'params')
+    \)
+    \s+RETURNS\s+
+    # REVERTED: Capture the return definition NON-GREEDILY up to AS/LANGUAGE
+    (?P<return_def>.*?)                      # Use non-greedy again
+    # Stop before the actual function body starts - allow zero or more spaces before AS/LANG
+    (?:\s*AS\s+(?:\$\$|')|\s*LANGUAGE\s+\w+)
+    """,
+    re.IGNORECASE | re.DOTALL | re.VERBOSE | re.MULTILINE,
 )
 
 # Regex to find comments (both -- and /* */)
@@ -43,7 +52,7 @@ COMMENT_REGEX = re.compile(r"(--.*?$)|(/\*.*?\*/)", re.MULTILINE | re.DOTALL)
 
 # Regex for parsing column names in _parse_column_definitions
 # Moved here for clarity, used only by that method but doesn't need instance state
-_COLUMN_NAME_REGEX = re.compile(r'^\s*(?:("[^"\n]+")|([a-zA-Z0-9_]+))\s+(.*)$')
+_COLUMN_NAME_REGEX = re.compile(r'^\s*(?:("[^"\n]+")|([a-zA-Z0-9_]+))\s*(.*)$')
 
 # Regex for parsing parameters in _parse_params
 # Moved here for clarity, used only by that method but doesn't need instance state
@@ -174,19 +183,19 @@ class SQLParser:
         """Cleans comments and splits column definition string into fragments."""
         if not col_defs_str:
             return []
-            
-        # Remove line comments (--)
-        col_defs_cleaned = re.sub(r"--.*?($|\n)", "\n", col_defs_str, flags=re.MULTILINE)
-        # Remove block comments (/* ... */) using the module-level regex
-        col_defs_cleaned = COMMENT_REGEX.sub("", col_defs_cleaned).strip()
+
+        # 1. Split the ORIGINAL string by comma OR newline first
+        # Corrected regex: Split on comma or escaped newline
+        raw_fragments = re.split(r'[,\n]', col_defs_str)
         
-        fragments = []
-        # Split by comma or newline, then strip whitespace
-        for part in re.split(r'[,\n]', col_defs_cleaned):
-            cleaned_part = part.strip()
+        cleaned_fragments = []
+        # 2. Clean comments from each fragment individually
+        for fragment in raw_fragments:
+            cleaned_part = COMMENT_REGEX.sub("", fragment).strip()
             if cleaned_part:
-                fragments.append(cleaned_part)
-        return fragments
+                cleaned_fragments.append(cleaned_part)
+                
+        return cleaned_fragments
 
     def _parse_single_column_fragment(self, current_def: str, columns: List[ReturnColumn], required_imports: set, context: str) -> Optional[ReturnColumn]:
         """Parses a single column definition fragment. Returns ReturnColumn or None if skipped."""
@@ -239,13 +248,17 @@ class SQLParser:
         words = rest_of_def.split()
         constraint_part_start_index = len(words)
         for j, word in enumerate(words):
+            # Stop if a comment marker is found
+            if word.startswith("--") or word.startswith("/*"):
+                constraint_part_start_index = j
+                break 
             word_lower = word.lower()
             is_terminator = False
             for keyword in terminating_keywords:
                 if keyword == "not" and j + 1 < len(words) and words[j+1].lower() == "null":
                     is_terminator = True; break
                 if keyword == "null" and j > 0 and words[j-1].lower() == "not":
-                    continue
+                    continue # Handled by 'not null'
                 if word_lower == keyword or word_lower.startswith(keyword + "("):
                     is_terminator = True; break
             if is_terminator:
@@ -557,62 +570,77 @@ class SQLParser:
 
     # --- End: New helper methods ---
 
-    def _parse_return_clause(self, match: re.Match, initial_imports: set, function_name: str = None) -> Tuple[dict, set]:
+    def _parse_return_clause(self, match_dict: dict, initial_imports: set, function_name: str = None) -> Tuple[dict, set]:
         """
-        Parses the RETURNS clause of a CREATE FUNCTION statement using helper methods.
-
-        Args:
-            match (re.Match): The regex match object from FUNCTION_REGEX.
-            initial_imports (set): Imports already gathered (e.g., from parameters).
-            function_name (str, optional): Name of the function for context in errors.
-
-        Returns:
-            Tuple[dict, set]: A dictionary containing return type information and the updated set of imports.
-                Keys in dict:
-                - 'return_type': BASE Python type string ('None', 'int', 'Tuple', 'DataclassPlaceholder', 'Any')
-                - 'returns_table': bool
-                - 'returns_record': bool
-                - 'returns_setof': bool
-                - 'return_columns': List[ReturnColumn] (for RETURNS TABLE)
-                - 'setof_table_name': str (for RETURNS SETOF table_name)
+        Parses the return clause components from the matched 'return_def' group.
         """
-        # Initialize default properties, including is_setof
+        current_imports = initial_imports.copy()
         returns_info = {
             "return_type": "None",
             "returns_table": False,
             "returns_record": False,
-            "returns_setof": match.group(3) is not None, # Determine SETOF flag early
+            "returns_setof": False,
             "return_columns": [],
             "setof_table_name": None,
         }
-        current_imports = initial_imports.copy()
 
-        # Extract parts from regex match
-        returns_table_keyword = match.group(4) is not None
-        table_columns_str = match.group(5)
-        return_type_name = match.group(6)
+        return_def_raw = match_dict.get('return_def')
+        if not return_def_raw:
+            logging.warning(f"Could not find return definition for function '{function_name}'")
+            return returns_info, current_imports
 
-        # Delegate to helper methods
-        partial_info = {}
-        if returns_table_keyword:
-            # Case: RETURNS TABLE(...)
-            partial_info, current_imports = self._handle_returns_table(
-                table_columns_str, current_imports, function_name
+        return_def = return_def_raw.strip()
+        context = f"return clause of function '{function_name}'" if function_name else "return clause"
+
+        # Check for SETOF
+        is_setof = False
+        if return_def.lower().startswith("setof "):
+            is_setof = True
+            return_def = return_def[len("setof "):].strip()
+            returns_info["returns_setof"] = True
+
+        # Check for TABLE (...)
+        return_def_stripped = return_def.strip()
+        table_match = re.match(r"table\s*\(", return_def_stripped, re.IGNORECASE)
+
+        if table_match and return_def_stripped.endswith(")"):
+            columns_start_index = table_match.end()
+            table_columns_str = return_def_stripped[columns_start_index:-1].strip()
+            # Pass a copy of current_imports to the helper
+            partial_info, current_imports_from_helper = self._handle_returns_table(
+                table_columns_str, current_imports.copy(), function_name
             )
-        elif return_type_name:
-            # Case: RETURNS [SETOF] type_name
-            sql_return_type = return_type_name.strip().lower()
+            if partial_info.get("returns_table"):
+                 returns_info["returns_table"] = True
+                 returns_info["return_type"] = partial_info.get("return_type", "DataclassPlaceholder")
+                 returns_info["return_columns"] = partial_info.get("return_columns", [])
+                 current_imports.update(current_imports_from_helper)
+            else:
+                 logging.warning(f"Failed to parse TABLE columns in {context}. Treating as Any.")
+                 returns_info["return_type"] = "Any"
+                 current_imports.add("Any")
+        elif return_def.lower() == 'record':
+            partial_info = {"return_type": "Tuple", "returns_record": True}
+            current_imports.add("Tuple")
+            returns_info.update(partial_info) # Update main dict
+        elif return_def.lower() == 'void':
+            partial_info = {"return_type": "None"}
+            returns_info.update(partial_info) # Update main dict
+        else:
+            # Not TABLE, RECORD, or VOID. Assume it's a type name.
+            sql_return_type = return_def 
+            # Handle named types (scalar, table name, etc.) using the helper
             partial_info, current_imports = self._handle_returns_type_name(
-                sql_return_type, returns_info["returns_setof"], current_imports, function_name
+                sql_return_type, is_setof, current_imports, function_name
             )
+            # Update returns_info directly based on what _handle_returns_type_name found
+            returns_info["return_type"] = partial_info.get("return_type", "Any")
+            returns_info["returns_table"] = partial_info.get("returns_table", False)
+            returns_info["return_columns"] = partial_info.get("return_columns", [])
+            returns_info["setof_table_name"] = partial_info.get("setof_table_name", None)
 
-        # Update the main returns_info dictionary with results from helpers
-        returns_info.update(partial_info)
-
-        # Clean up imports (remove None if present)
+        # Clean up imports 
         current_imports.discard(None)
-
-        # Now returns_info should contain the base type and other details
         return returns_info, current_imports
 
     def parse(self, sql_content: str, schema_content: Optional[str] = None) -> Tuple[List[ParsedFunction], Dict[str, set]]:
@@ -663,32 +691,54 @@ class SQLParser:
             comments[placeholder] = original_text
             # line_num = sql_content[:start].count('\\n') + 1 # Not used currently
 
-            if match.group(2) and '\n' in original_text:
-                # Replace multi-line block comment with equivalent newlines to preserve line counts
+            is_block_comment = match.group(2) is not None
+            has_newline = '\n' in original_text
+
+            if is_block_comment and has_newline:
+                # Replace multi-line block comment with equivalent newlines
                 return '\n' * original_text.count('\n') 
-            else:
-                 # Replace single-line comment (--) or single-line block comment (/* */) with nothing
+            elif not is_block_comment: # It's a single-line comment (--)
+                # Replace single-line comment with a single newline to preserve structure,
+                # unless it's a comment at the end of a line with other code.
+                # Check if the comment starts at the beginning of the line (ignoring whitespace)
+                line_start_index = sql_content.rfind('\n', 0, start) + 1
+                line_content_before_comment = sql_content[line_start_index:start].strip()
+                if not line_content_before_comment:
+                    # Comment is the only thing on the line (or only whitespace before it)
+                    # Replace the whole line with a newline to avoid merging lines
+                    return '\n'
+                else:
+                    # Comment is at the end of a line with code, just remove the comment text
+                    return ""
+            else: # Single-line block comment (/* ... */ on one line)
+                 # Replace with nothing
                  return ""
 
         sql_no_comments = COMMENT_REGEX.sub(comment_replacer, sql_content)
+        # >>> REMOVED DEBUG PRINT <<<
 
         # Find function definitions using module-level regex
         matches = FUNCTION_REGEX.finditer(sql_no_comments)
         functions = []
         lines = sql_content.splitlines()
+        # >>> ADDED DEBUG LOG CONFIG
+        logging.basicConfig(level=logging.DEBUG) # Ensure DEBUG level is active for subsequent logs
+        parser_logger = logging.getLogger(__name__) # Get logger for this module
+        parser_logger.setLevel(logging.DEBUG)
+        logging.debug(f"Starting FUNCTION_REGEX iteration...") # DEBUG LOG
 
-        for match in matches:
+        for i, match in enumerate(matches):
+            logging.debug(f"Match {i+1}: Span={match.span()}, Groups={match.groupdict()}") # DEBUG LOG
+            match_dict = match.groupdict() # Use group names
             sql_name = None
             function_start_line = -1 # Initialize
-            # Get match details from the stripped content first
             stripped_content_start_byte = match.start()
-            # Estimate line in stripped content (for refining search later)
-            approx_line_in_stripped = sql_no_comments[:stripped_content_start_byte].count('\n') + 1
+            approx_line_in_stripped = sql_no_comments[:stripped_content_start_byte].count('\\n') + 1
 
             try:
-                sql_name = match.group(1)
-                python_name = sql_name # Simplistic conversion for now
-
+                sql_name = match_dict['func_name'] # Use group name
+                python_name = sql_name
+                
                 # --- Find the accurate start line in the ORIGINAL content ---
                 # (Existing logic for finding start line seems okay) 
                 original_start_byte = -1
@@ -713,58 +763,76 @@ class SQLParser:
                     function_start_line = approx_line_in_stripped # Fallback to estimate
 
                 # --- Parse Parameters (use self) ---
-                param_str = match.group(2) or ""
-                # Clean comments from param string before parsing
-                param_str_cleaned = COMMENT_REGEX.sub("", param_str)
-                param_str_cleaned = " ".join(param_str_cleaned.split())
+                param_str = match_dict['params'] or ""
+                param_str_cleaned = COMMENT_REGEX.sub("", param_str).strip()
+                param_str_cleaned = " ".join(param_str_cleaned.split()) # Normalize whitespace
                 parsed_params, param_imports = self._parse_params(param_str_cleaned, f"function '{sql_name}'")
                 current_imports = param_imports.copy()
                 current_imports.add("from psycopg import AsyncConnection")
 
-                # --- Parse Return Clause (gets base type info) (use self) ---
-                return_info, current_imports = self._parse_return_clause(match, current_imports, sql_name)
+                # --- Parse Return Clause (use self) ---
+                return_info, current_imports = self._parse_return_clause(match_dict, current_imports, sql_name)
 
                 # --- Find Preceding Comment (use IMPORTED function) ---
                 function_start_line_idx = function_start_line - 1 if function_start_line > 0 else 0
                 sql_comment = find_preceding_comment(lines, function_start_line_idx)
 
                 # --- Determine final Python type hint (apply wrapping) ---
-                # (Existing logic seems okay) 
-                base_py_type = return_info["return_type"] 
+                base_py_type = return_info["return_type"]
                 final_py_type = base_py_type
                 is_setof = return_info["returns_setof"]
 
-                if is_setof:
-                    if base_py_type != "None": 
-                         if base_py_type == "DataclassPlaceholder":
-                             final_py_type = "List[Any]"
-                             current_imports.add("Any") 
-                         else:
-                             final_py_type = f"List[{base_py_type}]"
-                         current_imports.add("List")
-                elif base_py_type != "None": 
-                     if base_py_type == "DataclassPlaceholder":
-                          final_py_type = "Optional[Any]" 
-                          current_imports.add("Any") 
-                     else:
-                          final_py_type = f"Optional[{base_py_type}]"
-                     current_imports.add("Optional")
+                if base_py_type != "None":
+                    if is_setof:
+                        if base_py_type == "DataclassPlaceholder":
+                            class_name = "Any"
+                            if return_info.get("setof_table_name"):
+                                table_name = return_info["setof_table_name"]
+                                # Call module level function DIRECTLY
+                                class_name = _sanitize_for_class_name(table_name)
+                            elif return_info.get("returns_table") and return_info.get("return_columns"):
+                                # Call module level function DIRECTLY
+                                class_name = _generate_dataclass_name(sql_name, is_return=True)
+                            
+                            final_py_type = f"List[{class_name}]"
+                            current_imports.add("List")
+                            if class_name == "Any": current_imports.add("Any")
+                        else:
+                            final_py_type = f"List[{base_py_type}]"
+                            current_imports.add("List")
+                    else:
+                        # Not SETOF
+                        if base_py_type == "DataclassPlaceholder":
+                            class_name = "Any"
+                            if return_info.get("return_columns"):
+                                # Call module level function DIRECTLY
+                                class_name = _generate_dataclass_name(sql_name, is_return=True)
+                            
+                            final_py_type = f"Optional[{class_name}]"
+                            current_imports.add("Optional")
+                            if class_name == "Any": current_imports.add("Any")
+                        else:
+                            final_py_type = f"Optional[{base_py_type}]"
+                            current_imports.add("Optional")
+
+                # Ensure necessary base types are imported
                 if "Tuple" in final_py_type: current_imports.add("Tuple")
                 if "Any" in final_py_type: current_imports.add("Any")
                 current_imports.discard(None)
+                current_imports.discard('DataclassPlaceholder') # Remove placeholder
 
                 # --- Create ParsedFunction object ---
                 func_data = ParsedFunction(
                     sql_name=sql_name,
                     python_name=python_name,
                     params=parsed_params,
-                    return_type=final_py_type, 
+                    return_type=final_py_type, # Use the wrapped type
                     returns_table=return_info["returns_table"],
                     returns_record=return_info["returns_record"],
                     returns_setof=is_setof,
                     return_columns=return_info["return_columns"],
                     setof_table_name=return_info["setof_table_name"],
-                    required_imports={imp for imp in current_imports if imp},
+                    required_imports={imp for imp in current_imports if imp and imp != 'float' and imp != 'int' and imp != 'str' and imp != 'bool' and imp != 'bytes'}, # Filter builtins here
                     sql_comment=sql_comment,
                 )
                 functions.append(func_data)
@@ -781,6 +849,7 @@ class SQLParser:
                      # Re-raise unexpected errors
                      raise # Keep original traceback for unexpected issues
 
+        logging.debug(f"Finished FUNCTION_REGEX iteration. Found {len(functions)} functions.") # DEBUG LOG
         return functions, self.table_schema_imports
 
 # ... (Public parse_sql function unchanged) ...
@@ -801,3 +870,42 @@ def parse_sql(sql_content: str, schema_content: Optional[str] = None) -> Tuple[L
     return parser.parse(sql_content, schema_content)
 
 # ... (Removed legacy sections) ...
+
+# Add helper functions if they don't exist (needed for revised logic)
+# These should ideally live within the parser or a utility module
+
+def _sanitize_for_class_name(name: str) -> str:
+    """Sanitizes a SQL table/type name for use as a Python class name."""
+    # Remove schema qualification
+    base_name = name.split('.')[-1]
+    # Convert to PascalCase
+    parts = base_name.split('_')
+    # Capitalize first letter of each part, handle potential empty parts from multiple underscores
+    class_name = "".join(part.capitalize() for part in parts if part)
+    # Ensure it's a valid identifier (basic check)
+    if not class_name or not class_name[0].isalpha():
+        class_name = "SqlObject" + class_name # Prepend if needed
+    return class_name
+
+def _generate_dataclass_name(sql_func_name: str, is_return: bool = False) -> str:
+    """Generates a Pythonic class name based on the SQL function name."""
+    base_name = sql_func_name
+    # Remove prefix stripping logic entirely
+    # if base_name.startswith("get_") and len(base_name) > 4:
+    #     base_name = base_name[4:]
+    # if base_name.startswith("list_") and len(base_name) > 5:
+    #     base_name = base_name[5:]
+
+    # Convert to PascalCase using the sanitizer
+    class_name = _sanitize_for_class_name(base_name)
+    if is_return:
+        class_name += "Result"
+    
+    # Ensure final name starts with a capital letter (sanitize should handle this, but double-check)
+    if class_name and class_name[0].islower():
+         class_name = class_name[0].upper() + class_name[1:]
+    elif not class_name:
+         class_name = "GeneratedResult" # Fallback
+    return class_name
+
+# ... existing code ...
