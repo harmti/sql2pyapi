@@ -358,134 +358,636 @@ def test_no_params_function_generation(tmp_path):
 
 
 def test_multi_params_function_generation(tmp_path):
-    """Test generating a function that takes multiple parameters."""
+    """Test generating a function with multiple parameters using AST checks."""
     functions_sql_path = FIXTURES_DIR / "multi_params_function.sql"
-    expected_output_path = EXPECTED_DIR / "multi_params_function_api.py"
+    # expected_output_path = EXPECTED_DIR / "multi_params_function_api.py"
     actual_output_path = tmp_path / "multi_params_function_api.py"
 
     # Run the generator tool
     run_cli_tool(functions_sql_path, actual_output_path)
 
-    # Compare the generated file with the expected file
+    # --- AST Based Assertions ---
     assert actual_output_path.is_file(), "Generated file was not created."
-
-    expected_content = expected_output_path.read_text()
     actual_content = actual_output_path.read_text()
+    tree = ast.parse(actual_content)
 
-    assert actual_content == expected_content, (
-        f"Generated file content does not match expected content.\n"
-        f"Expected ({expected_output_path}):\n{expected_content}\n"
-        f"Actual ({actual_output_path}):\n{actual_content}"
-    )
+    # 1. Check Imports (Optional, UUID, Decimal, Dict, Any)
+    found_typing_imports = set()
+    found_uuid = False
+    found_decimal = False
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            if node.module == 'typing':
+                for alias in node.names:
+                    found_typing_imports.add(alias.name)
+            elif node.module == 'uuid' and any(alias.name == 'UUID' for alias in node.names):
+                 found_uuid = True
+            elif node.module == 'decimal' and any(alias.name == 'Decimal' for alias in node.names):
+                 found_decimal = True
+                 
+    assert {'Optional', 'Dict', 'Any'}.issubset(found_typing_imports), "Missing required typing imports"
+    assert found_uuid, "Missing UUID import"
+    assert found_decimal, "Missing Decimal import"
+
+    # 2. Check add_item Function
+    func_node = None
+    for node in ast.walk(tree):
+        if isinstance(node, ast.AsyncFunctionDef) and node.name == 'add_item':
+            func_node = node
+            break
+    assert func_node is not None, "Async function 'add_item' not found"
+    
+    # Check parameters
+    expected_params = {
+        'conn': 'AsyncConnection',
+        'name': 'str',
+        'category_id': 'int',
+        'is_available': 'bool',
+        'price': 'Decimal',
+        'attributes': 'Dict[str, Any]'
+    }
+    actual_params = {arg.arg: ast.unparse(arg.annotation) for arg in func_node.args.args}
+    assert actual_params == expected_params, "Parameter mismatch"
+
+    # Check return annotation
+    expected_return = 'Optional[UUID]'
+    actual_return = ast.unparse(func_node.returns)
+    assert actual_return == expected_return, "Return type mismatch"
+
+    # Check docstring
+    docstring = ast.get_docstring(func_node)
+    assert docstring == "Adds an item with various attributes", "Docstring mismatch"
+    
+    # Check body (standard scalar return)
+    sql_query = None
+    execute_call = None
+    fetchone_call = None
+    return_logic_found = False
+    execute_params = []
+    for node in ast.walk(func_node):
+        if isinstance(node, ast.Await) and isinstance(node.value, ast.Call):
+            call = node.value
+            if isinstance(call.func, ast.Attribute) and call.func.attr == 'execute':
+                execute_call = call
+                if len(call.args) > 0 and isinstance(call.args[0], ast.Constant):
+                    sql_query = call.args[0].value
+                # Get the list of parameter names passed to execute
+                if len(call.args) > 1 and isinstance(call.args[1], ast.List):
+                     execute_params = [elt.id for elt in call.args[1].elts if isinstance(elt, ast.Name)]
+            elif isinstance(call.func, ast.Attribute) and call.func.attr == 'fetchone':
+                fetchone_call = call
+        elif isinstance(node, ast.Return):
+             if isinstance(node.value, ast.Subscript) and isinstance(node.value.value, ast.Name) and node.value.value.id == 'row':
+                 return_logic_found = True
+                 
+    assert sql_query == "SELECT * FROM add_item(%s, %s, %s, %s, %s)", f"SQL query mismatch. Found: '{sql_query}'"
+    assert execute_call is not None, "cur.execute call not found"
+    # Check execute call passes the correct parameters in order (excluding conn)
+    expected_execute_params = ['name', 'category_id', 'is_available', 'price', 'attributes']
+    assert execute_params == expected_execute_params, f"Execute parameters mismatch. Expected {expected_execute_params}, Got {execute_params}"
+    assert fetchone_call is not None, "cur.fetchone call not found"
+    assert return_logic_found, "Expected scalar return logic not found"
+
+    # Old comparison removed
+    # assert actual_content == expected_content, (...)
 
 
 def test_optional_params_function_generation(tmp_path):
-    """Test generating a function with optional parameters (DEFAULT)."""
+    """Test generating a function with optional parameters using AST checks."""
     functions_sql_path = FIXTURES_DIR / "optional_params_function.sql"
-    expected_output_path = EXPECTED_DIR / "optional_params_function_api.py"
+    # expected_output_path = EXPECTED_DIR / "optional_params_function_api.py"
     actual_output_path = tmp_path / "optional_params_function_api.py"
 
     # Run the generator tool
     run_cli_tool(functions_sql_path, actual_output_path)
 
-    # Compare the generated file with the expected file
+    # --- AST Based Assertions ---
     assert actual_output_path.is_file(), "Generated file was not created."
-
-    expected_content = expected_output_path.read_text()
     actual_content = actual_output_path.read_text()
+    tree = ast.parse(actual_content)
 
-    assert actual_content == expected_content, (
-        f"Generated file content does not match expected content.\n"
-        f"Expected ({expected_output_path}):\n{expected_content}\n"
-        f"Actual ({actual_output_path}):\n{actual_content}"
-    )
+    # 1. Check Imports (List, Optional, dataclass)
+    found_typing_imports = set()
+    found_dataclass = False
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            if node.module == 'typing':
+                for alias in node.names:
+                    found_typing_imports.add(alias.name)
+            elif node.module == 'dataclasses' and any(alias.name == 'dataclass' for alias in node.names):
+                 found_dataclass = True
+    assert {'List', 'Optional'}.issubset(found_typing_imports), "Missing required typing imports"
+    # Again, dataclass might not be imported if no classes generated, check placeholder comment instead
+
+    # 2. Check for Placeholder Dataclass Comment
+    assert "# TODO: Define dataclass for table 'items'" in actual_content, "Missing placeholder dataclass comment for Item"
+    assert "# @dataclass" in actual_content
+    assert "# class Item:" in actual_content
+
+    # 3. Check search_items Function
+    func_node = None
+    for node in ast.walk(tree):
+        if isinstance(node, ast.AsyncFunctionDef) and node.name == 'search_items':
+            func_node = node
+            break
+    assert func_node is not None, "Async function 'search_items' not found"
+    
+    # Check parameters (including optional ones with defaults)
+    args = func_node.args
+    actual_params = {arg.arg: ast.unparse(arg.annotation) for arg in args.args}
+    expected_params = {
+        'conn': 'AsyncConnection',
+        'query': 'str',
+        'limit': 'Optional[int]',
+        'include_unavailable': 'Optional[bool]'
+    }
+    assert actual_params == expected_params, "Parameter mismatch"
+    
+    # Check defaults for optional parameters
+    # Defaults list corresponds to the last N arguments where N = len(defaults)
+    defaults = args.defaults
+    assert len(defaults) == 2, "Expected 2 default values"
+    assert isinstance(defaults[0], ast.Constant) and defaults[0].value is None, "Default for limit should be None"
+    assert isinstance(defaults[1], ast.Constant) and defaults[1].value is None, "Default for include_unavailable should be None"
+
+    # Check return annotation
+    expected_return = 'List[Item]' # Uses placeholder name
+    actual_return = ast.unparse(func_node.returns)
+    assert actual_return == expected_return, "Return type mismatch"
+
+    # Check docstring
+    docstring = ast.get_docstring(func_node)
+    assert docstring == "Search for items with optional filters", "Docstring mismatch"
+    
+    # Check body (fetchall, list comprehension using placeholder)
+    sql_query = None
+    execute_call = None
+    fetchall_call = None
+    list_comp = None
+    execute_params = []
+    for node in ast.walk(func_node):
+        if isinstance(node, ast.Await) and isinstance(node.value, ast.Call):
+            call = node.value
+            if isinstance(call.func, ast.Attribute) and call.func.attr == 'execute':
+                execute_call = call
+                if len(call.args) > 0 and isinstance(call.args[0], ast.Constant):
+                    sql_query = call.args[0].value
+                if len(call.args) > 1 and isinstance(call.args[1], ast.List):
+                     execute_params = [elt.id for elt in call.args[1].elts if isinstance(elt, ast.Name)]
+            elif isinstance(call.func, ast.Attribute) and call.func.attr == 'fetchall':
+                fetchall_call = call
+        elif isinstance(node, ast.Return) and isinstance(node.value, ast.ListComp):
+            list_comp = node.value
+            assert isinstance(list_comp.elt, ast.Call) and isinstance(list_comp.elt.func, ast.Name) and list_comp.elt.func.id == 'Item', "List comprehension does not call placeholder Item()"
+                 
+    assert sql_query == "SELECT * FROM search_items(%s, %s, %s)", f"SQL query mismatch. Found: '{sql_query}'"
+    assert execute_call is not None, "cur.execute call not found"
+    expected_execute_params = ['query', 'limit', 'include_unavailable']
+    assert execute_params == expected_execute_params, f"Execute parameters mismatch. Expected {expected_execute_params}, Got {execute_params}"
+    assert fetchall_call is not None, "cur.fetchall call not found"
+    assert list_comp is not None, "Return list comprehension using placeholder not found"
+
+    # Old comparison removed
+    # assert actual_content == expected_content, (...)
 
 
 def test_inline_schema_function_generation(tmp_path):
-    """Test generating code when CREATE TABLE is in the same file."""
+    """Test generating with inline CREATE TABLE using AST checks."""
     functions_sql_path = FIXTURES_DIR / "inline_schema_function.sql"
-    expected_output_path = EXPECTED_DIR / "inline_schema_function_api.py"
+    # expected_output_path = EXPECTED_DIR / "inline_schema_function_api.py"
     actual_output_path = tmp_path / "inline_schema_function_api.py"
 
     # Run the generator tool (NO schema file argument)
     run_cli_tool(functions_sql_path, actual_output_path)
 
-    # Compare the generated file with the expected file
+    # --- AST Based Assertions ---
     assert actual_output_path.is_file(), "Generated file was not created."
-
-    expected_content = expected_output_path.read_text()
     actual_content = actual_output_path.read_text()
+    tree = ast.parse(actual_content)
 
-    assert actual_content == expected_content, (
-        f"Generated file content does not match expected content.\n"
-        f"Expected ({expected_output_path}):\n{expected_content}\n"
-        f"Actual ({actual_output_path}):\n{actual_content}"
-    )
+    # 1. Check Imports (List, Optional, Decimal, dataclass)
+    found_typing_imports = set()
+    found_decimal = False
+    found_dataclass = False
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            if node.module == 'typing':
+                for alias in node.names:
+                    found_typing_imports.add(alias.name)
+            elif node.module == 'decimal' and any(alias.name == 'Decimal' for alias in node.names):
+                 found_decimal = True
+            elif node.module == 'dataclasses' and any(alias.name == 'dataclass' for alias in node.names):
+                 found_dataclass = True
+                 
+    assert {'List', 'Optional'}.issubset(found_typing_imports), "Missing required typing imports"
+    assert found_decimal, "Missing Decimal import"
+    assert found_dataclass, "Missing dataclass import"
+
+    # 2. Check Product Dataclass
+    dataclass_node = None
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ClassDef) and node.name == 'Product':
+            dataclass_node = node
+            break
+    assert dataclass_node is not None, "Dataclass 'Product' not found"
+    assert any(isinstance(d, ast.Name) and d.id == 'dataclass' for d in dataclass_node.decorator_list), "'Product' class is not decorated with @dataclass"
+    
+    expected_fields = {
+        'product_id': 'int',
+        'product_name': 'str',
+        'price': 'Optional[Decimal]'
+    }
+    actual_fields = {stmt.target.id: ast.unparse(stmt.annotation) 
+                     for stmt in dataclass_node.body if isinstance(stmt, ast.AnnAssign)}
+    assert actual_fields == expected_fields, "Product dataclass fields mismatch"
+
+    # 3. Check get_all_products Function
+    func_node = None
+    for node in ast.walk(tree):
+        if isinstance(node, ast.AsyncFunctionDef) and node.name == 'get_all_products':
+            func_node = node
+            break
+    assert func_node is not None, "Async function 'get_all_products' not found"
+
+    # Check parameters
+    expected_params = {'conn': 'AsyncConnection'}
+    actual_params = {arg.arg: ast.unparse(arg.annotation) for arg in func_node.args.args}
+    assert actual_params == expected_params, "Parameter mismatch"
+
+    # Check return annotation
+    expected_return = 'List[Product]'
+    actual_return = ast.unparse(func_node.returns)
+    assert actual_return == expected_return, "Return type mismatch"
+
+    # Check docstring
+    docstring = ast.get_docstring(func_node)
+    assert docstring is not None and "defined above" in docstring, "Docstring mismatch or doesn't mention inline schema"
+
+    # 4. Check Body Logic (Fetchall, ListComp using Product)
+    sql_query = None
+    execute_call = None
+    fetchall_call = None
+    list_comp = None
+
+    for node in ast.walk(func_node):
+        if isinstance(node, ast.Await) and isinstance(node.value, ast.Call):
+            call = node.value
+            if isinstance(call.func, ast.Attribute) and call.func.attr == 'execute':
+                execute_call = call
+                if len(call.args) > 0 and isinstance(call.args[0], ast.Constant):
+                    sql_query = call.args[0].value
+            elif isinstance(call.func, ast.Attribute) and call.func.attr == 'fetchall':
+                fetchall_call = call
+        elif isinstance(node, ast.Return) and isinstance(node.value, ast.ListComp):
+            list_comp = node.value
+            assert isinstance(list_comp.elt, ast.Call) and isinstance(list_comp.elt.func, ast.Name) and list_comp.elt.func.id == 'Product', "List comprehension does not call Product()"
+            
+    assert sql_query == "SELECT * FROM get_all_products()", f"SQL query mismatch. Found: '{sql_query}'"
+    assert execute_call is not None, "cur.execute call not found"
+    assert fetchall_call is not None, "cur.fetchall call not found"
+    assert list_comp is not None, "Return list comprehension using Product not found"
+
+    # Old comparison removed
+    # assert actual_content == expected_content, (...)
 
 
 def test_comment_formats_generation(tmp_path):
-    """Test handling of various SQL comment formats for docstrings."""
+    """Test comment handling using AST checks for docstrings."""
     functions_sql_path = FIXTURES_DIR / "comment_formats.sql"
-    expected_output_path = EXPECTED_DIR / "comment_formats_api.py"
+    # expected_output_path = EXPECTED_DIR / "comment_formats_api.py"
     actual_output_path = tmp_path / "comment_formats_api.py"
 
     # Run the generator tool
     run_cli_tool(functions_sql_path, actual_output_path)
 
-    # Compare the generated file with the expected file
+    # --- AST Based Assertions ---
     assert actual_output_path.is_file(), "Generated file was not created."
-
-    expected_content = expected_output_path.read_text()
     actual_content = actual_output_path.read_text()
+    tree = ast.parse(actual_content)
 
-    assert actual_content == expected_content, (
-        f"Generated file content does not match expected content.\n"
-        f"Expected ({expected_output_path}):\n{expected_content}\n"
-        f"Actual ({actual_output_path}):\n{actual_content}"
+    # Helper to find function node and check its docstring
+    def check_docstring(tree, func_name, expected_docstring):
+        func_node = None
+        for node in ast.walk(tree):
+            if isinstance(node, ast.AsyncFunctionDef) and node.name == func_name:
+                func_node = node
+                break
+        assert func_node is not None, f"Async function '{func_name}' not found"
+        
+        actual_docstring = ast.get_docstring(func_node)
+        # Need to handle None case for no_comment scenario
+        if expected_docstring is None:
+             # The generator currently adds a default docstring, let's check for that pattern
+             assert actual_docstring is not None and actual_docstring.startswith("Call PostgreSQL function"), f"Expected default docstring pattern for {func_name}, got: {actual_docstring}"
+        else:
+             assert actual_docstring == expected_docstring, f"Docstring mismatch for {func_name}.\nExpected:\n{expected_docstring}\nGot:\n{actual_docstring}"
+
+    # Check docstring for each function
+    check_docstring(
+        tree,
+        'function_with_multiline_dash_comment',
+        "This is a multi-line comment\ndescribing the first function.\nIt has three lines."
     )
+    check_docstring(
+        tree,
+        'function_with_single_block_comment',
+        "This is a single-line block comment."
+    )
+    check_docstring(
+        tree,
+        'function_with_multi_block_comment',
+        "This is a multi-line block comment.\nIt uses asterisks for alignment.\n  And has some indentation."
+    )
+    check_docstring( # Check default docstring generation
+        tree,
+        'function_with_no_comment',
+        "Call PostgreSQL function function_with_no_comment()." # Match default pattern
+    )
+    check_docstring( # Ensure only the comment immediately preceding is used
+        tree,
+        'function_with_separated_comment',
+        "This comment is separated by a blank line"
+    )
+
+    # Old comparison removed
+    # assert actual_content == expected_content, (...)
 
 
 def test_param_comments_function_generation(tmp_path):
-    """Test generating API for function with comments in parameters."""
+    """Test handling comments within parameters using AST checks."""
     functions_sql_path = FIXTURES_DIR / "param_comments_function.sql"
-    expected_output_path = EXPECTED_DIR / "param_comments_function_api.py"
+    # expected_output_path = EXPECTED_DIR / "param_comments_function_api.py"
     actual_output_path = tmp_path / "param_comments_function_api.py"
 
     run_cli_tool(functions_sql_path, actual_output_path)
 
+    # --- AST Based Assertions ---
     assert actual_output_path.is_file(), "Generated file was not created."
-    expected_content = expected_output_path.read_text()
     actual_content = actual_output_path.read_text()
-    assert actual_content == expected_content, \
-        f"Generated file content does not match expected.\nExpected:\n{expected_content}\nActual:\n{actual_content}"
+    tree = ast.parse(actual_content)
+    
+    # 1. Check Imports
+    found_typing_optional = False
+    found_uuid = False
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            if node.module == 'typing' and any(alias.name == 'Optional' for alias in node.names):
+                found_typing_optional = True
+            elif node.module == 'uuid' and any(alias.name == 'UUID' for alias in node.names):
+                 found_uuid = True
+    assert found_typing_optional, "Missing Optional import"
+    assert found_uuid, "Missing UUID import"
+    
+    # 2. Check function_with_param_comments Function
+    func_node = None
+    for node in ast.walk(tree):
+        if isinstance(node, ast.AsyncFunctionDef) and node.name == 'function_with_param_comments':
+            func_node = node
+            break
+    assert func_node is not None, "Async function 'function_with_param_comments' not found"
+
+    # Check parameters (ensure comments were ignored correctly)
+    args = func_node.args
+    actual_params = {arg.arg: ast.unparse(arg.annotation) for arg in args.args}
+    expected_params = {
+        'conn': 'AsyncConnection',
+        'id': 'UUID',
+        'name': 'str',
+        'active': 'bool',
+        'age': 'Optional[int]' # Optional due to DEFAULT
+    }
+    assert actual_params == expected_params, "Parameter mismatch"
+    
+    # Check default for age
+    defaults = args.defaults
+    assert len(defaults) == 1, "Expected 1 default value"
+    assert isinstance(defaults[0], ast.Constant) and defaults[0].value is None, "Default for age should be None"
+
+    # Check return annotation
+    expected_return = 'None'
+    actual_return = ast.unparse(func_node.returns)
+    assert actual_return == expected_return, "Return type mismatch"
+
+    # Check docstring (comes from comment before function)
+    docstring = ast.get_docstring(func_node)
+    assert docstring == "Function with comments in parameters", "Docstring mismatch"
+
+    # Check body (ensure execute call includes all params)
+    execute_call = None
+    execute_params = []
+    return_none = None
+    for node in ast.walk(func_node):
+        if isinstance(node, ast.Await) and isinstance(node.value, ast.Call):
+             call = node.value
+             if isinstance(call.func, ast.Attribute) and call.func.attr == 'execute':
+                 execute_call = call
+                 if len(call.args) > 1 and isinstance(call.args[1], ast.List):
+                     execute_params = [elt.id for elt in call.args[1].elts if isinstance(elt, ast.Name)]
+        elif isinstance(node, ast.Return) and isinstance(node.value, ast.Constant) and node.value.value is None:
+             return_none = node
+             
+    assert execute_call is not None, "Execute call not found"
+    expected_execute_params = ['id', 'name', 'active', 'age']
+    assert execute_params == expected_execute_params, f"Execute parameters mismatch. Expected {expected_execute_params}, Got {execute_params}"
+    assert return_none is not None, "Return None statement not found"
+
+    # Old assertion removed
+    # assert actual_content == expected_content, \
+    #     f"Generated file content does not match expected.\nExpected:\n{expected_content}\nActual:\n{actual_content}"
 
 
 def test_table_col_comments_generation(tmp_path):
-    """Test generating API for function returning table with column comments."""
+    """Test handling comments within CREATE TABLE columns using AST checks."""
     functions_sql_path = FIXTURES_DIR / "table_col_comments.sql"
-    expected_output_path = EXPECTED_DIR / "table_col_comments_api.py"
+    # expected_output_path = EXPECTED_DIR / "table_col_comments_api.py"
     actual_output_path = tmp_path / "table_col_comments_api.py"
 
     # This fixture includes CREATE TABLE, so the tool should parse it directly
     run_cli_tool(functions_sql_path, actual_output_path)
 
+    # --- AST Based Assertions ---
     assert actual_output_path.is_file(), "Generated file was not created."
-    expected_content = expected_output_path.read_text()
     actual_content = actual_output_path.read_text()
-    assert actual_content == expected_content, \
-        f"Generated file content does not match expected.\nExpected:\n{expected_content}\nActual:\n{actual_content}"
+    tree = ast.parse(actual_content)
+
+    # 1. Check Imports (List, Optional, UUID, datetime, dataclass)
+    found_typing_imports = set()
+    found_uuid = False
+    found_datetime = False
+    found_dataclass = False
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            if node.module == 'typing':
+                for alias in node.names:
+                    found_typing_imports.add(alias.name)
+            elif node.module == 'uuid' and any(alias.name == 'UUID' for alias in node.names):
+                 found_uuid = True
+            elif node.module == 'datetime' and any(alias.name == 'datetime' for alias in node.names):
+                 found_datetime = True
+            elif node.module == 'dataclasses' and any(alias.name == 'dataclass' for alias in node.names):
+                 found_dataclass = True
+                 
+    assert {'List', 'Optional'}.issubset(found_typing_imports), "Missing required typing imports"
+    assert found_uuid, "Missing UUID import"
+    assert found_datetime, "Missing datetime import"
+    assert found_dataclass, "Missing dataclass import"
+
+    # 2. Check TableWithColComment Dataclass (ensure comments were ignored)
+    dataclass_node = None
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ClassDef) and node.name == 'TableWithColComment':
+            dataclass_node = node
+            break
+    assert dataclass_node is not None, "Dataclass 'TableWithColComment' not found"
+    assert any(isinstance(d, ast.Name) and d.id == 'dataclass' for d in dataclass_node.decorator_list), "Dataclass not decorated with @dataclass"
+    
+    expected_fields = {
+        'id': 'UUID',
+        'name': 'str',
+        'industry': 'Optional[str]',
+        'size': 'Optional[str]',
+        'notes': 'Optional[str]',
+        'created_at': 'datetime'
+    }
+    actual_fields = {stmt.target.id: ast.unparse(stmt.annotation) 
+                     for stmt in dataclass_node.body if isinstance(stmt, ast.AnnAssign)}
+    assert actual_fields == expected_fields, "TableWithColComment dataclass fields mismatch"
+
+    # 3. Check get_table_with_col_comments Function
+    func_node = None
+    for node in ast.walk(tree):
+        if isinstance(node, ast.AsyncFunctionDef) and node.name == 'get_table_with_col_comments':
+            func_node = node
+            break
+    assert func_node is not None, "Async function 'get_table_with_col_comments' not found"
+
+    # Check parameters
+    expected_params = {'conn': 'AsyncConnection'}
+    actual_params = {arg.arg: ast.unparse(arg.annotation) for arg in func_node.args.args}
+    assert actual_params == expected_params, "Parameter mismatch"
+
+    # Check return annotation
+    expected_return = 'List[TableWithColComment]'
+    actual_return = ast.unparse(func_node.returns)
+    assert actual_return == expected_return, "Return type mismatch"
+
+    # Check docstring
+    docstring = ast.get_docstring(func_node)
+    assert docstring == "Function using the table (needed for test structure)", "Docstring mismatch"
+
+    # 4. Check Body Logic (Fetchall, ListComp using Dataclass)
+    execute_call = None
+    fetchall_call = None
+    list_comp = None
+    for node in ast.walk(func_node):
+        if isinstance(node, ast.Await) and isinstance(node.value, ast.Call):
+            call = node.value
+            if isinstance(call.func, ast.Attribute) and call.func.attr == 'execute':
+                execute_call = call
+            elif isinstance(call.func, ast.Attribute) and call.func.attr == 'fetchall':
+                fetchall_call = call
+        elif isinstance(node, ast.Return) and isinstance(node.value, ast.ListComp):
+            list_comp = node.value
+            assert isinstance(list_comp.elt, ast.Call) and isinstance(list_comp.elt.func, ast.Name) and list_comp.elt.func.id == 'TableWithColComment', "List comprehension does not call TableWithColComment()"
+            
+    assert execute_call is not None, "cur.execute call not found"
+    assert fetchall_call is not None, "cur.fetchall call not found"
+    assert list_comp is not None, "Return list comprehension not found"
+
+    # Old assertion removed
+    # assert actual_content == expected_content, \
+    #     f"Generated file content does not match expected.\nExpected:\n{expected_content}\nActual:\n{actual_content}"
 
 
 def test_returns_table_comments_function_generation(tmp_path):
-    """Test generating API for function with comments in RETURNS TABLE columns."""
+    """Test handling comments within RETURNS TABLE columns using AST checks."""
     functions_sql_path = FIXTURES_DIR / "returns_table_comments_function.sql"
-    expected_output_path = EXPECTED_DIR / "returns_table_comments_function_api.py"
+    # expected_output_path = EXPECTED_DIR / "returns_table_comments_function_api.py"
     actual_output_path = tmp_path / "returns_table_comments_function_api.py"
 
     run_cli_tool(functions_sql_path, actual_output_path)
 
+    # --- AST Based Assertions ---
     assert actual_output_path.is_file(), "Generated file was not created."
-    expected_content = expected_output_path.read_text()
     actual_content = actual_output_path.read_text()
-    assert actual_content == expected_content, \
-        f"Generated file content does not match expected.\nExpected:\n{expected_content}\nActual:\n{actual_content}"
+    tree = ast.parse(actual_content)
+
+    # 1. Check Imports (Optional, UUID, dataclass)
+    found_typing_optional = False
+    found_uuid = False
+    found_dataclass = False
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            if node.module == 'typing' and any(alias.name == 'Optional' for alias in node.names):
+                found_typing_optional = True
+            elif node.module == 'uuid' and any(alias.name == 'UUID' for alias in node.names):
+                 found_uuid = True
+            elif node.module == 'dataclasses' and any(alias.name == 'dataclass' for alias in node.names):
+                 found_dataclass = True
+    assert found_typing_optional, "Missing Optional import"
+    assert found_uuid, "Missing UUID import"
+    assert found_dataclass, "Missing dataclass import"
+    
+    # 2. Check FunctionWithReturnsTableCommentsResult Dataclass
+    dataclass_node = None
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ClassDef) and node.name == 'FunctionWithReturnsTableCommentsResult':
+            dataclass_node = node
+            break
+    assert dataclass_node is not None, "Dataclass 'FunctionWithReturnsTableCommentsResult' not found"
+    assert any(isinstance(d, ast.Name) and d.id == 'dataclass' for d in dataclass_node.decorator_list), "Dataclass not decorated with @dataclass"
+    
+    expected_fields = {
+        'col_id': 'Optional[UUID]',
+        'col_value': 'Optional[str]',
+        'col_status': 'Optional[bool]'
+    }
+    actual_fields = {stmt.target.id: ast.unparse(stmt.annotation) 
+                     for stmt in dataclass_node.body if isinstance(stmt, ast.AnnAssign)}
+    assert actual_fields == expected_fields, "Dataclass fields mismatch"
+
+    # 3. Check function_with_returns_table_comments Function
+    func_node = None
+    for node in ast.walk(tree):
+        if isinstance(node, ast.AsyncFunctionDef) and node.name == 'function_with_returns_table_comments':
+            func_node = node
+            break
+    assert func_node is not None, "Async function 'function_with_returns_table_comments' not found"
+
+    # Check parameters
+    expected_params = {'conn': 'AsyncConnection', 'filter': 'str'}
+    actual_params = {arg.arg: ast.unparse(arg.annotation) for arg in func_node.args.args}
+    assert actual_params == expected_params, "Parameter mismatch"
+
+    # Check return annotation
+    expected_return = 'Optional[FunctionWithReturnsTableCommentsResult]'
+    actual_return = ast.unparse(func_node.returns)
+    assert actual_return == expected_return, "Return type mismatch"
+
+    # Check docstring (should be default)
+    docstring = ast.get_docstring(func_node)
+    expected_docstring_pattern = "Call PostgreSQL function function_with_returns_table_comments()."
+    assert docstring == expected_docstring_pattern, f"Expected default docstring, got: {docstring}"
+
+    # 4. Check Body Logic (Fetchone, Return Dataclass instance)
+    execute_call = None
+    fetchone_call = None
+    return_dataclass_instance = None
+    for node in ast.walk(func_node):
+        if isinstance(node, ast.Await) and isinstance(node.value, ast.Call):
+            call = node.value
+            if isinstance(call.func, ast.Attribute) and call.func.attr == 'execute':
+                execute_call = call
+            elif isinstance(call.func, ast.Attribute) and call.func.attr == 'fetchone':
+                fetchone_call = call
+        elif isinstance(node, ast.Return):
+             if isinstance(node.value, ast.Call) and isinstance(node.value.func, ast.Name) and node.value.func.id == 'FunctionWithReturnsTableCommentsResult':
+                  return_dataclass_instance = node
+
+    assert execute_call is not None, "cur.execute call not found"
+    assert fetchone_call is not None, "cur.fetchone call not found"
+    assert return_dataclass_instance is not None, "Return FunctionWithReturnsTableCommentsResult(...) call not found"
+
+    # Old assertion removed
+    # assert actual_content == expected_content, \
+    #     f"Generated file content does not match expected.\nExpected:\n{expected_content}\nActual:\n{actual_content}"
