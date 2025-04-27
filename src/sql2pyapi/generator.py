@@ -203,7 +203,7 @@ def _generate_function_body(func: ParsedFunction, final_dataclass_name: Optional
     
     # Handle different return types
     if not func.returns_table and func.return_type == "None":
-        # Void function - simplest case
+        # Void function - simplest case, just execute and return None
         body_lines.append("    return None")
     elif func.returns_setof:
         # Handle SETOF returns (multiple rows)

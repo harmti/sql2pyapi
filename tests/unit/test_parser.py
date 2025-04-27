@@ -21,6 +21,44 @@ from sql2pyapi.parser import (
     # FUNCTION_REGEX is NOT imported directly
 )
 
+# Define mock table schemas at module level (potentially used by other tests)
+MOCK_TABLE_SCHEMAS = {
+    "users": [
+        ReturnColumn("id", "integer", "int", False),
+        ReturnColumn("name", "text", "Optional[str]", True),
+        ReturnColumn("created_at", "timestamp", "Optional[datetime]", True),
+    ],
+    "products": [
+        ReturnColumn("product_id", "uuid", "UUID", False),
+        ReturnColumn("description", "text", "Optional[str]", True),
+        ReturnColumn("price", "numeric", "Decimal", False),
+    ],
+    "orders": [
+        ReturnColumn("order_id", "bigint", "int", False),
+        ReturnColumn("user_id", "integer", "int", False), # Foreign key
+        ReturnColumn("order_date", "date", "date", False),
+    ]
+}
+
+# Define mock table schemas needed for return clause tests *BEFORE* test cases list
+MOCK_TABLE_SCHEMAS_FOR_RETURNS = {
+    'users': [
+        ReturnColumn(name='user_id', sql_type='uuid', python_type='UUID', is_optional=False),
+        ReturnColumn(name='email', sql_type='character varying(255)', python_type='str', is_optional=False),
+        ReturnColumn(name='created_at', sql_type='timestamp', python_type='Optional[datetime]', is_optional=True)
+    ],
+    'products': [ # Used for store.products tests too
+        ReturnColumn(name='product_id', sql_type='serial', python_type='int', is_optional=False),
+        ReturnColumn(name='name', sql_type='text', python_type='str', is_optional=False),
+        ReturnColumn(name='description', sql_type='text', python_type='Optional[str]', is_optional=True),
+        ReturnColumn(name='price', sql_type='numeric(10, 2)', python_type='Decimal', is_optional=False)
+    ]
+}
+MOCK_TABLE_SCHEMA_IMPORTS_FOR_RETURNS = {
+    'users': {"UUID", "Optional", "datetime"}, # email(str) needs no import
+    'products': {"Optional", "Decimal"} # product_id(int), name(str), desc(str) need no import
+}
+
 # Parameterized test cases: (sql_type, is_optional, expected_py_type, expected_imports)
 map_type_test_cases = [
     # Basic types
@@ -391,145 +429,193 @@ def create_match(sql: str) -> Optional[re.Match]:
 # Test cases for _parse_return_clause
 # (sql_fragment, initial_imports, expected_props, expected_imports_delta)
 parse_return_test_cases = [
-    # VOID return
+    # 0: RETURNS void
     (
         "CREATE FUNCTION my_func() RETURNS void AS $$ ... $$",
         set(),
-        {'return_type': 'None', 'returns_table': False, 'return_columns': [], 'returns_record': False, 'setof_table_name': None},
-        set()
+        {
+            "return_type": "None",
+            "returns_table": False,
+            "returns_record": False,
+            "returns_setof": False,
+            "return_columns": [],
+            "setof_table_name": None
+        },
+        set(),
     ),
-    # Scalar return (int)
+    # 1: RETURNS integer
     (
         "CREATE FUNCTION get_count() RETURNS integer AS $$ ... $$",
         set(),
-        {'return_type': 'int', 'returns_table': False, 'return_columns': [], 'returns_record': False, 'setof_table_name': None},
-        set()
+        {
+            "return_type": "int",
+            "returns_table": False,
+            "returns_record": False,
+            "returns_setof": False,
+            "return_columns": [],
+            "setof_table_name": None
+        },
+        set(),
     ),
-    # Scalar return (uuid)
+    # 2: RETURNS uuid
     (
         "CREATE FUNCTION generate_id() RETURNS uuid AS $$ ... $$",
         set(),
-        {'return_type': 'UUID', 'returns_table': False, 'return_columns': [], 'returns_record': False, 'setof_table_name': None},
-        {"UUID"}
+        {
+            "return_type": "UUID",
+            "returns_table": False,
+            "returns_record": False,
+            "returns_setof": False,
+            "return_columns": [],
+            "setof_table_name": None
+        },
+        {"UUID"},
     ),
-    # RECORD return
+    # 3: RETURNS record
     (
         "CREATE FUNCTION get_pair() RETURNS record AS $$ ... $$",
         set(),
-        {'return_type': 'Tuple', 'returns_table': False, 'return_columns': [], 'returns_record': True, 'setof_table_name': None},
-        {"Tuple"}
+        {
+            "return_type": "Tuple",
+            "returns_table": False,
+            "returns_record": True,
+            "returns_setof": False,
+            "return_columns": [],
+            "setof_table_name": None
+        },
+        {"Tuple"},
     ),
-    # Explicit RETURNS TABLE
+    # 4: RETURNS TABLE(...)
     (
-        "CREATE FUNCTION get_user_details() RETURNS TABLE(id int PRIMARY KEY, name text) AS $$ ... $$", # Added PRIMARY KEY
+        "CREATE FUNCTION get_user_details() RETURNS TABLE(id int PRIMARY KEY, name text) AS $$ ... $$",
         set(),
-        {'return_type': 'DataclassPlaceholder', 'returns_table': True,
-         'return_columns': [
-             ReturnColumn(name='id', sql_type='int', python_type='int', is_optional=False), # PK implies NOT NULL
-             ReturnColumn(name='name', sql_type='text', python_type='Optional[str]', is_optional=True)
-         ],
-         'returns_record': False, 'setof_table_name': None},
-        {"dataclass", "Optional"} # Optional comes from name text default
+        {
+            "return_type": "DataclassPlaceholder",
+            "returns_table": True,
+            "returns_record": False,
+            "returns_setof": False,
+            "return_columns": [
+                ReturnColumn(name='id', sql_type='int', python_type='int', is_optional=False),
+                ReturnColumn(name='name', sql_type='text', python_type='Optional[str]', is_optional=True)
+            ],
+            "setof_table_name": None
+        },
+        {"Optional", "dataclass"},
     ),
-    # SETOF scalar
+    # 5: RETURNS SETOF integer
     (
         "CREATE FUNCTION get_all_ids() RETURNS SETOF integer AS $$ ... $$",
         set(),
-        {'return_type': 'int', 'returns_table': False, 'return_columns': [], 'returns_record': False, 'setof_table_name': None},
-        set() # List import added later
+        {
+            "return_type": "int",
+            "returns_table": False,
+            "returns_record": False,
+            "returns_setof": True,
+            "return_columns": [],
+            "setof_table_name": None
+        },
+        set(),
     ),
-    # SETOF record
+    # 6: RETURNS SETOF record
     (
         "CREATE FUNCTION get_all_pairs() RETURNS SETOF record AS $$ ... $$",
         set(),
-        {'return_type': 'Tuple', 'returns_table': False, 'return_columns': [], 'returns_record': True, 'setof_table_name': None},
-        {"Tuple"} # List import added later
+        {
+            "return_type": "Tuple",
+            "returns_table": False,
+            "returns_record": True,
+            "returns_setof": True,
+            "return_columns": [],
+            "setof_table_name": None
+        },
+        {"Tuple"},
     ),
-    # SETOF table_name (schema FOUND) - MOCK needed
+    # 7: RETURNS SETOF users (known table)
     (
         "CREATE FUNCTION get_all_users() RETURNS SETOF users AS $$ ... $$",
         set(),
-        {'return_type': 'DataclassPlaceholder', 'returns_table': True,
-         'return_columns': [ # This comes from mocked TABLE_SCHEMAS
-             ReturnColumn(name='user_id', sql_type='uuid', python_type='UUID', is_optional=False),
-             ReturnColumn(name='email', sql_type='text', python_type='Optional[str]', is_optional=True)
-         ],
-         'returns_record': False, 'setof_table_name': 'users'},
-        {"dataclass", "UUID", "Optional"} # From mocked schema + dataclass
+        {
+            "return_type": "DataclassPlaceholder",
+            "returns_table": True,
+            "returns_record": False,
+            "returns_setof": True,
+            "return_columns": MOCK_TABLE_SCHEMAS_FOR_RETURNS["users"],
+            "setof_table_name": "users"
+        },
+        {"UUID", "Optional", "datetime", "dataclass"}, # Corrected imports
     ),
-     # SETOF table_name (schema NOT FOUND) - Use 'widgets'
+    # 8: RETURNS SETOF widgets (unknown table)
     (
         "CREATE FUNCTION get_all_widgets() RETURNS SETOF widgets AS $$ ... $$",
         set(),
-        {'return_type': 'DataclassPlaceholder', 'returns_table': True,
-         'return_columns': [ # Placeholder column
-             ReturnColumn(name='unknown', sql_type='widgets', python_type='Any')
-         ],
-         'returns_record': False, 'setof_table_name': 'widgets'},
-        {"dataclass", "Any"} # Any comes from placeholder
+        {
+            "return_type": "DataclassPlaceholder",
+            "returns_table": True,
+            "returns_record": False,
+            "returns_setof": True,
+            "return_columns": [ReturnColumn(name='unknown', sql_type='widgets', python_type='Any', is_optional=True)],
+            "setof_table_name": "widgets"
+        },
+        {"Any", "dataclass"},
     ),
-    # NEW: RETURNS table_name (schema FOUND) - MOCK needed
+    # 9: RETURNS users (known table)
     (
         "CREATE FUNCTION get_one_user(id int) RETURNS users AS $$ ... $$",
         set(),
-        {'return_type': 'DataclassPlaceholder', 'returns_table': True,
-         'return_columns': [ # This comes from mocked TABLE_SCHEMAS
-             ReturnColumn(name='user_id', sql_type='uuid', python_type='UUID', is_optional=False),
-             ReturnColumn(name='email', sql_type='text', python_type='Optional[str]', is_optional=True)
-         ],
-         'returns_record': False, 'setof_table_name': None}, # NOTE: setof_table_name is None here
-        {"dataclass", "UUID", "Optional"} # From mocked schema + dataclass
+        {
+            "return_type": "DataclassPlaceholder",
+            "returns_table": True,
+            "returns_record": False,
+            "returns_setof": False,
+            "return_columns": MOCK_TABLE_SCHEMAS_FOR_RETURNS["users"],
+            "setof_table_name": None
+        },
+        {"UUID", "Optional", "datetime", "dataclass"}, # Corrected imports
     ),
-     # NEW: RETURNS table_name (schema NOT FOUND) - Use 'widgets'
+    # 10: RETURNS widgets (unknown table)
     (
         "CREATE FUNCTION get_one_widget(pid int) RETURNS widgets AS $$ ... $$",
         set(),
-        # Should fall back to scalar Any mapping if schema not found
-        {'return_type': 'Any', 'returns_table': False, 'return_columns': [], 'returns_record': False, 'setof_table_name': None},
-        {"Any"}
+        {
+            "return_type": "Any",
+            "returns_table": False,
+            "returns_record": False,
+            "returns_setof": False,
+            "return_columns": [],
+            "setof_table_name": None
+        },
+        {"Any"},
     ),
-    # NEW: RETURNS schema.table_name (schema FOUND) - MOCK needed
+    # 11: RETURNS store.products (known schema-qualified table)
     (
         "CREATE FUNCTION get_one_product_schema(pid int) RETURNS store.products AS $$ ... $$",
         set(),
-        {'return_type': 'DataclassPlaceholder', 'returns_table': True,
-         'return_columns': [ # Mocked schema for 'products'
-             ReturnColumn(name='product_id', sql_type='int', python_type='int', is_optional=False),
-             ReturnColumn(name='name', sql_type='varchar', python_type='Optional[str]', is_optional=True)
-         ],
-         'returns_record': False, 'setof_table_name': None},
-        {"dataclass", "Optional"}
+        {
+            "return_type": "DataclassPlaceholder",
+            "returns_table": True,
+            "returns_record": False,
+            "returns_setof": False,
+            "return_columns": MOCK_TABLE_SCHEMAS_FOR_RETURNS["products"],
+            "setof_table_name": None
+        },
+        {"Optional", "Decimal", "dataclass"}, # Corrected imports
     ),
-    # NEW: SETOF schema.table_name (schema FOUND) - MOCK needed
+    # 12: RETURNS SETOF store.products (known schema-qualified table)
     (
         "CREATE FUNCTION get_all_products_schema() RETURNS SETOF store.products AS $$ ... $$",
         set(),
-        {'return_type': 'DataclassPlaceholder', 'returns_table': True,
-         'return_columns': [ # Mocked schema for 'products'
-             ReturnColumn(name='product_id', sql_type='int', python_type='int', is_optional=False),
-             ReturnColumn(name='name', sql_type='varchar', python_type='Optional[str]', is_optional=True)
-         ],
-         'returns_record': False, 'setof_table_name': 'store.products'}, # NOTE: setof_table_name should include schema
-        {"dataclass", "Optional"}
+        {
+            "return_type": "DataclassPlaceholder",
+            "returns_table": True,
+            "returns_record": False,
+            "returns_setof": True,
+            "return_columns": MOCK_TABLE_SCHEMAS_FOR_RETURNS["products"],
+            "setof_table_name": "store.products"
+        },
+        {"Optional", "Decimal", "dataclass"}, # Corrected imports
     ),
-
 ]
 
-# Mock schemas for tests needing them
-MOCK_TABLE_SCHEMAS = {
-    'users': [
-        ReturnColumn(name='user_id', sql_type='uuid', python_type='UUID', is_optional=False),
-        ReturnColumn(name='email', sql_type='text', python_type='Optional[str]', is_optional=True)
-    ],
-    'products': [ # Used for store.products tests
-        ReturnColumn(name='product_id', sql_type='int', python_type='int', is_optional=False),
-        ReturnColumn(name='name', sql_type='varchar', python_type='Optional[str]', is_optional=True)
-    ]
-}
-MOCK_TABLE_SCHEMA_IMPORTS = {
-    'users': {"UUID", "Optional"},
-    'products': {"Optional"}
-}
 
 @pytest.mark.parametrize("function_sql, initial_imports, expected_props, expected_imports_delta", parse_return_test_cases)
 def test_parse_return_clause(function_sql: str, initial_imports: set, expected_props: dict, expected_imports_delta: set):
@@ -538,8 +624,8 @@ def test_parse_return_clause(function_sql: str, initial_imports: set, expected_p
     assert match is not None, f"Regex failed to match test SQL: {function_sql}"
 
     # Use patch to temporarily replace the global schema dicts for relevant tests
-    with patch.dict(parser.TABLE_SCHEMAS, MOCK_TABLE_SCHEMAS, clear=True), \
-         patch.dict(parser.TABLE_SCHEMA_IMPORTS, MOCK_TABLE_SCHEMA_IMPORTS, clear=True):
+    with patch.dict(parser.TABLE_SCHEMAS, MOCK_TABLE_SCHEMAS_FOR_RETURNS, clear=True), \
+         patch.dict(parser.TABLE_SCHEMA_IMPORTS, MOCK_TABLE_SCHEMA_IMPORTS_FOR_RETURNS, clear=True):
 
         # Make a deep copy of initial imports to avoid modification across tests
         initial_imports_copy = copy.deepcopy(initial_imports)
