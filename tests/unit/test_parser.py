@@ -24,6 +24,8 @@ from sql2pyapi.sql_models import (
     TYPE_MAP, # Keep if tests assert against it directly
     PYTHON_IMPORTS # Keep if tests assert against it directly
 )
+# Import the new comment parser functions directly
+from sql2pyapi.comment_parser import clean_comment_block, find_preceding_comment
 
 # Define mock table schemas at module level (potentially used by other tests)
 # These might need deepcopy if modified by tests
@@ -136,17 +138,10 @@ map_type_test_cases = [
 @pytest.mark.parametrize("sql_type, is_optional, expected_py_type, expected_imports", map_type_test_cases)
 def test_map_sql_to_python_type(sql_type: str, is_optional: bool, expected_py_type: str, expected_imports: Set[str]):
     """Tests the _map_sql_to_python_type method with various inputs."""
-    # Instantiate parser
     parser_instance = SQLParser()
-    # Call the method on the instance
     py_type, imports = parser_instance._map_sql_to_python_type(sql_type, is_optional)
-
-    # Check the Python type
     assert py_type == expected_py_type
-
-    # Check the imports
-    returned_imports = imports
-    assert returned_imports == expected_imports
+    assert imports == expected_imports
 
 # --- Tests for _parse_params --- 
 
@@ -197,9 +192,7 @@ parse_params_test_cases = [
 @pytest.mark.parametrize("param_str, expected_params, expected_imports", parse_params_test_cases)
 def test_parse_params(param_str: str, expected_params: List[SQLParameter], expected_imports: Set[str]):
     """Tests the _parse_params method with various input strings."""
-    # Instantiate parser
     parser_instance = SQLParser()
-    # Call the method on the instance
     params, required_imports = parser_instance._parse_params(param_str)
     assert params == expected_params
     assert required_imports == expected_imports
@@ -295,9 +288,7 @@ parse_columns_test_cases = [
 @pytest.mark.parametrize("col_defs_str, expected_cols, expected_imports", parse_columns_test_cases)
 def test_parse_column_definitions(col_defs_str: str, expected_cols: List[ReturnColumn], expected_imports: Set[str]):
     """Tests the _parse_column_definitions method with various input strings."""
-    # Instantiate parser
     parser_instance = SQLParser()
-    # Call the method on the instance
     columns, required_imports = parser_instance._parse_column_definitions(col_defs_str)
     assert columns == expected_cols
     assert required_imports == expected_imports
@@ -336,16 +327,16 @@ clean_comment_test_cases = [
     # Windows newlines (passed as string literals) - Dedent removes star
     (["/* Line 1\r", "Line 2 */"], "Line 1\nLine 2"),
     (["-- Line 1\r", "-- Line 2"], "Line 1\nLine 2"),
+    (["/* Line 1\r", "Line 2 */"], "Line 1\nLine 2"),
+    (["-- Line 1\r", "-- Line 2"], "Line 1\nLine 2"),
 ]
 
 
 @pytest.mark.parametrize("comment_lines, expected", clean_comment_test_cases)
 def test_clean_comment_block(comment_lines: List[str], expected: str):
-    """Tests the _clean_comment_block method."""
-    # Instantiate parser
-    parser_instance = SQLParser()
-    # Call the method on the instance
-    cleaned_comment = parser_instance._clean_comment_block(comment_lines)
+    """Tests the clean_comment_block function from comment_parser."""
+    # Call the imported function directly
+    cleaned_comment = clean_comment_block(comment_lines)
     assert cleaned_comment == expected
 
 
@@ -387,11 +378,9 @@ find_comment_test_cases = [
 
 @pytest.mark.parametrize("lines, func_start_line_idx, expected_comment", find_comment_test_cases)
 def test_find_preceding_comment(lines: List[str], func_start_line_idx: int, expected_comment: Optional[str]):
-    """Tests the _find_preceding_comment method."""
-    # Instantiate parser
-    parser_instance = SQLParser()
-    # Call the method on the instance
-    comment = parser_instance._find_preceding_comment(lines, func_start_line_idx)
+    """Tests the find_preceding_comment function from comment_parser."""
+    # Call the imported function directly
+    comment = find_preceding_comment(lines, func_start_line_idx)
     assert comment == expected_comment
 
 
