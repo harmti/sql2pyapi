@@ -460,9 +460,106 @@ class SQLParser:
 
         return params, required_imports
 
+    # --- Start: New helper methods for _parse_return_clause ---
+
+    def _handle_returns_table(self, table_columns_str: str, initial_imports: set, function_name: str) -> Tuple[dict, set]:
+        """Handles the logic for 'RETURNS TABLE(...)' clauses."""
+        returns_info = {
+            "return_type": "DataclassPlaceholder",
+            "returns_table": True,
+            "return_columns": [],
+        }
+        current_imports = initial_imports.copy()
+        current_imports.add("dataclass") # Dataclass needed for table return
+
+        if table_columns_str:
+            try:
+                context_msg = f"RETURNS TABLE of function {function_name or 'unknown'}"
+                cols, col_imports = self._parse_column_definitions(table_columns_str, context=context_msg)
+                returns_info["return_columns"] = cols
+                current_imports.update(col_imports)
+            except ParsingError as e:
+                raise ReturnTypeError(f"Error parsing columns in {context_msg}: {e}") from e
+
+        return returns_info, current_imports
+
+    def _handle_returns_type_name(self, sql_return_type: str, is_setof: bool, initial_imports: set, function_name: str) -> Tuple[dict, set]:
+        """Handles the logic for 'RETURNS [SETOF] type_name' clauses."""
+        returns_info = {
+            "return_type": "None", # Default base type
+            "returns_record": False,
+            "returns_table": False, # May be set true later if table name found
+            "return_columns": [],
+            "setof_table_name": None,
+        }
+        current_imports = initial_imports.copy()
+
+        if sql_return_type == "void":
+            returns_info["return_type"] = "None"
+
+        elif sql_return_type == "record":
+            returns_info["returns_record"] = True
+            returns_info["return_type"] = "Tuple"
+            current_imports.add("Tuple")
+
+        else:
+            # Could be table name or scalar
+            table_key_qualified = sql_return_type
+            table_key_normalized = table_key_qualified.split('.')[-1]
+
+            schema_found = False
+            table_key_to_use = None
+            if table_key_qualified in self.table_schemas:
+                schema_found = True
+                table_key_to_use = table_key_qualified
+            elif table_key_normalized in self.table_schemas:
+                schema_found = True
+                table_key_to_use = table_key_normalized
+
+            if schema_found:
+                # Known table name
+                returns_info["returns_table"] = True
+                returns_info["return_columns"] = self.table_schemas.get(table_key_to_use, [])
+                current_imports.update(self.table_schema_imports.get(table_key_to_use, set()))
+                current_imports.add("dataclass")
+                if is_setof:
+                    returns_info["setof_table_name"] = table_key_qualified
+                returns_info["return_type"] = "DataclassPlaceholder"
+            else:
+                # Scalar type OR unknown table name
+                try:
+                    context_msg = f"return type of function {function_name or 'unknown'}"
+                    py_type, type_imports = self._map_sql_to_python_type(sql_return_type, is_optional=False, context=context_msg)
+                    current_imports.update(type_imports)
+                    returns_info["return_type"] = py_type # Store the BASE type
+
+                    # Special handling for unknown SETOF table (widgets test case)
+                    if py_type == "Any" and is_setof:
+                        returns_info["returns_table"] = True
+                        # Create a default ReturnColumn assuming nullable
+                        returns_info["return_columns"] = [ReturnColumn(name="unknown", sql_type=sql_return_type, python_type="Optional[Any]", is_optional=True)]
+                        current_imports.update({"Optional", "Any", "dataclass"})
+                        returns_info["setof_table_name"] = sql_return_type
+                        returns_info["return_type"] = "DataclassPlaceholder" # Set base type
+                    # Special handling for unknown non-SETOF table (widgets test case)
+                    elif sql_return_type == 'widgets' and not is_setof:
+                        returns_info["return_type"] = "Any" # Explicitly match test expectation
+                        current_imports.add("Any")
+                    elif py_type == "Any":
+                        logging.warning(f"Return type '{sql_return_type}' mapped to Any for {function_name or 'unknown'}. Interpreting as scalar Any.")
+
+                except TypeMappingError:
+                    logging.error(f"Type mapping failed unexpectedly for {sql_return_type}. Using Any.")
+                    returns_info["return_type"] = "Any" # Store BASE type Any
+                    current_imports.add("Any")
+
+        return returns_info, current_imports
+
+    # --- End: New helper methods ---
+
     def _parse_return_clause(self, match: re.Match, initial_imports: set, function_name: str = None) -> Tuple[dict, set]:
         """
-        Parses the RETURNS clause of a CREATE FUNCTION statement.
+        Parses the RETURNS clause of a CREATE FUNCTION statement using helper methods.
 
         Args:
             match (re.Match): The regex match object from FUNCTION_REGEX.
@@ -479,115 +576,43 @@ class SQLParser:
                 - 'return_columns': List[ReturnColumn] (for RETURNS TABLE)
                 - 'setof_table_name': str (for RETURNS SETOF table_name)
         """
-        # Initialize default properties
+        # Initialize default properties, including is_setof
         returns_info = {
-            "return_type": "None", # <<< Store BASE type here
+            "return_type": "None",
             "returns_table": False,
             "returns_record": False,
-            "returns_setof": False,
+            "returns_setof": match.group(3) is not None, # Determine SETOF flag early
             "return_columns": [],
             "setof_table_name": None,
         }
         current_imports = initial_imports.copy()
 
-        # Determine SETOF flag
-        is_setof = match.group(3) is not None
-        if is_setof:
-            returns_info["returns_setof"] = True
-            # Don't add 'List' import here
-
+        # Extract parts from regex match
         returns_table_keyword = match.group(4) is not None
         table_columns_str = match.group(5)
         return_type_name = match.group(6)
 
+        # Delegate to helper methods
+        partial_info = {}
         if returns_table_keyword:
             # Case: RETURNS TABLE(...)
-            returns_info["returns_table"] = True
-            current_imports.add("dataclass") # Use key from PYTHON_IMPORTS
-            if table_columns_str:
-                try:
-                    # Use self method
-                    context_msg = f"RETURNS TABLE of function {function_name or 'unknown'}" # Corrected context
-                    cols, col_imports = self._parse_column_definitions(table_columns_str, context=context_msg)
-                    returns_info["return_columns"] = cols
-                    current_imports.update(col_imports)
-                except ParsingError as e:
-                    raise ReturnTypeError(f"Error parsing columns in RETURNS TABLE of {function_name or 'unknown'}: {e}") from e
-            # Use DataclassPlaceholder as base type
-            returns_info["return_type"] = "DataclassPlaceholder"
-            # Placeholder doesn't require Any import itself
-
+            partial_info, current_imports = self._handle_returns_table(
+                table_columns_str, current_imports, function_name
+            )
         elif return_type_name:
             # Case: RETURNS [SETOF] type_name
             sql_return_type = return_type_name.strip().lower()
+            partial_info, current_imports = self._handle_returns_type_name(
+                sql_return_type, returns_info["returns_setof"], current_imports, function_name
+            )
 
-            if sql_return_type == "void":
-                returns_info["return_type"] = "None" # Store BASE type
-
-            elif sql_return_type == "record":
-                returns_info["returns_record"] = True
-                returns_info["return_type"] = "Tuple" # Store BASE type
-                current_imports.add("Tuple") # Use key from PYTHON_IMPORTS
-
-            else:
-                # Could be table name or scalar
-                table_key_qualified = sql_return_type
-                table_key_normalized = table_key_qualified.split('.')[-1]
-
-                schema_found = False
-                table_key_to_use = None
-                # Use self.table_schemas and self.table_schema_imports
-                if table_key_qualified in self.table_schemas:
-                     schema_found = True
-                     table_key_to_use = table_key_qualified
-                elif table_key_normalized in self.table_schemas:
-                     schema_found = True
-                     table_key_to_use = table_key_normalized
-
-                if schema_found:
-                    # Known table name
-                    returns_info["returns_table"] = True
-                    returns_info["return_columns"] = self.table_schemas.get(table_key_to_use, [])
-                    current_imports.update(self.table_schema_imports.get(table_key_to_use, set()))
-                    current_imports.add("dataclass") # Use key from PYTHON_IMPORTS
-                    if is_setof:
-                         returns_info["setof_table_name"] = table_key_qualified
-                    returns_info["return_type"] = "DataclassPlaceholder" # Store BASE type
-                else:
-                     # Scalar type OR unknown table name
-                     try:
-                          # Map SQL type to base Python type (is_optional=False) (use self)
-                          context_msg = f"return type of function {function_name or 'unknown'}"
-                          py_type, type_imports = self._map_sql_to_python_type(sql_return_type, is_optional=False, context=context_msg)
-                          current_imports.update(type_imports)
-                          returns_info["return_type"] = py_type # Store the BASE type
-
-                          # Special handling for unknown SETOF table (widgets test case)
-                          if py_type == "Any" and is_setof:
-                               returns_info["returns_table"] = True
-                               # Create a default ReturnColumn assuming nullable
-                               returns_info["return_columns"] = [ReturnColumn(name="unknown", sql_type=sql_return_type, python_type="Optional[Any]", is_optional=True)]
-                               current_imports.add("Optional") # Add Optional for the column
-                               returns_info["setof_table_name"] = sql_return_type
-                               returns_info["return_type"] = "DataclassPlaceholder" # Set base type
-                               current_imports.add("dataclass") # Use key from PYTHON_IMPORTS
-                               current_imports.add("Any") # For the unknown column type itself
-                          # Special handling for unknown non-SETOF table (widgets test case)
-                          elif sql_return_type == 'widgets' and not is_setof:
-                                returns_info["return_type"] = "Any" # Explicitly match test expectation
-                                current_imports.add("Any")
-                          elif py_type == "Any":
-                                logging.warning(f"Return type '{sql_return_type}' mapped to Any for {function_name or 'unknown'}. Interpreting as scalar Any.")
-
-                     except TypeMappingError:
-                          logging.error(f"Type mapping failed unexpectedly for {sql_return_type}. Using Any.")
-                          returns_info["return_type"] = "Any" # Store BASE type Any
-                          current_imports.add("Any")
+        # Update the main returns_info dictionary with results from helpers
+        returns_info.update(partial_info)
 
         # Clean up imports (remove None if present)
         current_imports.discard(None)
 
-        # Now returns_info["return_type"] should contain the base type matching unit tests
+        # Now returns_info should contain the base type and other details
         return returns_info, current_imports
 
     def parse(self, sql_content: str, schema_content: Optional[str] = None) -> Tuple[List[ParsedFunction], Dict[str, set]]:
