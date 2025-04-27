@@ -370,96 +370,93 @@ class SQLParser:
                     sql_snippet=col_defs_str_cleaned[:100] + "..."
                 ) from e
 
+    def _parse_single_param_definition(self, param_def: str, context: str) -> Optional[Tuple[SQLParameter, Set[str]]]:
+        """Parses a single parameter definition string. Returns SQLParameter and its imports, or None."""
+        param_regex = _PARAM_REGEX # Use module-level regex
+        match = param_regex.match(param_def)
+        
+        if not match:
+            # Cannot parse this fragment as a standalone parameter
+            # Recovery for split types (like numeric(10,2)) is handled in the caller
+            return None
+
+        sql_name = match.group(2).strip()
+        sql_type = match.group(3).strip()
+        remainder = match.group(4)
+        remainder = remainder.strip() if remainder else ""
+        is_optional = remainder.lower().startswith("default")
+
+        # Generate Pythonic name
+        python_name = sql_name
+        if python_name.startswith("p_") and len(python_name) > 2:
+            python_name = python_name[2:]
+        elif python_name.startswith("_") and len(python_name) > 1:
+            python_name = python_name[1:]
+
+        # Map SQL type to Python type
+        param_context = f"parameter '{sql_name}'" + (f" in {context}" if context else "")
+        try:
+            py_type, imports = self._map_sql_to_python_type(sql_type, is_optional, param_context)
+        except TypeMappingError as e:
+            logging.warning(str(e))
+            py_type = "Any" if not is_optional else "Optional[Any]"
+            imports = {"Any", "Optional"} if is_optional else {"Any"}
+
+        param = SQLParameter(
+            name=sql_name,
+            python_name=python_name,
+            sql_type=sql_type,
+            python_type=py_type,
+            is_optional=is_optional,
+        )
+        return param, imports
+
     def _parse_params(self, param_str: str, context: str = None) -> Tuple[List[SQLParameter], set]:
         """
         Parses parameter string including optional DEFAULT values.
-
-        Args:
-            param_str (str): The parameter string to parse
-            context (str, optional): Context information for error reporting
-
-        Returns:
-            Tuple[List[SQLParameter], set]: List of parsed parameters and required imports
-
-        Raises:
-            ParsingError: If parameter definitions cannot be parsed correctly
+        Uses a helper to parse individual definitions.
         """
         params = []
         required_imports = set()
         if not param_str:
             return params, required_imports
 
-        # Use module-level regex
-        param_regex = _PARAM_REGEX
-
-        # Split by comma, but handle potential commas inside DEFAULT strings or type definitions
-        # Basic split works for now, complexity increases if defaults contain commas
+        # Split by comma first
         param_defs = param_str.split(",")
+        
+        current_context = f"function '{context}'" if context else "unknown function"
 
         for param_def in param_defs:
             param_def = param_def.strip()
             if not param_def:
                 continue
 
-            match = param_regex.match(param_def)
-            if not match:
-                # Handle the case where split might happen inside parens like numeric(10, 2)
-                # This is a basic recovery attempt
+            # Attempt to parse the fragment using the helper
+            parse_result = self._parse_single_param_definition(param_def, current_context)
+
+            if parse_result:
+                param, imports = parse_result
+                params.append(param)
+                required_imports.update(imports)
+            else:
+                # If helper failed, check for recovery case (split type)
                 if params and ')' not in params[-1].sql_type and ')' in param_def:
-                    # Attempt to recover from a split inside a type definition (e.g., numeric(10, 2))
-                    param_context = f"parameter '{params[-1].name}'" + (f" in {context}" if context else "")
-                    logging.debug(f"Attempting recovery for split inside type: appending '{param_def}' to {param_context}")
+                    param_context_recovery = f"parameter '{params[-1].name}' in {current_context}"
+                    logging.debug(f"Attempting recovery for split inside type: appending '{param_def}' to {param_context_recovery}")
                     params[-1].sql_type += "," + param_def
-                    # Re-run type mapping for the corrected type (use self)
+                    # Re-run type mapping for the corrected type
                     try:
-                        py_type, imports = self._map_sql_to_python_type(params[-1].sql_type, params[-1].is_optional, param_context)
+                        py_type, imports = self._map_sql_to_python_type(params[-1].sql_type, params[-1].is_optional, param_context_recovery)
                         params[-1].python_type = py_type
                         required_imports.update(imports)
                     except TypeMappingError as e:
                         logging.warning(str(e))
-                    continue # Skip rest of processing for this fragment
+                    # Continue to next fragment after recovery attempt
                 else:
-                    error_msg = f"Could not parse parameter definition: {param_def}"
-                    if context:
-                        error_msg += f" in {context}"
-                    logging.warning(error_msg)
-                    continue
-
-            # mode = match.group(1) # Currently unused
-            sql_name = match.group(2).strip()
-            sql_type = match.group(3).strip()
-            remainder = match.group(4) # Includes 'DEFAULT ...'
-            remainder = remainder.strip() if remainder else ""
-
-            is_optional = remainder.lower().startswith("default")
-
-            # Generate Pythonic name
-            python_name = sql_name
-            if python_name.startswith("p_") and len(python_name) > 2:
-                python_name = python_name[2:]
-            elif python_name.startswith("_") and len(python_name) > 1:
-                python_name = python_name[1:]
-
-            # Map SQL type to Python type with error handling (use self)
-            param_context = f"parameter '{sql_name}'" + (f" in {context}" if context else "")
-            try:
-                py_type, imports = self._map_sql_to_python_type(sql_type, is_optional, param_context)
-                required_imports.update(imports)
-            except TypeMappingError as e:
-                # Log the error but continue with Any as fallback
-                logging.warning(str(e))
-                py_type = "Any" if not is_optional else "Optional[Any]"
-                required_imports.update({"Any", "Optional"} if is_optional else {"Any"})
-
-            params.append(
-                SQLParameter(
-                    name=sql_name,
-                    python_name=python_name,
-                    sql_type=sql_type,
-                    python_type=py_type,
-                    is_optional=is_optional,
-                )
-            )
+                    # If not a recovery case, log warning for unparseable fragment
+                    error_msg = f"Could not parse parameter definition fragment: {param_def}"
+                    logging.warning(f"{error_msg} in {current_context}")
+                    # Optionally, could add a placeholder parameter or raise error
 
         return params, required_imports
 
