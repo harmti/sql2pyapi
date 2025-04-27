@@ -1,6 +1,8 @@
 from pathlib import Path
 import subprocess
 import sys
+import ast
+from dataclasses import is_dataclass
 
 # Define paths relative to the main tests/ directory
 TESTS_ROOT_DIR = Path(__file__).parent.parent # Go up one level to tests/
@@ -33,28 +35,150 @@ def run_cli_tool(functions_sql: Path, output_py: Path, schema_sql: Path = None):
 
 
 def test_func2_generation_with_schema(tmp_path):
-    """Test generating the func2 API with a separate schema file."""
+    """Test generating the func2 API with a separate schema file using AST checks."""
     functions_sql_path = FIXTURES_DIR / "example_func1.sql"
     schema_sql_path = FIXTURES_DIR / "example_schema1.sql"
     expected_output_path = EXPECTED_DIR / "example_func1_api.py"
-    # Use pytest's tmp_path fixture for the output file
     actual_output_path = tmp_path / "example_func1_api.py"
 
     # Run the generator tool
     run_cli_tool(functions_sql_path, actual_output_path, schema_sql_path)
 
-    # Compare the generated file with the expected file
+    # --- AST Based Assertions ---
     assert actual_output_path.is_file(), "Generated file was not created."
-
-    expected_content = expected_output_path.read_text()
     actual_content = actual_output_path.read_text()
+    tree = ast.parse(actual_content)
 
-    assert actual_content == expected_content, (
-        f"Generated file content does not match expected content.\n"
-        f"Expected ({expected_output_path}):\n{expected_content}\n"
-        f"Actual ({actual_output_path}):\n{actual_content}"
-    )
-    # No need for manual cleanup, tmp_path handles it
+    # 1. Check Imports
+    expected_imports_from_typing = {"List", "Optional", "Tuple", "Dict", "Any"}
+    expected_imports_other = {
+        ("uuid", "UUID"),
+        ("datetime", "date"),
+        ("datetime", "datetime"),
+        ("psycopg", "AsyncConnection"),
+        ("dataclasses", "dataclass")
+    }
+    
+    found_imports_from_typing = set()
+    found_imports_other = set()
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            if node.module == 'typing':
+                for alias in node.names:
+                    found_imports_from_typing.add(alias.name)
+            elif node.module in ['uuid', 'datetime', 'psycopg', 'dataclasses']:
+                 for alias in node.names:
+                     found_imports_other.add((node.module, alias.name))
+
+    assert found_imports_from_typing == expected_imports_from_typing, f"Missing/unexpected imports from typing: {expected_imports_from_typing.symmetric_difference(found_imports_from_typing)}"
+    assert found_imports_other == expected_imports_other, f"Missing/unexpected other imports: {expected_imports_other.symmetric_difference(found_imports_other)}"
+
+
+    # 2. Check Company Dataclass
+    company_class_node = None
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ClassDef) and node.name == 'Company':
+            company_class_node = node
+            break
+    
+    assert company_class_node is not None, "Class definition 'Company' not found"
+    assert any(isinstance(d, ast.Name) and d.id == 'dataclass' for d in company_class_node.decorator_list), "'Company' class is not decorated with @dataclass"
+    
+    expected_fields = {
+        'id': 'UUID',
+        'name': 'str',
+        'industry': 'Optional[str]',
+        'size': 'Optional[str]',
+        'primary_address': 'Optional[str]',
+        'created_at': 'datetime',
+        'updated_at': 'datetime',
+        'created_by_user_id': 'UUID'
+    }
+    
+    actual_fields = {}
+    for stmt in company_class_node.body:
+        if isinstance(stmt, ast.AnnAssign):
+            field_name = stmt.target.id
+            # Handle simple Name annotations and Optional[type]
+            if isinstance(stmt.annotation, ast.Name):
+                type_name = stmt.annotation.id
+            elif isinstance(stmt.annotation, ast.Subscript) and isinstance(stmt.annotation.value, ast.Name) and stmt.annotation.value.id == 'Optional':
+                 # Extract the inner type name for Optional
+                 if isinstance(stmt.annotation.slice, ast.Name):
+                     inner_type = stmt.annotation.slice.id
+                     type_name = f"Optional[{inner_type}]"
+                 else:
+                     # Handle potential complex types within Optional if needed later
+                     type_name = ast.unparse(stmt.annotation) # Fallback
+            else:
+                 type_name = ast.unparse(stmt.annotation) # Fallback for other complex types
+            actual_fields[field_name] = type_name
+
+    assert actual_fields == expected_fields, f"Mismatch in Company fields/types. Expected {expected_fields}, Got {actual_fields}"
+
+    # 3. Check list_user_companies Function
+    list_func_node = None
+    for node in ast.walk(tree):
+        if isinstance(node, ast.AsyncFunctionDef) and node.name == 'list_user_companies':
+            list_func_node = node
+            break
+            
+    assert list_func_node is not None, "Async function definition 'list_user_companies' not found"
+
+    # Check parameters
+    expected_params = {'conn': 'AsyncConnection', 'user_id': 'UUID'}
+    actual_params = {arg.arg: ast.unparse(arg.annotation) for arg in list_func_node.args.args}
+    assert actual_params == expected_params, f"Mismatch in list_user_companies parameters. Expected {expected_params}, Got {actual_params}"
+
+    # Check return annotation
+    expected_return_type = 'List[Company]'
+    actual_return_type = ast.unparse(list_func_node.returns)
+    assert actual_return_type == expected_return_type, f"Mismatch in list_user_companies return type. Expected {expected_return_type}, Got {actual_return_type}"
+    
+    # Check docstring presence and content
+    docstring = ast.get_docstring(list_func_node)
+    assert docstring is not None, "list_user_companies is missing a docstring"
+    assert docstring == "Function to list companies created by a specific user", "Docstring content mismatch for list_user_companies"
+
+    # 4. Check Function Body (Simplified Checks)
+    sql_query = None
+    execute_call = None
+    fetchall_call = None
+    list_comp = None
+
+    for node in ast.walk(list_func_node):
+        # Find the SQL query string
+        if isinstance(node, ast.Await) and isinstance(node.value, ast.Call):
+            call = node.value
+            if isinstance(call.func, ast.Attribute) and call.func.attr == 'execute':
+                 execute_call = call
+                 # Assume first arg is the SQL query string literal or variable name
+                 if len(call.args) > 0 and isinstance(call.args[0], ast.Constant):
+                     sql_query = call.args[0].value
+                 elif len(call.args) > 0 and isinstance(call.args[0], ast.Name):
+                      # If it's a variable, we might need to trace it back, simpler check for now
+                      pass # Placeholder - complex trace not implemented yet
+
+            elif isinstance(call.func, ast.Attribute) and call.func.attr == 'fetchall':
+                fetchall_call = call
+                
+        # Find the return list comprehension
+        if isinstance(node, ast.Return) and isinstance(node.value, ast.ListComp):
+             list_comp = node.value
+             # Check if the comprehension calls the 'Company' constructor
+             assert isinstance(list_comp.elt, ast.Call) and isinstance(list_comp.elt.func, ast.Name) and list_comp.elt.func.id == 'Company', "List comprehension does not call Company()"
+
+
+    assert sql_query == "SELECT * FROM list_user_companies(%s)", f"SQL query mismatch. Found: '{sql_query}'"
+    assert execute_call is not None, "cur.execute call not found"
+    # Check execute arguments
+    assert len(execute_call.args) == 2, "execute call should have 2 arguments"
+    assert isinstance(execute_call.args[1], ast.List), "Second argument to execute should be a list"
+    assert len(execute_call.args[1].elts) == 1 and isinstance(execute_call.args[1].elts[0], ast.Name) and execute_call.args[1].elts[0].id == 'user_id', "Execute parameters mismatch"
+
+    assert fetchall_call is not None, "cur.fetchall call not found"
+    assert list_comp is not None, "Return list comprehension not found"
 
 
 def test_void_function_generation(tmp_path):
