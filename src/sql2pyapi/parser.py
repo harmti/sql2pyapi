@@ -1,55 +1,34 @@
 # ===== SECTION: IMPORTS =====
 import re
-from dataclasses import dataclass, field
-from typing import List, Dict, Optional, Tuple
+# Removed dataclasses, field, List, Dict, Optional, Tuple - will be imported via sql_models
+# Also removing type-specific imports like UUID, datetime, date, Decimal, Any as they are in sql_models
 import logging
 import textwrap
-import math
+import math # Keep math if used elsewhere, otherwise remove
 from pathlib import Path
 import copy
+from typing import List, Dict, Optional, Tuple, Set # Keep base typing imports needed by parser itself
 
 # Import custom error classes
 from .errors import ParsingError, FunctionParsingError, TableParsingError, TypeMappingError, ReturnTypeError
 
+# Import the extracted models and constants
+from .sql_models import (
+    TYPE_MAP,
+    PYTHON_IMPORTS,
+    SQLParameter,
+    ReturnColumn,
+    ParsedFunction,
+    # Also import necessary types used by the models if needed directly in annotations here
+    # (e.g., UUID, datetime, date, Decimal, Any, List, Dict, Tuple, Optional)
+    # For now, assuming they are only used *within* the models or mapped types
+)
+
 # ===== SECTION: TYPE MAPS AND CONSTANTS =====
 # Basic PostgreSQL to Python type mapping
-TYPE_MAP = {
-    "uuid": "UUID",
-    "text": "str",
-    "varchar": "str",
-    "character varying": "str",  # Explicitly map this
-    "character": "str",         # Add mapping for 'character' base type
-    "integer": "int",
-    "int": "int",
-    "bigint": "int",  # Consider using int in Python 3, as it has arbitrary precision
-    "smallint": "int",
-    "serial": "int",  # Add serial mapping
-    "bigserial": "int",  # Add bigserial mapping
-    "boolean": "bool",
-    "bool": "bool",
-    "timestamp": "datetime",
-    "timestamp without time zone": "datetime",
-    "timestamptz": "datetime",  # Often preferred
-    "timestamp with time zone": "datetime",
-    "date": "date",
-    "numeric": "Decimal",
-    "decimal": "Decimal",
-    "json": "dict",  # Or Any, depending on usage
-    "jsonb": "dict",  # Or Any
-    "bytea": "bytes",
-    # Add more mappings as needed
-}
+# TYPE_MAP = { ... } # MOVED to sql_models.py
 
-PYTHON_IMPORTS = {
-    "UUID": "from uuid import UUID",
-    "datetime": "from datetime import datetime",  # Import only datetime
-    "date": "from datetime import date",  # Import only date
-    "Decimal": "from decimal import Decimal",
-    "Any": "from typing import Any",  # Import for Any
-    "List": "from typing import List",  # Import for List
-    "Dict": "from typing import Dict",  # Import for Dict
-    "Tuple": "from typing import Tuple",  # Import for Tuple
-}
+# PYTHON_IMPORTS = { ... } # MOVED to sql_models.py
 
 
 # ===== SECTION: DATA STRUCTURES =====
@@ -57,75 +36,17 @@ PYTHON_IMPORTS = {
 
 # SQLParsingError has been replaced by the error hierarchy in errors.py
 
+# @dataclass
+# class SQLParameter: # MOVED to sql_models.py
+#     ...
 
-@dataclass
-class SQLParameter:
-    """
-    Represents a parameter in a SQL function.
-    
-    Attributes:
-        name (str): Original SQL parameter name (e.g., 'p_user_id')
-        python_name (str): Pythonic parameter name (e.g., 'user_id')
-        sql_type (str): Original SQL type (e.g., 'uuid')
-        python_type (str): Mapped Python type (e.g., 'UUID')
-        is_optional (bool): Whether the parameter has a DEFAULT value in SQL
-    """
-    name: str
-    python_name: str
-    sql_type: str
-    python_type: str
-    is_optional: bool = False
+# @dataclass
+# class ReturnColumn: # MOVED to sql_models.py
+#     ...
 
-
-@dataclass
-class ReturnColumn:
-    """
-    Represents a column in a table or a field in a composite return type.
-    
-    Attributes:
-        name (str): Column name
-        sql_type (str): Original SQL type
-        python_type (str): Mapped Python type
-        is_optional (bool): Whether the column can be NULL
-    """
-    name: str
-    sql_type: str
-    python_type: str
-    is_optional: bool = True
-
-
-@dataclass
-class ParsedFunction:
-    """
-    Represents a parsed SQL function with all its metadata.
-    
-    This is the main data structure that holds all information about a SQL function
-    after parsing, including its name, parameters, return type, and other properties.
-    
-    Attributes:
-        sql_name (str): Original SQL function name
-        python_name (str): Pythonic function name (usually the same)
-        params (List[SQLParameter]): List of function parameters
-        return_type (str): Python return type (e.g., 'int', 'List[User]')
-        return_columns (List[ReturnColumn]): For table returns, the columns
-        returns_table (bool): Whether the function returns a table/composite type
-        returns_record (bool): Whether the function returns a RECORD type
-        returns_setof (bool): Whether the function returns a SETOF (multiple rows)
-        required_imports (set): Set of Python imports needed for this function
-        setof_table_name (Optional[str]): For SETOF table_name, the table name
-        sql_comment (Optional[str]): SQL comment preceding the function definition
-    """
-    sql_name: str
-    python_name: str
-    params: List[SQLParameter] = field(default_factory=list)
-    return_type: str = "None"
-    return_columns: List[ReturnColumn] = field(default_factory=list)
-    returns_table: bool = False
-    returns_record: bool = False
-    returns_setof: bool = False
-    required_imports: set = field(default_factory=set)
-    setof_table_name: Optional[str] = None
-    sql_comment: Optional[str] = None  # Store the cleaned SQL comment
+# @dataclass
+# class ParsedFunction: # MOVED to sql_models.py
+#    ...
 
 
 # ===== SECTION: GLOBAL STATE =====
@@ -173,6 +94,7 @@ def _map_sql_to_python_type(sql_type: str, is_optional: bool = False, context: s
         if table_name in TABLE_SCHEMAS or normalized_table_name in TABLE_SCHEMAS:
             # This is likely a table reference, not a primitive type
             # We'll return 'Any' and let the caller handle it as a table reference
+            # Need 'Any' from typing
             return "Any", {"Any"}
     else:
         # Check if this is a non-qualified table name
@@ -180,6 +102,7 @@ def _map_sql_to_python_type(sql_type: str, is_optional: bool = False, context: s
         if normalized_table_name in TABLE_SCHEMAS:
             # This is a table reference, not a primitive type
             # We'll return 'Any' and let the caller handle it as a table reference
+            # Need 'Any' from typing
             return "Any", {"Any"}
     
     # Handle array types (e.g., text[], integer[])
@@ -218,6 +141,7 @@ def _map_sql_to_python_type(sql_type: str, is_optional: bool = False, context: s
     imports = set()
     
     # Add specific imports based on the Python type
+    # These keys match the values in TYPE_MAP, not the keys in PYTHON_IMPORTS
     if py_type == 'UUID':
         imports.add('UUID')
     elif py_type == 'datetime':
@@ -228,7 +152,7 @@ def _map_sql_to_python_type(sql_type: str, is_optional: bool = False, context: s
         imports.add('Decimal')
     elif py_type == 'Any':
         imports.add('Any')
-    elif py_type == 'dict' or py_type == 'Dict[str, Any]':
+    elif py_type == 'dict' or py_type == 'Dict[str, Any]': # Check for 'dict' from TYPE_MAP
         imports.add('Dict')
         imports.add('Any')
         py_type = 'Dict[str, Any]'  # Standardize on Dict[str, Any] for JSON types
@@ -1022,7 +946,7 @@ def parse_sql(sql_content: str, schema_content: Optional[str] = None) -> Tuple[L
                 return_columns=return_info["return_columns"],
                 setof_table_name=return_info["setof_table_name"],
                 # Assign cleaned, unique imports
-                required_imports={imp for imp in current_imports if imp}, 
+                required_imports={imp for imp in current_imports if imp}, # Use Set[str] from sql_models
                 sql_comment=sql_comment,
             )
             functions.append(func_data)
