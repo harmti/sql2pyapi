@@ -987,7 +987,7 @@ def test_returns_table_comments_function_generation(tmp_path):
         assert actual_params == expected_params, "Parameter mismatch"
 
         # Check return annotation
-        expected_return = 'Optional[FunctionWithReturnsTableCommentsResult]' # CORRECT: Changed List -> Optional
+        expected_return = 'List[FunctionWithReturnsTableCommentsResult]' # REVERTED: Changed Optional -> List
         actual_return = ast.unparse(func_node.returns)
         assert actual_return == expected_return, "Return type mismatch"
 
@@ -996,25 +996,27 @@ def test_returns_table_comments_function_generation(tmp_path):
         expected_docstring_pattern = "Call PostgreSQL function function_with_returns_table_comments()."
         assert docstring == expected_docstring_pattern, f"Expected default docstring, got: \\n{docstring}"
 
-        # 4. Check Body Logic (Fetchone, Return Dataclass instance)
+        # 4. Check Body Logic (Fetchall, Return List of Dataclass instances)
         execute_call = None
-        fetchone_call = None # CORRECT: Changed fetchall -> fetchone
-        return_dataclass_instance = None # CORRECT: Changed list comprehension check
+        fetchall_call = None # REVERTED: Changed fetchone -> fetchall
+        return_list_comprehension = None # REVERTED: Changed instance check
         for node in ast.walk(func_node):
             if isinstance(node, ast.Await) and isinstance(node.value, ast.Call):
                 call = node.value
                 if isinstance(call.func, ast.Attribute) and call.func.attr == 'execute':
                     execute_call = call
-                elif isinstance(call.func, ast.Attribute) and call.func.attr == 'fetchone': # CORRECT: Changed fetchall -> fetchone
-                    fetchone_call = call # CORRECT: Changed fetchall -> fetchone
+                elif isinstance(call.func, ast.Attribute) and call.func.attr == 'fetchall': # REVERTED: Changed fetchone -> fetchall
+                    fetchall_call = call # REVERTED: Changed fetchone -> fetchall
             elif isinstance(node, ast.Return):
-                 # Check for direct return of dataclass instance
-                 if isinstance(node.value, ast.Call) and isinstance(node.value.func, ast.Name) and node.value.func.id == 'FunctionWithReturnsTableCommentsResult': # CORRECT: Changed list comp check
-                      return_dataclass_instance = node
-    
+                 # Check for list comprehension returning dataclass instances
+                 if isinstance(node.value, ast.ListComp): # REVERTED: Changed instance check
+                     elt_call = node.value.elt
+                     if isinstance(elt_call, ast.Call) and isinstance(elt_call.func, ast.Name) and elt_call.func.id == 'FunctionWithReturnsTableCommentsResult':
+                         return_list_comprehension = node
+
         assert execute_call is not None, "cur.execute call not found"
-        assert fetchone_call is not None, "cur.fetchone call not found" # CORRECT: Changed fetchall -> fetchone
-        assert return_dataclass_instance is not None, "Expected return of dataclass instance" # CORRECT: Changed assertion
+        assert fetchall_call is not None, "cur.fetchall call not found" # REVERTED: Changed fetchone -> fetchall
+        assert return_list_comprehension is not None, "Expected return with list comprehension of dataclass instances" # REVERTED: Changed assertion
 
     finally:
         # Reset logger level and remove handler
@@ -1025,8 +1027,8 @@ def test_returns_table_comments_function_generation(tmp_path):
 
 # --- New Test Case for RETURNS TABLE (Non-SETOF) ---
 
-def test_returns_table_non_setof_generates_optional_and_fetchone(tmp_path):
-    """Verify RETURNS TABLE (non-SETOF) generates Optional[...] and uses fetchone."""
+def test_returns_table_non_setof_generates_list_and_fetchall(tmp_path):
+    """Verify RETURNS TABLE (non-SETOF) generates List[...] and uses fetchall."""
     functions_sql_path = FIXTURES_DIR / "returns_table_function.sql"
     actual_output_path = tmp_path / "returns_table_non_setof_api.py"
 
@@ -1043,19 +1045,31 @@ def test_returns_table_non_setof_generates_optional_and_fetchone(tmp_path):
             break
     assert func_node is not None, "Async function 'get_user_basic_info' not found"
 
-    # 1. Verify return type hint is Optional[...]
-    expected_return_pattern = r"Optional\[GetUserBasicInfoResult\]" # Use regex for flexibility
+    # 1. Verify return type hint is List[...]
+    expected_return_pattern = r"List\[GetUserBasicInfoResult\]" # Expect List
     actual_return = ast.unparse(func_node.returns)
     assert re.match(expected_return_pattern, actual_return), \
         f"Expected return type pattern '{expected_return_pattern}', but got '{actual_return}'"
 
-    # 2. Verify 'fetchone()' is used in the function body
-    fetchone_found = False
+    # 2. Verify 'fetchall()' is used in the function body
+    fetchall_found = False # Expect fetchall
     for node_in_body in ast.walk(func_node):
-        if isinstance(node_in_body, ast.Call) and isinstance(node_in_body.func, ast.Attribute):
-            if node_in_body.func.attr == 'fetchone':
-                fetchone_found = True
-                break
-    assert fetchone_found, "Expected 'fetchone()' call not found in function body."
+        # Check for await cur.fetchall() or assignment
+        is_fetchall_call = False
+        if isinstance(node_in_body, ast.Await) and isinstance(node_in_body.value, ast.Call):
+            call = node_in_body.value
+            if isinstance(call.func, ast.Attribute) and call.func.attr == 'fetchall':
+                 is_fetchall_call = True
+        elif isinstance(node_in_body, ast.Assign) and isinstance(node_in_body.value, ast.Await):
+             call = node_in_body.value.value
+             if isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute) and call.func.attr == 'fetchall':
+                 is_fetchall_call = True
+                 
+        if is_fetchall_call:
+             fetchall_found = True
+             break
+                 
+    assert fetchall_found, "Expected 'fetchall()' call not found in function body."
+
 
 # ===== END: Additional Test Cases =====

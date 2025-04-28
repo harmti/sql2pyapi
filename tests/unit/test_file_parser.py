@@ -215,13 +215,13 @@ def test_parse_sql_with_complex_file_content(tmp_path):
     assert len(f4.params) == 1
     assert f4.params[0] == SQLParameter(name='order_id', python_name='order_id', sql_type='bigint', python_type='int', is_optional=False)
     assert f4.returns_table # Explicit RETURNS TABLE
-    assert not f4.returns_setof # CORRECT: RETURNS TABLE without SETOF is single row
-    assert f4.return_type == 'Optional[GetOrderSummaryResult]' # CORRECT: Single row -> Optional
+    assert f4.returns_setof # REVERTED: RETURNS TABLE implies SETOF
+    assert f4.return_type == 'List[GetOrderSummaryResult]' # REVERTED: SETOF -> List
     assert len(f4.return_columns) == 4
-    assert f4.return_columns[0] == ReturnColumn(name='item_id', sql_type='uuid', python_type='UUID', is_optional=False) # NOT NULL in SQL
-    assert f4.return_columns[1] == ReturnColumn(name='description', sql_type='text', python_type='Optional[str]', is_optional=True) # Nullable in SQL
-    assert f4.return_columns[2] == ReturnColumn(name='quantity', sql_type='integer', python_type='int', is_optional=False) # NOT NULL in SQL
-    assert f4.return_columns[3] == ReturnColumn(name='price', sql_type='numeric(10, 2)', python_type='Optional[Decimal]', is_optional=True) # Nullable in SQL
+    assert f4.return_columns[0] == ReturnColumn(name='item_id', sql_type='uuid', python_type='UUID', is_optional=False) # Keep SQL NOT NULL
+    assert f4.return_columns[1] == ReturnColumn(name='description', sql_type='text', python_type='Optional[str]', is_optional=True) # Keep SQL Nullable
+    assert f4.return_columns[2] == ReturnColumn(name='quantity', sql_type='integer', python_type='int', is_optional=False) # Keep SQL NOT NULL
+    assert f4.return_columns[3] == ReturnColumn(name='price', sql_type='numeric(10, 2)', python_type='Optional[Decimal]', is_optional=True) # Keep SQL Nullable
     assert 'dataclass' in f4.required_imports
     assert 'Optional' in f4.required_imports
     assert 'UUID' in f4.required_imports
