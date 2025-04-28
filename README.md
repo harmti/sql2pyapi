@@ -140,3 +140,46 @@ We recommend using `uv` for managing dependencies:
 * Install development dependencies: `uv pip install -e ".[dev]"`
 * Run tests: `pytest`
 * Linting/Formatting: `ruff check .` and `ruff format .`
+
+## Return Type Handling (`List` vs. `Optional`)
+
+`sql2pyapi` aims for a predictable mapping from SQL function return types to Python type hints. A key aspect is how it determines whether a Python function should return a `List[...]` or an `Optional[...]`.
+
+**The Rule:**
+
+The **sole determinant** for using `List` versus `Optional` as the *outer* wrapper in the Python return type hint is the presence or absence of the `SETOF` keyword in the SQL function's `RETURNS` clause.
+
+1.  **`RETURNS SETOF <type>`:**
+    *   If your SQL function includes `SETOF` (e.g., `RETURNS SETOF integer`, `RETURNS SETOF users`, `RETURNS SETOF user_identity`), the generated Python function will **always** have a return type hint of `List[MappedType]` (e.g., `List[int]`, `List[User]`, `List[UserIdentity]`)).
+    *   If the SQL function returns zero rows, the Python function will return an empty list (`[]`).
+
+2.  **`RETURNS <type>` (No `SETOF`):**
+    *   If your SQL function returns a single value, row, or composite type *without* `SETOF` (e.g., `RETURNS integer`, `RETURNS users`, `RETURNS user_identity`), the generated Python function will **always** have a return type hint of `Optional[MappedType]` (e.g., `Optional[int]`, `Optional[User]`, `Optional[UserIdentity]`)).
+    *   This handles the common database pattern where a function designed to return a single row might return zero rows (e.g., `SELECT ... FROM users WHERE id = p_id LIMIT 1`). In such cases, the Python function will return `None`. If a row *is* found, it returns the mapped object/value.
+
+3.  **`RETURNS VOID` or `PROCEDURE`:**
+    *   Functions returning `VOID` or defined as `PROCEDURE` will result in a Python function with a return type hint of `None`.
+
+**Examples:**
+
+| SQL Function Signature                  | Generated Python Return Hint | Notes                                      |
+| :-------------------------------------- | :--------------------------- | :----------------------------------------- |
+| `RETURNS integer`                       | `Optional[int]`              | Returns `None` if no row                   |
+| `RETURNS SETOF integer`                 | `List[int]`                  | Returns `[]` if no rows                    |
+| `RETURNS users`                         | `Optional[User]`             | `User` is generated dataclass              |
+| `RETURNS SETOF users`                   | `List[User]`                 | Returns `[]` if no rows                    |
+| `RETURNS user_identity` (custom type) | `Optional[UserIdentity]`     | `UserIdentity` is generated dataclass      |
+| `RETURNS SETOF user_identity`           | `List[UserIdentity]`         | Returns `[]` if no rows                    |
+| `RETURNS TABLE(id int, name text)`    | `List[FunctionNameResult]`   | `RETURNS TABLE` implies potentially > 1 row |
+| `RETURNS record`                        | `Optional[Tuple]`            | Returns `None` if no row                   |
+| `RETURNS SETOF record`                  | `List[Tuple]`                | Returns `[]` if no rows                    |
+| `RETURNS void`                          | `None`                       |                                            |
+
+**SQL Conventions for API Design:**
+
+Understanding this behavior allows you to design your SQL functions to produce the desired Python API:
+
+*   **If your function logically returns a collection of items (even if sometimes zero or one), use `SETOF` in your SQL `RETURNS` clause.** This guarantees the Python function returns a `List`.
+*   **If your function logically returns a single item or potentially nothing, define the return type *without* `SETOF`.** The Python function will return an `Optional`, correctly handling cases where no data is found. You don't need to explicitly handle `NULL` returns in SQL solely to get an `Optional` wrapper; the tool does this based on the lack of `SETOF`.
+
+**Note on Dataclass Fields:** Currently, fields within generated dataclasses (like `User` or `UserIdentity`) often default to `Optional[...]` for flexibility in handling potentially missing columns or `NULL` values returned by the database, even if the original `CREATE TABLE` or `CREATE TYPE` specified `NOT NULL`. This behavior might be refined in future versions to offer stricter typing based on schema nullability.
