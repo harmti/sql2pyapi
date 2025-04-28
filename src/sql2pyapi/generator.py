@@ -205,11 +205,11 @@ def _generate_function_body(func: ParsedFunction, final_dataclass_name: Optional
     if not func.returns_table and func.return_type == "None":
         # Void function - simplest case, just execute and return None
         body_lines.append("    return None")
-    elif func.returns_setof or func.returns_table:
-        # Handle multi-row returns (SETOF or RETURNS TABLE)
+    elif func.returns_setof:
+        # Handle SETOF returns (multiple rows)
         body_lines.extend(_generate_setof_return_body(func, final_dataclass_name))
     else:
-        # Handle single row returns (scalar or record, not SETOF/TABLE)
+        # Handle single row returns (scalar, record, or single table row)
         body_lines.extend(_generate_single_row_return_body(func, final_dataclass_name))
         
     return body_lines
@@ -312,36 +312,34 @@ def _determine_return_type(func: ParsedFunction, class_name_map: Dict[str, str])
     final_dataclass_name = None
 
     if func.returns_table:
+        # Determine the dataclass name
         if func.setof_table_name:
-            # Case: RETURNS SETOF table_name (schema potentially found)
-            # Get the standardized class name from the map
             final_dataclass_name = class_name_map.get(
                 func.setof_table_name, _to_singular_camel_case(func.setof_table_name)
             )
         else:
-            # Case: Explicit RETURNS TABLE(...)
-            # Generate a unique name based on function name
-            # Apply CamelCase directly and append Result suffix
             final_dataclass_name = inflection.camelize(func.python_name) + "Result"
-
-        # Ensure the name is stored in the map for the function generation pass
-        # This handles both SETOF table_name and explicit RETURNS TABLE cases
+        
         func_key = f"_func_{func.sql_name}" 
-        class_name_map[func_key] = final_dataclass_name 
-
-        # Always use List for RETURNS TABLE or SETOF table
-        return_type_hint = f"List[{final_dataclass_name}]"
-        # Remove the Optional wrapping for non-SETOF table returns, as they are now always List
-        # if func.returns_setof:
-        #     return_type_hint = f"List[{final_dataclass_name}]"
-        # else:
-        #     return_type_hint = f"Optional[{final_dataclass_name}]"
+        class_name_map[func_key] = final_dataclass_name
+        
+        # Dataclass name becomes the base type hint
+        return_type_hint = final_dataclass_name 
+        # Decide List vs Optional based *only* on returns_setof
+        if func.returns_setof:
+            return_type_hint = f"List[{final_dataclass_name}]"
+        else:
+            return_type_hint = f"Optional[{final_dataclass_name}]"
             
     elif func.return_type != "None":
-        # Handle non-table returns (scalar, record)
-        # The parser already determines List[...] for SETOF scalar/record
-        return_type_hint = func.return_type
+        # For non-table returns, the parser provides the complete type hint
+        # (e.g., 'int', 'Optional[str]', 'List[int]', 'List[Tuple]', 'Optional[Tuple]')
+        # Use the type directly from the parser, which already handles Optional/List.
+        return_type_hint = func.return_type 
+        # No further wrapping needed here
         
+    # return_type_hint remains "None" for VOID functions
+    
     return return_type_hint, final_dataclass_name
 
 

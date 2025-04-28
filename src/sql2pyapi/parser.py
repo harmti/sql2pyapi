@@ -615,6 +615,8 @@ class SQLParser:
                  returns_info["return_type"] = partial_info.get("return_type", "DataclassPlaceholder")
                  returns_info["return_columns"] = partial_info.get("return_columns", [])
                  current_imports.update(current_imports_from_helper)
+                 # FIX: Explicit RETURNS TABLE implies potential for multiple rows (treat as SETOF)
+                 returns_info["returns_setof"] = True 
             else:
                  logging.warning(f"Failed to parse TABLE columns in {context}. Treating as Any.")
                  returns_info["return_type"] = "Any"

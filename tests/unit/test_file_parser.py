@@ -215,8 +215,8 @@ def test_parse_sql_with_complex_file_content(tmp_path):
     assert len(f4.params) == 1
     assert f4.params[0] == SQLParameter(name='order_id', python_name='order_id', sql_type='bigint', python_type='int', is_optional=False)
     assert f4.returns_table # Explicit RETURNS TABLE
-    assert not f4.returns_setof # Single row expected
-    assert f4.return_type == 'Optional[GetOrderSummaryResult]' # Correct generated name
+    assert f4.returns_setof # FIX: RETURNS TABLE implies SETOF
+    assert f4.return_type == 'List[GetOrderSummaryResult]' # FIX: SETOF -> List
     assert len(f4.return_columns) == 4
     assert f4.return_columns[0] == ReturnColumn(name='item_id', sql_type='uuid', python_type='UUID', is_optional=False)
     assert f4.return_columns[1] == ReturnColumn(name='description', sql_type='text', python_type='Optional[str]', is_optional=True)
