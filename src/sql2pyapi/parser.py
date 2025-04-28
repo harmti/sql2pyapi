@@ -618,9 +618,10 @@ class SQLParser:
                  # FIX: Explicit RETURNS TABLE implies potential for multiple rows (treat as SETOF)
                  returns_info["returns_setof"] = True 
             else:
-                 logging.warning(f"Failed to parse TABLE columns in {context}. Treating as Any.")
+                 # This else block seems unreachable if _handle_returns_table always sets returns_table=True
+                 # Keeping it for safety, but logging might indicate an issue.
+                 logging.warning(f"Internal warning: _handle_returns_table did not return returns_table=True in {context}. Treating as Any.")
                  returns_info["return_type"] = "Any"
-                 current_imports.add("Any")
         elif return_def.lower() == 'record':
             partial_info = {"return_type": "Tuple", "returns_record": True}
             current_imports.add("Tuple")

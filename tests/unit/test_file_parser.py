@@ -336,4 +336,4 @@ def test_parse_sql_with_complex_file_content(tmp_path):
     assert 'widgets' not in table_imports # Was not defined
 
     # Verify total number of keys (normalized + qualified if different)
-    assert len(table_imports) == 4 
+    assert len(table_imports) == 4
