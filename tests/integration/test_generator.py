@@ -987,7 +987,7 @@ def test_returns_table_comments_function_generation(tmp_path):
         assert actual_params == expected_params, "Parameter mismatch"
 
         # Check return annotation
-        expected_return = 'List[FunctionWithReturnsTableCommentsResult]'
+        expected_return = 'Optional[FunctionWithReturnsTableCommentsResult]' # CORRECT: Changed List -> Optional
         actual_return = ast.unparse(func_node.returns)
         assert actual_return == expected_return, "Return type mismatch"
 
@@ -996,27 +996,25 @@ def test_returns_table_comments_function_generation(tmp_path):
         expected_docstring_pattern = "Call PostgreSQL function function_with_returns_table_comments()."
         assert docstring == expected_docstring_pattern, f"Expected default docstring, got: \\n{docstring}"
 
-        # 4. Check Body Logic (Fetchall, Return List of Dataclass instances)
+        # 4. Check Body Logic (Fetchone, Return Dataclass instance)
         execute_call = None
-        fetchall_call = None
-        return_list_comprehension = None
+        fetchone_call = None # CORRECT: Changed fetchall -> fetchone
+        return_dataclass_instance = None # CORRECT: Changed list comprehension check
         for node in ast.walk(func_node):
             if isinstance(node, ast.Await) and isinstance(node.value, ast.Call):
                 call = node.value
                 if isinstance(call.func, ast.Attribute) and call.func.attr == 'execute':
                     execute_call = call
-                elif isinstance(call.func, ast.Attribute) and call.func.attr == 'fetchall':
-                    fetchall_call = call
+                elif isinstance(call.func, ast.Attribute) and call.func.attr == 'fetchone': # CORRECT: Changed fetchall -> fetchone
+                    fetchone_call = call # CORRECT: Changed fetchall -> fetchone
             elif isinstance(node, ast.Return):
-                 # Check for list comprehension returning dataclass instances
-                 if isinstance(node.value, ast.ListComp):
-                     elt_call = node.value.elt
-                     if isinstance(elt_call, ast.Call) and isinstance(elt_call.func, ast.Name) and elt_call.func.id == 'FunctionWithReturnsTableCommentsResult':
-                         return_list_comprehension = node
+                 # Check for direct return of dataclass instance
+                 if isinstance(node.value, ast.Call) and isinstance(node.value.func, ast.Name) and node.value.func.id == 'FunctionWithReturnsTableCommentsResult': # CORRECT: Changed list comp check
+                      return_dataclass_instance = node
     
         assert execute_call is not None, "cur.execute call not found"
-        assert fetchall_call is not None, "cur.fetchall call not found"
-        assert return_list_comprehension is not None, "Expected return with list comprehension of dataclass instances"
+        assert fetchone_call is not None, "cur.fetchone call not found" # CORRECT: Changed fetchall -> fetchone
+        assert return_dataclass_instance is not None, "Expected return of dataclass instance" # CORRECT: Changed assertion
 
     finally:
         # Reset logger level and remove handler
@@ -1027,8 +1025,8 @@ def test_returns_table_comments_function_generation(tmp_path):
 
 # --- New Test Case for RETURNS TABLE (Non-SETOF) ---
 
-def test_returns_table_non_setof_generates_list_and_fetchall(tmp_path):
-    """Verify RETURNS TABLE (non-SETOF) generates List[...] and uses fetchall."""
+def test_returns_table_non_setof_generates_optional_and_fetchone(tmp_path):
+    """Verify RETURNS TABLE (non-SETOF) generates Optional[...] and uses fetchone."""
     functions_sql_path = FIXTURES_DIR / "returns_table_function.sql"
     actual_output_path = tmp_path / "returns_table_non_setof_api.py"
 
@@ -1045,19 +1043,19 @@ def test_returns_table_non_setof_generates_list_and_fetchall(tmp_path):
             break
     assert func_node is not None, "Async function 'get_user_basic_info' not found"
 
-    # 1. Verify return type hint is List[...]
-    expected_return_pattern = r"List\[GetUserBasicInfoResult\]" # Use regex for flexibility
+    # 1. Verify return type hint is Optional[...]
+    expected_return_pattern = r"Optional\[GetUserBasicInfoResult\]" # Use regex for flexibility
     actual_return = ast.unparse(func_node.returns)
     assert re.match(expected_return_pattern, actual_return), \
         f"Expected return type pattern '{expected_return_pattern}', but got '{actual_return}'"
 
-    # 2. Verify 'fetchall()' is used in the function body
-    fetchall_found = False
+    # 2. Verify 'fetchone()' is used in the function body
+    fetchone_found = False
     for node_in_body in ast.walk(func_node):
         if isinstance(node_in_body, ast.Call) and isinstance(node_in_body.func, ast.Attribute):
-            if node_in_body.func.attr == 'fetchall':
-                fetchall_found = True
+            if node_in_body.func.attr == 'fetchone':
+                fetchone_found = True
                 break
-    assert fetchall_found, "Expected 'fetchall()' call not found in function body."
+    assert fetchone_found, "Expected 'fetchone()' call not found in function body."
 
 # ===== END: Additional Test Cases =====

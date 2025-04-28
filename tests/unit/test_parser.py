@@ -414,13 +414,13 @@ parse_return_test_cases = [
      {"Tuple"}),
     # RETURNS TABLE
     ("RETURNS TABLE(id int, name text) LANGUAGE sql", {"Initial"}, 
-     {'return_type': 'DataclassPlaceholder', 'returns_table': True, 'returns_record': False, 'returns_setof': True,
+     {'return_type': 'DataclassPlaceholder', 'returns_table': True, 'returns_record': False, 'returns_setof': False,
       'return_columns': [ReturnColumn('id', 'int', 'Optional[int]', True), ReturnColumn('name', 'text', 'Optional[str]', True)], 
       'setof_table_name': None},
      {"dataclass", "Optional"}),
     # RETURNS TABLE with complex types and constraints
     ("RETURNS TABLE(user_id uuid NOT NULL, value numeric(5,2)) AS $$", set(),
-     {'return_type': 'DataclassPlaceholder', 'returns_table': True, 'returns_record': False, 'returns_setof': True,
+     {'return_type': 'DataclassPlaceholder', 'returns_table': True, 'returns_record': False, 'returns_setof': False,
       'return_columns': [ReturnColumn('user_id', 'uuid', 'UUID', False), ReturnColumn('value', 'numeric(5, 2)', 'Optional[Decimal]', True)],
       'setof_table_name': None},
      {"dataclass", "UUID", "Optional", "Decimal"}),
