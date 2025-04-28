@@ -13,17 +13,17 @@ class GetUserBasicInfoResult:
     first_name: Optional[str]
     is_active: Optional[bool]
 
-async def get_user_basic_info(conn: AsyncConnection, user_id: UUID) -> Optional[GetUserBasicInfoResult]:
+async def get_user_basic_info(conn: AsyncConnection, user_id: UUID) -> List[GetUserBasicInfoResult]:
     """Returns a user's basic info as a table"""
     async with conn.cursor() as cur:
         await cur.execute("SELECT * FROM get_user_basic_info(%s)", [user_id])
-        row = await cur.fetchone()
-        if row is None:
-            return None
+        rows = await cur.fetchall()
         # Ensure dataclass 'GetUserBasicInfoResult' is defined above.
+        if not rows:
+            return []
         colnames = [desc[0] for desc in cur.description]
-        row_dict = dict(zip(colnames, row)) if not isinstance(row, dict) else row
-        # Check for 'empty' composite rows (all values are None)
-        if all(value is None for value in row_dict.values()):
-            return None
-        return GetUserBasicInfoResult(**row_dict)
+        processed_rows = [
+            dict(zip(colnames, r)) if not isinstance(r, dict) else r
+            for r in rows
+        ]
+        return [GetUserBasicInfoResult(**row_dict) for row_dict in processed_rows]
