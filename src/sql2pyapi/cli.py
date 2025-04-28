@@ -40,8 +40,24 @@ def main(
         readable=True,
         help="Optional path to a .sql file containing table schema (CREATE TABLE statements).",
     ),
+    verbose: bool = typer.Option(
+        False,
+        "--verbose",
+        "-v",
+        help="Enable verbose (DEBUG) logging.",
+    ),
 ):
     """Generates Python async API wrappers from PostgreSQL function definitions."""
+    # Configure logging level based on verbose flag
+    log_level = logging.DEBUG if verbose else logging.INFO
+    # If verbose, reconfigure basicConfig to set the level to DEBUG
+    # Force=True is needed if basicConfig was already called at the module level
+    if verbose:
+        logging.basicConfig(level=log_level, format="%(levelname)s: %(message)s", force=True)
+    else:
+        # Ensure INFO level if not verbose (might already be set by module level call)
+        logging.basicConfig(level=log_level, format="%(levelname)s: %(message)s", force=True)
+
     logging.info(f"Reading functions SQL from: {sql_file}")
     if schema_file:
         logging.info(f"Reading schema SQL from: {schema_file}")
@@ -58,8 +74,8 @@ def main(
         raise typer.Exit(code=1)
 
     try:
-        # Get both functions and schema imports from parser
-        functions, table_schema_imports = parse_sql(sql_content, schema_content=schema_content)
+        # Get functions, schema imports, AND composite types from parser
+        functions, table_schema_imports, composite_types = parse_sql(sql_content, schema_content=schema_content)
 
         if not functions:
             logging.warning("No functions found or parsed successfully. Output file will reflect this.")
@@ -69,8 +85,8 @@ def main(
             # Decide if exiting here is desired, or generating an empty file is ok.
             # return # Optionally exit if no functions are found
 
-        # Pass schema imports to the generator
-        python_code = generate_python_code(functions, table_schema_imports, source_sql_file=sql_file.name)
+        # Pass schema imports AND composite types to the generator
+        python_code = generate_python_code(functions, table_schema_imports, composite_types, source_sql_file=sql_file.name)
 
     except SQL2PyAPIError as e:
         logging.error(f"Failed to parse SQL: {e}")

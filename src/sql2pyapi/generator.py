@@ -5,9 +5,10 @@ import textwrap
 import inflection  # Using inflection library for plural->singular
 from pathlib import Path
 import os
+import logging
 
 # Local imports
-from .parser import ParsedFunction, ReturnColumn, SQLParameter
+from .sql_models import ParsedFunction, ReturnColumn, SQLParameter
 from .constants import *
 
 # ===== SECTION: CONSTANTS AND CONFIGURATION =====
@@ -230,16 +231,30 @@ def _generate_setof_return_body(func: ParsedFunction, final_dataclass_name: Opti
     body_lines.append("    rows = await cur.fetchall()")
     
     if func.returns_table:
-        # SETOF table_name or RETURNS TABLE
+        # Covers SETOF table_name, SETOF custom_type_name, SETOF TABLE(...)
         body_lines.append(f"    # Ensure dataclass '{final_dataclass_name}' is defined above.")
         body_lines.append("    if not rows:")
         body_lines.append("        return []")
-        body_lines.append("    colnames = [desc[0] for desc in cur.description]")
-        body_lines.append("    processed_rows = [")
-        body_lines.append("        dict(zip(colnames, r)) if not isinstance(r, dict) else r")
-        body_lines.append("        for r in rows")
-        body_lines.append("    ]")
-        body_lines.append(f"    return [{final_dataclass_name}(**row_dict) for row_dict in processed_rows]")
+        # Logic for SETOF custom_type (expect list of tuples)
+        # Logic for SETOF table_name / TABLE(...) (expect list of Row/dict or tuples)
+        # Use tuple unpacking, assuming it works for list of tuples from custom types
+        # This MIGHT break for SETOF table_name if list of dicts is returned.
+        body_lines.append(f"    # Assuming list of tuples for SETOF composite type {final_dataclass_name}")
+        body_lines.append(f"    try:")
+        body_lines.append(f"        return [{final_dataclass_name}(*r) for r in rows]")
+        body_lines.append(f"    except TypeError:")
+        body_lines.append(f"        # Fallback attempt for list of dict-like rows")
+        body_lines.append(f"        try:")
+        body_lines.append(f"            colnames = [desc[0] for desc in cur.description]")
+        body_lines.append(f"            processed_rows = [")
+        body_lines.append(f"                dict(zip(colnames, r)) if not isinstance(r, dict) else r")
+        body_lines.append(f"                for r in rows")
+        body_lines.append(f"            ]")
+        body_lines.append(f"            return [{final_dataclass_name}(**row_dict) for row_dict in processed_rows]")
+        body_lines.append(f"        except Exception as e:")
+        body_lines.append(f"            logging.error(f'Failed to map rows to dataclass list for {final_dataclass_name} - Error: {{e}}')")
+        body_lines.append(f"            return [] # Or raise error?")
+
     elif func.returns_record:
         # SETOF record
         body_lines.append("    # Return list of tuples for SETOF record")
@@ -270,15 +285,44 @@ def _generate_single_row_return_body(func: ParsedFunction, final_dataclass_name:
     
     # All row processing happens after the None check
     if func.returns_table:
-        # Table/composite type return
+        # Covers single-row returns for known tables AND known custom types
         body_lines.append(f"    # Ensure dataclass '{final_dataclass_name}' is defined above.")
-        body_lines.append("    colnames = [desc[0] for desc in cur.description]")
-        body_lines.append("    row_dict = dict(zip(colnames, row)) if not isinstance(row, dict) else row")
-        # Handle PostgreSQL composite type returns with all NULL values
-        body_lines.append("    # Check for 'empty' composite rows (all values are None)")
-        body_lines.append("    if all(value is None for value in row_dict.values()):")
-        body_lines.append("        return None")
-        body_lines.append(f"    return {final_dataclass_name}(**row_dict)")
+        # Check if it's likely a custom type (tuple return) vs. table (dict/tuple return)
+        # Custom types from functions usually return as a simple tuple
+        # Table returns from functions often return as a Row object (dict-like) or tuple
+        # Safest bet for custom types is direct tuple unpacking
+        # Heuristic: If setof_table_name is None AND return_columns exist, it's likely
+        # RETURNS TABLE(...) or RETURNS custom_type. Assume tuple unpacking for custom types.
+        # This needs refinement - parser should ideally tell us if it was a named custom type.
+        # For now, let's add specific logic for tuple unpacking assuming order matches dataclass.
+        
+        # Revised logic: Always try tuple unpacking first for returns_table=True, returns_setof=False
+        # This works for custom types. For RETURNS table_name, psycopg might return a Row object.
+        # We need robust handling.
+        
+        # Option A: Assume tuple unpacking for custom types, dict conversion for table names?
+        # Problem: How to distinguish? Parser needs to tell us.
+        
+        # Option B: Try tuple unpacking, if it fails (e.g., TypeError), maybe try dict? Seems fragile.
+        
+        # Option C (Chosen): Generate code that works for simple tuple returns from custom types.
+        # This might break for RETURNS table_name if psycopg returns dict-like Row. User may need to adapt.
+        body_lines.append(f"    # Assuming simple tuple return for composite type {final_dataclass_name}")
+        body_lines.append(f"    try:")
+        body_lines.append(f"        return {final_dataclass_name}(*row)")
+        body_lines.append(f"    except TypeError:")
+        body_lines.append(f"        # Fallback attempt for dict-like rows (e.g., from RETURNS table_name)")
+        body_lines.append(f"        try:")
+        body_lines.append(f"            colnames = [desc[0] for desc in cur.description]")
+        body_lines.append(f"            row_dict = dict(zip(colnames, row)) if not isinstance(row, dict) else row")
+        body_lines.append(f"            # Check for 'empty' composite rows (all values are None)")
+        body_lines.append(f"            if all(value is None for value in row_dict.values()):")
+        body_lines.append(f"                return None")
+        body_lines.append(f"            return {final_dataclass_name}(**row_dict)")
+        body_lines.append(f"        except Exception as e:")
+        body_lines.append(f"             logging.error(f'Failed to map row to dataclass {final_dataclass_name}: {{row}} - Error: {{e}}')")
+        body_lines.append(f"             return None # Or raise error?")
+
     elif func.returns_record:
         # Record return
         body_lines.append("    # Return tuple for record type")
@@ -295,55 +339,100 @@ def _generate_single_row_return_body(func: ParsedFunction, final_dataclass_name:
     return body_lines
 
 
-def _determine_return_type(func: ParsedFunction, class_name_map: Dict[str, str]) -> Tuple[str, Optional[str]]:
+def _determine_return_type(func: ParsedFunction, custom_types: Dict[str, List[ReturnColumn]]) -> Tuple[str, Optional[str], set]:
     """
     Determines the Python return type hint and dataclass name for a SQL function.
+    Now also returns the set of imports required for the return type.
     
     Args:
         func (ParsedFunction): The parsed SQL function definition
-        class_name_map (Dict[str, str]): Mapping of SQL table names to Python class names
-        
+        custom_types (Dict[str, List[ReturnColumn]]): Dictionary of custom types fields
+    
     Returns:
-        Tuple[str, Optional[str]]: A tuple containing:
+        Tuple[str, Optional[str], set]: A tuple containing:
             - The Python return type hint as a string (e.g., 'int', 'List[User]')
             - The dataclass name for table returns, or None for scalar/record returns
+            - The set of imports required for the return type
     """
+    current_imports = set()
     return_type_hint = "None"  # Default
     final_dataclass_name = None
+    base_type_hint = "None" # Initialize base_type_hint
 
     if func.returns_table:
-        # Determine the dataclass name
+        # This path is taken if the parser identified the return as TABLE(...), SETOF table, or [SETOF] custom_type
+
+        # Case 1: Explicit SETOF table_name or SETOF custom_type_name
         if func.setof_table_name:
-            final_dataclass_name = class_name_map.get(
-                func.setof_table_name, _to_singular_camel_case(func.setof_table_name)
-            )
+            # Parser provides the original SQL name (e.g., 'users', 'public.users', 'user_identity')
+            final_dataclass_name = _to_singular_camel_case(func.setof_table_name)
+            base_type_hint = final_dataclass_name
+
+        # Case 2: Non-SETOF return of a known table or custom type
+        elif func.returns_sql_type_name and func.returns_sql_type_name in custom_types:
+             # Parser identified a specific known type (table or composite)
+             final_dataclass_name = _to_singular_camel_case(func.returns_sql_type_name)
+             base_type_hint = final_dataclass_name
+
+        # Case 3: Explicit RETURNS TABLE(...) or fallback for unknown named type
+        elif func.return_columns: # Check if columns were parsed (indicates RETURNS TABLE)
+             # This covers RETURNS TABLE(...)
+             final_dataclass_name = inflection.camelize(func.python_name) + "Result"
+             base_type_hint = final_dataclass_name
+             # Need to ensure this ad-hoc dataclass is generated later
+             # Add imports needed for the columns of this ad-hoc dataclass
+             for col in func.return_columns:
+                 # Extract base type and add imports
+                 col_base_type = col.python_type.replace("Optional[", "").replace("List[", "").replace("]", "")
+                 if col_base_type in PYTHON_IMPORTS:
+                     current_imports.add(PYTHON_IMPORTS[col_base_type])
+                 if col.python_type.startswith("Optional["): current_imports.add(PYTHON_IMPORTS["Optional"])
+                 if col.python_type.startswith("List["): current_imports.add(PYTHON_IMPORTS["List"])
+
+        # Case 4: Error/Inconsistency
         else:
-            final_dataclass_name = inflection.camelize(func.python_name) + "Result"
-        
-        func_key = f"_func_{func.sql_name}" 
-        class_name_map[func_key] = final_dataclass_name
-        
-        # Dataclass name becomes the base type hint
-        return_type_hint = final_dataclass_name 
-        # Decide List vs Optional based *only* on returns_setof
-        if func.returns_setof:
-            return_type_hint = f"List[{final_dataclass_name}]"
+            logging.error(f"Inconsistent state in _determine_return_type for {func.sql_name}: returns_table=True but no specific type identified and no columns found.")
+            base_type_hint = "Any"
+            current_imports.add(PYTHON_IMPORTS["Any"])
+
+        # Wrap the determined base type hint (dataclass name or Any) with List/Optional
+        if base_type_hint != "Any" and base_type_hint != "None":
+            # Add dataclass import if we determined a dataclass name
+            current_imports.add(PYTHON_IMPORTS["dataclass"])
+            if func.returns_setof:
+                return_type_hint = f"List[{base_type_hint}]"
+                current_imports.add(PYTHON_IMPORTS["List"])
+            else:
+                # Should be Optional for single composite/table return
+                return_type_hint = f"Optional[{base_type_hint}]"
+                current_imports.add(PYTHON_IMPORTS["Optional"])
         else:
-            return_type_hint = f"Optional[{final_dataclass_name}]"
-            
+             # If base_type_hint is Any or None, use it directly
+             return_type_hint = base_type_hint
+
+
     elif func.return_type != "None":
-        # For non-table returns, the parser provides the complete type hint
-        # (e.g., 'int', 'Optional[str]', 'List[int]', 'List[Tuple]', 'Optional[Tuple]')
-        # Use the type directly from the parser, which already handles Optional/List.
-        return_type_hint = func.return_type 
-        # No further wrapping needed here
-        
+        # Scalar return type provided by the parser (e.g., 'int', 'Optional[str]', 'List[UUID]')
+        # The parser already handled Optional/List wrapping based on SQL definition
+        return_type_hint = func.return_type
+        base_type_in_hint = return_type_hint.replace("Optional[","").replace("List[","").replace("]","")
+
+        # Add necessary imports based on the final hint
+        if return_type_hint.startswith("List["): current_imports.add(PYTHON_IMPORTS["List"])
+        if return_type_hint.startswith("Optional["): current_imports.add(PYTHON_IMPORTS["Optional"])
+        if base_type_in_hint in PYTHON_IMPORTS: current_imports.add(PYTHON_IMPORTS[base_type_in_hint])
+        # Also add base imports provided by parser (e.g., for custom enums mapped to str)
+        for imp_name in func.required_imports:
+             if imp_name in PYTHON_IMPORTS:
+                 current_imports.add(PYTHON_IMPORTS[imp_name])
+
+
     # return_type_hint remains "None" for VOID functions
-    
-    return return_type_hint, final_dataclass_name
+
+    return return_type_hint, final_dataclass_name, current_imports
 
 
-def _generate_function(func: ParsedFunction, class_name_map: Dict[str, str]) -> str:
+def _generate_function(func: ParsedFunction) -> str:
     """
     Generates a Python async function string from a parsed SQL function definition.
     
@@ -353,7 +442,6 @@ def _generate_function(func: ParsedFunction, class_name_map: Dict[str, str]) -> 
     
     Args:
         func (ParsedFunction): The parsed SQL function definition
-        class_name_map (Dict[str, str]): Mapping of SQL table names to Python class names
     
     Returns:
         str: Python code for the async function as a string
@@ -369,7 +457,9 @@ def _generate_function(func: ParsedFunction, class_name_map: Dict[str, str]) -> 
     sorted_params, params_str_py = _generate_parameter_list(func.params)
 
     # Determine return type hint and dataclass name
-    return_type_hint, final_dataclass_name = _determine_return_type(func, class_name_map)
+    # Retrieve the pre-calculated hint and the potential dataclass name
+    return_type_hint = func.return_type_hint
+    final_dataclass_name = func.dataclass_name # Get name stored on func object
 
     sql_args_placeholders = ", ".join(["%s"] * len(func.params))
     # Use sorted params for the execute call arguments list
@@ -399,6 +489,7 @@ async def {func.python_name}({params_str_py}) -> {return_type_hint}:
 def generate_python_code(
     functions: List[ParsedFunction],
     table_schema_imports: Dict[str, set],  # Accept the schema imports
+    parsed_composite_types: Dict[str, List[ReturnColumn]], # Accept composite types
     source_sql_file: str = "",
 ) -> str:
     """
@@ -411,6 +502,7 @@ def generate_python_code(
     Args:
         functions (List[ParsedFunction]): List of parsed SQL function definitions
         table_schema_imports (Dict[str, set]): Imports needed for table schemas
+        parsed_composite_types (Dict[str, List[ReturnColumn]]): Parsed composite type definitions
         source_sql_file (str, optional): Name of the source SQL file for header comment
     
     Returns:
@@ -424,123 +516,97 @@ def generate_python_code(
     """
 
     all_imports = set()
+    # Add logging if potentially used by error handling
+    all_imports.add("import logging") 
     dataclass_defs = {}
     generated_functions = []
 
     # Base typing imports like Optional, List etc are added by the parser as needed
 
-    table_to_class_name_map: Dict[str, str] = {}
-    # Rename dataclass_field_imports -> imports_per_dataclass
-    imports_per_dataclass: Dict[str, set] = {}
+    # Use the composite types passed from the parser
+    current_custom_types = parsed_composite_types.copy()
+    function_defs = []
 
-    # --- First pass: Identify and prepare unique dataclasses ---
-    processed_tables = set()
+    # --- First pass: Determine return types and required imports, potentially create ad-hoc types ---
     for func in functions:
-        # Update all_imports with requirements from this function FIRST
-        # Convert import names to full import statements
-        for import_name in func.required_imports:
-            if import_name in PYTHON_IMPORTS:
-                all_imports.add(PYTHON_IMPORTS[import_name])
+
+        # >> Determine return type and collect imports in this first pass <<
+        return_type_hint, determined_dataclass_name, type_imports = _determine_return_type(func, current_custom_types)
+        func.return_type_hint = return_type_hint # Store the calculated hint
+        func.dataclass_name = determined_dataclass_name # Store the determined dataclass name
+        all_imports.update(type_imports) # Add imports specific to the return type
+
+        # If _determine_return_type determined a name for an ad-hoc RETURNS TABLE dataclass,
+        # ensure its definition exists in current_custom_types.
+        if determined_dataclass_name and determined_dataclass_name.endswith("Result") and determined_dataclass_name not in current_custom_types:
+            if func.return_columns:
+                # Generate internal name matching the parser's potential ad-hoc creation logic
+                # Use the name determined above
+                ad_hoc_class_name = determined_dataclass_name
+                if ad_hoc_class_name: # Ensure the name was actually mapped
+                    # Create placeholder entry if missing. The actual generation happens later.
+                    if ad_hoc_class_name not in current_custom_types:
+                        logging.debug(f"Creating placeholder for ad-hoc dataclass: {ad_hoc_class_name}")
+                        # Store the columns needed to generate it later
+                        current_custom_types[ad_hoc_class_name] = func.return_columns
+                        # Add dataclass import generally if any ad-hoc is needed
+                        all_imports.add(PYTHON_IMPORTS["dataclass"])
+            else:
+                logging.warning(f"Function {func.sql_name} seems to need ad-hoc dataclass {determined_dataclass_name} but has no return columns.")
+
+        # Update all_imports with requirements from function parameters
+        # (Parser should have added base type imports like UUID, Decimal to func.required_imports)
+        for imp_name in func.required_imports:
+            if imp_name in PYTHON_IMPORTS:
+                all_imports.add(PYTHON_IMPORTS[imp_name])
             else:
                 # If we don't have a mapping, just add the name as-is (for debugging)
-                all_imports.add(import_name)
+                all_imports.add(imp_name)
 
-        target_dataclass_name = None
-        table_key = None  # Key for tracking processed tables (normalized name)
+    # --- Generate Dataclasses section --- 
+    dataclasses_section_list = []
+    processed_dataclass_names = set()
+    # Iterate through the custom types collected (from CREATE TYPE and ad-hoc RETURNS TABLE)
+    for type_name, columns in current_custom_types.items():
+         # Determine the final class name (handle potential internal names for ad-hoc)
+         if type_name.endswith("Result"):
+              class_name = type_name # Use the name directly (e.g., GetUserDataResult)
+         else:
+              class_name = _to_singular_camel_case(type_name) # Convert SQL name (e.g., user_identity -> UserIdentity)
 
-        if func.returns_table:
-            all_imports.add(PYTHON_IMPORTS["dataclass"])  # Needed if any table is returned
-            if func.setof_table_name:
-                table_key = func.setof_table_name  # Already normalized by parser
-                target_dataclass_name = _to_singular_camel_case(table_key)
-                table_to_class_name_map[table_key] = target_dataclass_name
+         if class_name in processed_dataclass_names:
+              continue # Avoid duplicates
+         processed_dataclass_names.add(class_name)
 
-                if table_key not in processed_tables:
-                    processed_tables.add(table_key)
-                    # Get imports FOR THE FIELDS using the PASSED dictionary
-                    schema_imports = table_schema_imports.get(table_key, set())
-                    # Convert import names to full import statements
-                    converted_imports = set()
-                    for import_name in schema_imports:
-                        if import_name in PYTHON_IMPORTS:
-                            converted_imports.add(PYTHON_IMPORTS[import_name])
-                        else:
-                            # If we don't have a mapping, just add the name as-is (for debugging)
-                            converted_imports.add(import_name)
-                    imports_per_dataclass[target_dataclass_name] = converted_imports  # Use new name
+         # Determine if fields should be optional (True for ad-hoc RETURNS TABLE)
+         make_fields_optional = type_name.endswith("Result")
 
-                    if func.return_columns and func.return_columns[0].name != "unknown":
-                        dataclass_defs[target_dataclass_name] = _generate_dataclass(
-                            target_dataclass_name, func.return_columns,
-                            make_fields_optional=False # SETOF table uses schema directly (optionality from ReturnColumn)
-                        )
-                    else:  # Schema not found by parser
-                        placeholder_cols = [ReturnColumn(name="unknown", sql_type=table_key, python_type="Any")]
-                        dataclass_defs[target_dataclass_name] = _generate_dataclass(
-                            target_dataclass_name, placeholder_cols,
-                            make_fields_optional=True # Make placeholder optional
-                        )
-                        # Add Any import if placeholder used
-                        any_import = PYTHON_IMPORTS.get("Any")  # Use local PYTHON_IMPORTS
-                        if any_import:
-                            # Ensure the set exists before adding to it
-                            if target_dataclass_name not in imports_per_dataclass: # Use new name
-                                imports_per_dataclass[target_dataclass_name] = set() # Use new name
-                            imports_per_dataclass[target_dataclass_name].add(any_import) # Use new name
+         dataclass_code = _generate_dataclass(
+             class_name, columns, make_fields_optional
+         )
+         dataclasses_section_list.append(dataclass_code)
 
-            else:  # Explicit RETURNS TABLE(...)
-                # Generate a unique name based on function name
-                # Apply CamelCase directly and append Result suffix
-                target_dataclass_name = inflection.camelize(func.python_name) + "Result"
+         # Collect imports needed *by this specific dataclass's fields*
+         # This logic seems better placed within _generate_dataclass or requires passing imports back
+         # For now, let's re-collect imports based on columns here
+         dataclass_imports = set()
+         for col in columns:
+             base_type = col.python_type.replace("Optional[", "").replace("List[", "").replace("]", "")
+             if base_type in PYTHON_IMPORTS: dataclass_imports.add(PYTHON_IMPORTS[base_type])
+             if col.python_type.startswith("Optional["): dataclass_imports.add(PYTHON_IMPORTS["Optional"])
+             if col.python_type.startswith("List["): dataclass_imports.add(PYTHON_IMPORTS["List"])
+         # Ensure dataclass itself is imported if we generated one
+         if dataclass_code and not dataclass_code.startswith("# TODO"):
+             dataclass_imports.add(PYTHON_IMPORTS["dataclass"])
+         all_imports.update(dataclass_imports)
 
-                # Always store the class name mapping for the function generation pass
-                func_key = f"_func_{func.sql_name}"
-                table_to_class_name_map[func_key] = target_dataclass_name
 
-                # Generate the dataclass definition only if it hasn't been created yet
-                if target_dataclass_name not in dataclass_defs:
-                    dataclass_defs[target_dataclass_name] = _generate_dataclass(
-                        target_dataclass_name, func.return_columns,
-                        make_fields_optional=True # Explicit RETURNS TABLE cols default to Optional
-                    )
-                
-                # FIXED: Collect imports specifically from the return columns for the dataclass
-                dataclass_imports = set()
-                # DEBUG: Print function name and columns being processed
-                # print(f"[GENERATOR DEBUG] Processing RETURNS TABLE for func: {func.sql_name}, dataclass: {target_dataclass_name}")
-                # print(f"[GENERATOR DEBUG]   Columns: {func.return_columns}")
-                for col in func.return_columns:
-                    # Extract base type if Optional or List
-                    base_type = col.python_type
-                    if base_type.startswith("Optional["):
-                        base_type = base_type[len("Optional["):-1]
-                    if base_type.startswith("List["):
-                        base_type = base_type[len("List["):-1]
-                    # Add imports for base type and wrappers
-                    if base_type in PYTHON_IMPORTS:
-                        dataclass_imports.add(PYTHON_IMPORTS[base_type])
-                    if col.python_type.startswith("Optional["):
-                        dataclass_imports.add(PYTHON_IMPORTS["Optional"])
-                    if col.python_type.startswith("List["):
-                        dataclass_imports.add(PYTHON_IMPORTS["List"])
-
-                # Add dataclass import itself
-                dataclass_imports.add(PYTHON_IMPORTS["dataclass"]) 
-                # DEBUG: Print imports collected for this specific dataclass
-                # print(f"[GENERATOR DEBUG]   Collected imports for {target_dataclass_name}: {dataclass_imports}")
-                imports_per_dataclass[target_dataclass_name] = dataclass_imports
-
-    # Add all necessary field type imports from generated dataclasses
-    # Now this loop should not encounter a NameError
-    # print(f\"DEBUG: Before iterating imports_per_dataclass: {imports_per_dataclass}\") # <--- REMOVED DEBUG LINE
-    # Iterate directly over the dictionary items
-    for _, imports_set in imports_per_dataclass.items(): # Use original dict
-        all_imports.update(imports_set)
+    dataclasses_section = "\n\n".join(dataclasses_section_list)
 
     # --- Second pass: Generate functions ---
     # Restore the function generation loop
     for func in functions:
-        generated_functions.append(_generate_function(func, table_to_class_name_map))
+        generated_functions.append(_generate_function(func))
 
     # --- Assemble code ---
     all_imports.discard(None)
@@ -609,7 +675,7 @@ def generate_python_code(
     header = "\n".join(header_lines)
 
     # --- Generate Dataclasses and Functions (without section headers) ---
-    stripped_dataclasses = [dataclass_defs[name].strip() for name in sorted(dataclass_defs.keys())]
+    stripped_dataclasses = [dataclasses_section.strip()]
     stripped_functions = [func.strip() for func in generated_functions]
 
     # Combine definitions with minimal spacing

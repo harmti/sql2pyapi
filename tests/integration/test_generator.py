@@ -14,7 +14,7 @@ EXPECTED_DIR = TESTS_ROOT_DIR / "expected"
 PROJECT_ROOT = TESTS_ROOT_DIR.parent # Go up one level from tests/ to project root
 
 
-def run_cli_tool(functions_sql: Path, output_py: Path, schema_sql: Path = None):
+def run_cli_tool(functions_sql: Path, output_py: Path, schema_sql: Path = None, verbose: bool = False):
     """Helper function to run the CLI tool as a subprocess."""
     cmd = [
         sys.executable,  # Use the current Python executable
@@ -25,6 +25,8 @@ def run_cli_tool(functions_sql: Path, output_py: Path, schema_sql: Path = None):
     ]
     if schema_sql:
         cmd.extend(["--schema-file", str(schema_sql)])
+    if verbose:
+        cmd.append("-v") # Add verbose flag if requested
 
     # Run from the project root directory
     result = subprocess.run(cmd, capture_output=True, text=True, cwd=PROJECT_ROOT, check=False)
@@ -1071,5 +1073,27 @@ def test_returns_table_non_setof_generates_list_and_fetchall(tmp_path):
                  
     assert fetchall_found, "Expected 'fetchall()' call not found in function body."
 
+
+def test_custom_type_return_generation(tmp_path):
+    """Test generation for functions returning custom composite types."""
+    functions_sql_path = FIXTURES_DIR / "custom_type_return.sql"
+    expected_output_path = EXPECTED_DIR / "custom_type_return_api.py"
+    actual_output_path = tmp_path / "custom_type_return_api.py"
+
+    # Run the generator tool (no separate schema needed, type is inline)
+    run_cli_tool(functions_sql_path, actual_output_path, verbose=True)
+
+    # Compare the generated file with the expected file
+    assert actual_output_path.is_file(), "Generated file was not created."
+
+    expected_content = expected_output_path.read_text()
+    actual_content = actual_output_path.read_text()
+
+    # Perform basic comparison for now. More detailed AST checks could be added if needed.
+    assert actual_content == expected_content, (
+        f"Generated file content does not match expected content.\n"
+        f"Expected ({expected_output_path}): \n{expected_content}\n"
+        f"Actual ({actual_output_path}): \n{actual_content}"
+    )
 
 # ===== END: Additional Test Cases =====

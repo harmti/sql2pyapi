@@ -102,21 +102,27 @@ class ParsedFunction:
         params (List[SQLParameter]): List of function parameters
         return_type (str): Python return type (e.g., 'int', 'List[User]')
         return_columns (List[ReturnColumn]): For table returns, the columns
+        return_type_hint (Optional[str]): Placeholder for generator
         returns_table (bool): Whether the function returns a table/composite type
+        dataclass_name (Optional[str]): Store determined dataclass name
         returns_record (bool): Whether the function returns a RECORD type
         returns_setof (bool): Whether the function returns a SETOF (multiple rows)
         required_imports (set): Set of Python imports needed for this function
         setof_table_name (Optional[str]): For SETOF table_name, the table name
         sql_comment (Optional[str]): SQL comment preceding the function definition
+        returns_sql_type_name (Optional[str]): Store original SQL name for RETURNS named_type
     """
     sql_name: str
     python_name: str
     params: List[SQLParameter] = field(default_factory=list)
     return_type: str = "None"
     return_columns: List[ReturnColumn] = field(default_factory=list)
+    return_type_hint: Optional[str] = None # Add placeholder for generator
     returns_table: bool = False
+    dataclass_name: Optional[str] = None # Store determined dataclass name
     returns_record: bool = False
     returns_setof: bool = False
     required_imports: Set[str] = field(default_factory=set) # Changed to Set[str]
     setof_table_name: Optional[str] = None
+    returns_sql_type_name: Optional[str] = None # Store original SQL name for RETURNS named_type
     sql_comment: Optional[str] = None  # Store the cleaned SQL comment 

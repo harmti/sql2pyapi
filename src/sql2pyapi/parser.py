@@ -78,6 +78,15 @@ _TABLE_REGEX = re.compile(
     re.IGNORECASE | re.DOTALL | re.MULTILINE,
 )
 
+# Regex for CREATE TYPE name AS (...)
+_TYPE_REGEX = re.compile(
+    r"CREATE\s+TYPE\s+([a-zA-Z0-9_.]+)"  # 1: Type name
+    r"\s+AS\s*\("  # AS (
+    r"(.*?)" # 2: Everything inside parenthesis (non-greedy)
+    r"\)"        # Closing parenthesis
+    , re.IGNORECASE | re.DOTALL | re.MULTILINE
+)
+
 
 # ===== SECTION: SQLParser CLASS =====
 
@@ -93,6 +102,9 @@ class SQLParser:
         """Initializes the parser with empty schema stores."""
         self.table_schemas: Dict[str, List[ReturnColumn]] = {}
         self.table_schema_imports: Dict[str, set] = {}
+        # Add a store for composite types, similar to table schemas
+        self.composite_types: Dict[str, List[ReturnColumn]] = {}
+        self.composite_type_imports: Dict[str, set] = {}
         self._comments_cache: Dict[str, str] = {} # Placeholder for comment caching if needed
 
 
@@ -383,6 +395,47 @@ class SQLParser:
                     sql_snippet=col_defs_str_cleaned[:100] + "..."
                 ) from e
 
+    def _parse_create_type(self, sql_content: str):
+        """Finds and parses CREATE TYPE name AS (...) statements."""
+        type_regex = _TYPE_REGEX
+        logging.debug(f"COMPOSITE_TYPES before parsing: {list(self.composite_types.keys())}")
+
+        for match in type_regex.finditer(sql_content):
+            logging.debug(f"TYPE_REGEX matched: {match.groups()}") # Log captured groups
+            type_name = match.group(1).strip()
+            field_defs_str = match.group(2).strip()
+            field_defs_str_cleaned = COMMENT_REGEX.sub("", field_defs_str).strip()
+            field_defs_str_cleaned = "\n".join(line.strip() for line in field_defs_str_cleaned.splitlines() if line.strip())
+
+            logging.debug(f"  Processing CREATE TYPE: {type_name}") # Log type name
+            logging.debug(f"  Cleaned field defs:\n{field_defs_str_cleaned}") # Log cleaned fields
+            logging.info(f"Found CREATE TYPE for: {type_name}")
+
+            try:
+                # Use _parse_column_definitions to parse the fields inside the type
+                fields, required_imports = self._parse_column_definitions(field_defs_str_cleaned, context=f"type {type_name}")
+                if fields:
+                    normalized_type_name = type_name.split(".")[-1]
+                    # Store under normalized name
+                    self.composite_types[normalized_type_name] = fields
+                    self.composite_type_imports[normalized_type_name] = required_imports
+                    # Also store under qualified name if different
+                    if type_name != normalized_type_name:
+                        self.composite_types[type_name] = fields
+                        self.composite_type_imports[type_name] = required_imports
+                        logging.debug(f"  -> Stored type under both '{normalized_type_name}' and '{type_name}'")
+                    else:
+                         logging.debug(f"  -> Parsed {len(fields)} fields for type {normalized_type_name}")
+                elif field_defs_str_cleaned:
+                    logging.warning(f"  -> No fields parsed for type {type_name} from definition: '{field_defs_str_cleaned[:100]}...'")
+                else:
+                    logging.debug(f"  -> Type {type_name} definition was empty or only comments.")
+            except ParsingError as e:
+                raise TypeParsingError(f"Failed to parse fields for type '{type_name}'", type_name=type_name) from e
+            except Exception as e:
+                logging.exception(f"Unexpected error parsing type '{type_name}'.")
+                raise TypeParsingError(f"Failed to parse fields for type '{type_name}'", type_name=type_name) from e
+
     def _parse_single_param_definition(self, param_def: str, context: str) -> Optional[Tuple[SQLParameter, Set[str]]]:
         """Parses a single parameter definition string. Returns SQLParameter and its imports, or None."""
         param_regex = _PARAM_REGEX # Use module-level regex
@@ -504,6 +557,7 @@ class SQLParser:
             "returns_table": False, # May be set true later if table name found
             "return_columns": [],
             "setof_table_name": None,
+            "returns_sql_type_name": None, # Initialize
         }
         current_imports = initial_imports.copy()
 
@@ -516,30 +570,55 @@ class SQLParser:
             current_imports.add("Tuple")
 
         else:
-            # Could be table name or scalar
-            table_key_qualified = sql_return_type
-            table_key_normalized = table_key_qualified.split('.')[-1]
+            # Could be table name, custom type, or scalar
+            type_key_qualified = sql_return_type
+            type_key_normalized = type_key_qualified.split('.')[-1]
 
             schema_found = False
-            table_key_to_use = None
-            if table_key_qualified in self.table_schemas:
+            is_composite_type = False # Flag for custom type
+            key_to_use = None
+            columns = []
+            imports_for_type = set()
+
+            # Check custom types first
+            if type_key_qualified in self.composite_types:
                 schema_found = True
-                table_key_to_use = table_key_qualified
-            elif table_key_normalized in self.table_schemas:
+                is_composite_type = True
+                key_to_use = type_key_qualified
+                columns = self.composite_types.get(key_to_use, [])
+                imports_for_type = self.composite_type_imports.get(key_to_use, set())
+            elif type_key_normalized in self.composite_types:
                 schema_found = True
-                table_key_to_use = table_key_normalized
+                is_composite_type = True
+                key_to_use = type_key_normalized
+                columns = self.composite_types.get(key_to_use, [])
+                imports_for_type = self.composite_type_imports.get(key_to_use, set())
+            # Then check table schemas
+            elif type_key_qualified in self.table_schemas:
+                schema_found = True
+                key_to_use = type_key_qualified
+                columns = self.table_schemas.get(key_to_use, [])
+                imports_for_type = self.table_schema_imports.get(key_to_use, set())
+            elif type_key_normalized in self.table_schemas:
+                schema_found = True
+                key_to_use = type_key_normalized
+                columns = self.table_schemas.get(key_to_use, [])
+                imports_for_type = self.table_schema_imports.get(key_to_use, set())
 
             if schema_found:
-                # Known table name
-                returns_info["returns_table"] = True
-                returns_info["return_columns"] = self.table_schemas.get(table_key_to_use, [])
-                current_imports.update(self.table_schema_imports.get(table_key_to_use, set()))
+                # Known table name or custom type
+                # Treat both as 'table-like' for dataclass generation purposes
+                returns_info["returns_table"] = True 
+                returns_info["return_columns"] = columns
+                current_imports.update(imports_for_type)
+                returns_info["returns_sql_type_name"] = sql_return_type # Store original SQL type name
                 current_imports.add("dataclass")
                 if is_setof:
-                    returns_info["setof_table_name"] = table_key_qualified
-                returns_info["return_type"] = "DataclassPlaceholder"
+                    # Store original name for SETOF cases (needed by generator?)
+                    returns_info["setof_table_name"] = type_key_qualified # Store the SQL name 
+                returns_info["return_type"] = "DataclassPlaceholder" 
             else:
-                # Scalar type OR unknown table name
+                # Scalar type OR unknown table/type name
                 try:
                     context_msg = f"return type of function {function_name or 'unknown'}"
                     py_type, type_imports = self._map_sql_to_python_type(sql_return_type, is_optional=False, context=context_msg)
@@ -582,6 +661,7 @@ class SQLParser:
             "returns_setof": False,
             "return_columns": [],
             "setof_table_name": None,
+            "returns_sql_type_name": None, # Initialize
         }
 
         return_def_raw = match_dict.get('return_def')
@@ -641,12 +721,13 @@ class SQLParser:
             returns_info["returns_table"] = partial_info.get("returns_table", False)
             returns_info["return_columns"] = partial_info.get("return_columns", [])
             returns_info["setof_table_name"] = partial_info.get("setof_table_name", None)
+            returns_info["returns_sql_type_name"] = partial_info.get("returns_sql_type_name", None) # Get the stored name
 
         # Clean up imports 
         current_imports.discard(None)
         return returns_info, current_imports
 
-    def parse(self, sql_content: str, schema_content: Optional[str] = None) -> Tuple[List[ParsedFunction], Dict[str, set]]:
+    def parse(self, sql_content: str, schema_content: Optional[str] = None) -> Tuple[List[ParsedFunction], Dict[str, set], Dict[str, List[ReturnColumn]]]:
         """
         Parses SQL content, optionally using a separate schema file.
 
@@ -659,17 +740,22 @@ class SQLParser:
         Returns:
             A tuple containing:
               - list of ParsedFunction objects.
-              - dictionary mapping table names to required imports for their schemas (instance variable).
+              - dictionary mapping table names to required imports for their schemas.
+              - dictionary mapping composite type names to their field definitions.
         """
         # Clear existing schemas for this run (already done in __init__, but good practice if reusing instance)
         self.table_schemas.clear()
         self.table_schema_imports.clear()
+        self.composite_types.clear()
+        self.composite_type_imports.clear()
 
         # === Parse Schema (if provided) ===
         if schema_content:
             try:
                 # Use self method
                 self._parse_create_table(schema_content)
+                # Parse custom types from schema file
+                self._parse_create_type(schema_content)
             except Exception as e:
                 logging.error(f"Error parsing schema content: {e}")
                 # Decide if we should raise or continue
@@ -682,6 +768,10 @@ class SQLParser:
         except Exception as e:
             # Log non-fatal error if table parsing fails here
             logging.warning(f"Could not parse CREATE TABLE statements in function file: {e}")
+        try:
+            self._parse_create_type(sql_content)
+        except Exception as e:
+            logging.warning(f"Could not parse CREATE TYPE statements in function file: {e}")
 
         # Find comments and remove them temporarily
         comments = {}
@@ -837,6 +927,7 @@ class SQLParser:
                     setof_table_name=return_info["setof_table_name"],
                     required_imports={imp for imp in current_imports if imp and imp != 'float' and imp != 'int' and imp != 'str' and imp != 'bool' and imp != 'bytes'}, # Filter builtins here
                     sql_comment=sql_comment,
+                    returns_sql_type_name=return_info.get("returns_sql_type_name"), # Get the stored name
                 )
                 functions.append(func_data)
 
@@ -853,10 +944,10 @@ class SQLParser:
                      raise # Keep original traceback for unexpected issues
 
         logging.debug(f"Finished FUNCTION_REGEX iteration. Found {len(functions)} functions.") # DEBUG LOG
-        return functions, self.table_schema_imports
+        return functions, self.table_schema_imports, self.composite_types
 
 # ... (Public parse_sql function unchanged) ...
-def parse_sql(sql_content: str, schema_content: Optional[str] = None) -> Tuple[List[ParsedFunction], Dict[str, set]]:
+def parse_sql(sql_content: str, schema_content: Optional[str] = None) -> Tuple[List[ParsedFunction], Dict[str, set], Dict[str, List[ReturnColumn]]]:
     """
     Top-level function to parse SQL content using the SQLParser class.
 
@@ -868,6 +959,7 @@ def parse_sql(sql_content: str, schema_content: Optional[str] = None) -> Tuple[L
         A tuple containing:
           - list of ParsedFunction objects.
           - dictionary mapping table names to required imports for their schemas.
+          - dictionary mapping composite type names to their field definitions.
     """
     parser = SQLParser()
     return parser.parse(sql_content, schema_content)
