@@ -1,123 +1,94 @@
-# Contributing Guide for LLMs
+# Contributing to SQL2PyAPI
 
-This document provides guidance specifically for Large Language Models (LLMs) working with the SQL2PyAPI codebase. It highlights key files, patterns, and edge cases to be aware of.
+Thank you for your interest in contributing to SQL2PyAPI! This guide provides high-level information for contributors.
 
-## Key Files and Their Purposes
+## Project Overview
 
-### Core Functionality
+SQL2PyAPI is a tool that generates Python async wrappers around PostgreSQL functions. It was developed with the assistance of LLMs (Large Language Models) and continues to welcome contributions from both human developers and LLM-assisted development.
 
-- `src/sql2pyapi/parser.py`: Parses SQL to extract function definitions and table schemas
-- `src/sql2pyapi/generator.py`: Generates Python code from parsed definitions
-- `src/sql2pyapi/cli.py`: Command-line interface for the tool
+The project consists of these main components:
 
-### Tests
+- **SQL Parser**: Extracts function definitions and table schemas from SQL files
+- **Python Code Generator**: Creates typed async Python wrappers from parsed SQL
+- **CLI Tool**: Provides command-line interface for the generator
 
-- `tests/unit/test_parser.py`: Unit tests for the parser
-- `tests/integration/test_generator.py`: Integration tests for the generator
-- `tests/integration/test_runtime.py`: Tests for the runtime behavior of generated code
-- `tests/integration/test_none_row_handling.py`: Tests for handling None rows
-- `tests/integration/test_composite_null_handling.py`: Tests for handling composite NULL rows
+## Development Principles
 
-## Code Navigation
+1. **Type Safety**: Maintain strong typing throughout the codebase and generated code
+2. **Maintainability**: Write clear, documented code with sensible abstractions
+3. **Testing**: Ensure all features and edge cases are well-tested
+4. **Compatibility**: Support standard PostgreSQL syntax and features
 
-The codebase uses section markers to help with navigation. Look for comments like:
+## Contributing Code
 
-```python
-# ===== SECTION: IMPORTS AND SETUP =====
-# ===== SECTION: TYPE MAPS AND CONSTANTS =====
-# ===== SECTION: DATA STRUCTURES =====
-```
+1. **Fork the repository** and create a feature branch
+2. **Write tests** that demonstrate your change works as expected
+3. **Submit a pull request** with a clear description of the changes
+4. **Participate in code review** to refine the implementation
 
-## Common Patterns
+## LLM Contributions
 
-### 1. Type Mapping
+This project was developed with significant assistance from LLMs and welcomes LLM-assisted contributions. When submitting LLM-generated code:
 
-SQL types are mapped to Python types in `_map_sql_to_python_type()` in parser.py. The mapping is defined in the `TYPE_MAP` dictionary.
+1. **Review the output** for correctness and quality before submitting
+2. **Ensure proper testing** as LLMs may miss edge cases
+3. **Mention LLM assistance** in your PR description for transparency
+4. **Maintain high standards** - LLM contributions should meet the same quality bar as human-written code
 
-```python
-TYPE_MAP = {
-    "uuid": "UUID",
-    "text": "str",
-    # ... more mappings
-}
-```
+## Key Concepts
 
-### 2. NULL Handling
+Understanding these core concepts will help you contribute effectively:
 
-The codebase handles NULL values in two important ways:
+### SQL Type Mapping
 
-1. **None Row Handling**: When a SQL function returns no rows
+SQL2PyAPI maps PostgreSQL types to Python types. The mapping is extensible to support additional types.
 
-```python
-row = await cur.fetchone()
-if row is None:
-    return None
-# Process row here
-```
+### Return Type Handling
 
-2. **Composite NULL Handling**: When a PostgreSQL function returns a composite type with all NULL values
+The generator handles various PostgreSQL return types:
+- Scalar values (`INTEGER`, `TEXT`, etc.)
+- Records (`RETURNS RECORD`)
+- Tables (`RETURNS TABLE(...)`)
+- Sets (`RETURNS SETOF ...`) 
 
-```python
-# Check for 'empty' composite rows (all values are None)
-if all(value is None for value in row_dict.values()):
-    return None
-```
+### NULL Handling
 
-### 3. Return Type Handling
+Proper NULL handling is critical for correctness in database applications. The codebase handles:
+- Functions that return no rows
+- Functions that return rows with NULL values
+- Composite types with NULL values
 
-The generator handles different return types with specific code patterns:
+## Getting Started
 
-```python
-if func.returns_setof:  # SETOF handling
-    # ...
-elif func.returns_table:  # TABLE handling
-    # ...
-elif func.returns_record:  # RECORD handling
-    # ...
-else:  # Scalar handling
-    # ...
-```
+1. **Set up your environment**:
+   ```bash
+   # Clone the repository
+   git clone https://github.com/yourusername/sql2pyapi.git
+   cd sql2pyapi
+   
+   # Create a virtual environment
+   uv venv
+   source .venv/bin/activate  # Or .venv\Scripts\activate on Windows
+   
+   # Install development dependencies
+   uv pip install -e ".[dev]"
+   ```
 
-## Known Edge Cases
+2. **Run the tests**:
+   ```bash
+   pytest
+   ```
 
-1. **PostgreSQL Composite Types**: PostgreSQL functions returning composite types (e.g., `RETURNS table_name`) always return a row with all NULLs instead of NULL when no matching data is found
+3. **Lint your code**:
+   ```bash
+   ruff check .
+   ruff format .
+   ```
 
-2. **Array Types**: Array types need special handling in both parsing and code generation
+## Finding Things to Work On
 
-3. **Optional Parameters**: Parameters with DEFAULT values in SQL are made optional in Python
+Check the GitHub issues to find bugs to fix or features to implement. If you have ideas for improvements, feel free to open a new issue to discuss them before implementation.
 
-4. **Table Schema Inference**: When a function returns `SETOF table_name`, the code attempts to find the table schema to generate a proper dataclass
+## Code of Conduct
 
-## Common Modifications
-
-When modifying the codebase, be aware of these common tasks:
-
-### 1. Adding Support for a New SQL Type
-
-To add support for a new SQL type:
-1. Add it to the `TYPE_MAP` in parser.py
-2. Ensure proper imports are added in `_map_sql_to_python_type()`
-
-### 2. Enhancing NULL Handling
-
-NULL handling is critical for correctness. Any changes should be tested with:
-- SQL functions that return no rows
-- SQL functions that return composite types with all NULL values
-- SQL functions that return rows with some NULL values
-
-### 3. Adding New Return Type Support
-
-If adding support for a new return type pattern:
-1. Update `_parse_return_clause()` in parser.py to recognize the pattern
-2. Update `_generate_function()` in generator.py to generate appropriate code
-3. Add tests in the integration test suite
-
-## Testing Approach
-
-When making changes, ensure that:
-
-1. All existing tests pass
-2. New tests are added for new functionality or bug fixes
-3. Edge cases are covered, especially around NULL handling
-
-Use the existing test files as templates for new tests.
+Please be respectful and constructive in all interactions related to this project. We aim to maintain a welcoming and inclusive community for all contributors.

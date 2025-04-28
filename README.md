@@ -1,102 +1,142 @@
-# SQL to Python Async API Generator
+# SQL2PyAPI: SQL to Python Type-Safe API Generator
 
-This tool automatically generates Python asynchronous API wrappers for PostgreSQL functions defined in `.sql` files. It parses SQL function definitions, maps types, handles various return structures, and produces clean, type-hinted Python code using `psycopg` for database interaction.
+`sql2pyapi` generates type-safe async Python wrappers for PostgreSQL functions, creating a bridge between SQL and Python with proper type mapping.
 
-## Use Case
+```
+┌───────────────┐
+│ PostgreSQL    │
+│ Functions     │──┐
+└───────────────┘  │    ┌──────────────┐     ┌────────────────┐
+                   ├───▶│ sql2pyapi    │────▶│ Python API     │
+┌───────────────┐  │    │ Generator    │     │ Async Wrappers │
+│ SQL Schema    │──┘    └──────────────┘     └────────────────┘
+│ Definitions   │
+└───────────────┘
+```
 
-Modern web applications often interact with databases through stored procedures or functions for complex logic, data validation, or security. Maintaining separate database logic and application-level API code can be tedious and error-prone.
+## Quick Example
 
-This tool aims to bridge that gap by automatically creating Python functions that directly call your PostgreSQL functions, ensuring consistency and reducing boilerplate code. It's particularly useful when:
+**Write SQL functions (your_functions.sql):**
+```sql
+CREATE FUNCTION get_user_by_id(p_user_id UUID)
+RETURNS TABLE (
+    id UUID,
+    username TEXT,
+    email TEXT,
+    created_at TIMESTAMP
+)
+AS $$
+    SELECT id, username, email, created_at 
+    FROM users 
+    WHERE id = p_user_id;
+$$ LANGUAGE SQL;
+```
 
-*   You have a significant number of PostgreSQL functions exposed to your application layer.
-*   You want to leverage `asyncio` and `psycopg` for non-blocking database operations.
-*   You need type safety and clear API definitions in your Python code based on your SQL schema.
-*   You want to automatically generate data transfer objects (DTOs) or data classes based on `RETURNS TABLE` definitions or `SETOF table_name` returns.
+**Generate Python API:**
+```bash
+sql2pyapi your_functions.sql user_api.py
+```
 
-## Features Supported
+**Use in your Python code:**
+```python
+import asyncio
+from user_api import get_user_by_id, User
 
-*   **SQL Parsing:**
-    *   Parses PostgreSQL `CREATE FUNCTION` statements.
-    *   Parses `CREATE TABLE` statements (from the same file or a separate schema file) to infer return types for `SETOF table_name`.
-    *   Extracts function name, parameters (including `IN`/`OUT`/`INOUT`, name, type, and `DEFAULT` for optional parameters).
-    *   Extracts return types:
-        *   `VOID`
-        *   Scalar types (e.g., `INTEGER`, `TEXT`, `UUID`, `TIMESTAMP`, `BOOLEAN`, `NUMERIC`, `JSONB`, etc.)
-        *   `RECORD` (returns a `Tuple`)
-        *   `TABLE (...)` (generates a specific `@dataclass`)
-        *   `SETOF scalar` (returns a `List[scalar_type]`)
-        *   `SETOF table_name` (returns a `List[Dataclass]` based on the `CREATE TABLE` definition or a placeholder if the table definition is not found).
-    *   Parses and includes SQL comments (`--` style and `/* ... */` style) preceding the function definition as the Python function's docstring. Handles multi-line comments.
-*   **Type Mapping:**
-    *   Maps common PostgreSQL types to Python types (e.g., `uuid` -> `UUID`, `text` -> `str`, `integer` -> `int`, `timestamp` -> `datetime`, `numeric` -> `Decimal`, `jsonb` -> `Dict[str, Any]`, `boolean` -> `bool`, `bytea` -> `bytes`).
-    *   Handles array types (e.g., `integer[]` -> `List[int]`).
-    *   Automatically adds necessary imports (`UUID`, `datetime`, `date`, `Decimal`, `Optional`, `List`, `Any`, `Dict`, `Tuple`).
-*   **Code Generation:**
-    *   Generates Python `async` functions using `psycopg` (v3+).
-    *   Includes type hints for parameters and return values (`Optional` for single returns, `List` for `SETOF`).
-    *   Generates `@dataclass` definitions for `RETURNS TABLE` and `SETOF table_name` structures. Uses `inflection` library to generate singular CamelCase class names from snake_case table names.
-    *   Generates placeholder dataclasses with TODO comments if a `SETOF table_name` is encountered but the corresponding `CREATE TABLE` statement wasn't found.
-    *   Handles optional parameters by assigning `None` as the default value in the Python function signature.
-    *   Uses Pythonic parameter names (e.g., removes `p_` or `_` prefixes).
+async def main():
+    user = await get_user_by_id("123e4567-e89b-12d3-a456-426614174000")
+    print(f"Found user: {user.username}")
 
-## Setup
+asyncio.run(main())
+```
 
-We recommend using `uv` for managing dependencies and virtual environments.
+## Why SQL2PyAPI?
 
-1.  **Create and activate a virtual environment:**
-    ```bash
-    uv venv
-    source .venv/bin/activate # Or .venv\Scripts\activate on Windows
-    ```
+### SQL Advantages for Complex Applications
 
-2.  **Install dependencies:**
-    ```bash
-    uv pip install -e . # Installs the package in editable mode with its dependencies
-    ```
-    *(Optional: To install from a locked file)*
-    ```bash
-    # Generate requirements.lock (or requirements.txt) if needed
-    uv pip compile pyproject.toml -o requirements.lock
-    # Install exact versions
-    uv pip sync requirements.lock
-    ```
+SQL offers significant benefits for data-intensive applications. SQL2PyAPI helps you:
+
+- Write queries in SQL where it excels - aggregations, joins, window functions
+- Use database-native features like triggers, constraints, and stored procedures
+- Control query optimization with direct SQL access
+- See exactly what SQL is executed, with clear error messages
+
+### Benefits for Larger Applications
+
+- Provides precise control over database queries
+- Helps prevent N+1 query problems through optimized SQL
+- Enables separation of data access from business logic
+- Supports layered architecture design
+
+### Technical Features
+
+- Type-safe interfaces with Python type hints
+- Async implementation with psycopg3
+- Compatible with database migration workflows
+- Works well with SQL generation tools and AI assistants
 
 ## Usage
 
-The tool provides a command-line interface `sql2pyapi`.
-
-### Basic Usage
+The tool provides a command-line interface:
 
 ```bash
 sql2pyapi <input_sql_file> <output_python_file>
 ```
 
-Replace `<input_sql_file>` with the path to your SQL file containing function definitions and `<output_python_file>` with the desired path for the generated Python API module.
-
 Example:
-
 ```bash
-sql2pyapi path/to/your/functions.sql path/to/your/generated_api.py
+sql2pyapi functions.sql generated_api.py
 ```
 
-### Using a Schema File
-
-If your functions depend on custom types or tables defined in separate files, you can provide a schema file using the `--schema-file` option:
-
+With a schema file:
 ```bash
 sql2pyapi functions.sql generated_api.py --schema-file schema.sql
 ```
 
+## Setup
+
+We recommend using `uv` for managing dependencies:
+
+1. **Create and activate a virtual environment:**
+   ```bash
+   uv venv
+   source .venv/bin/activate # Or .venv\Scripts\activate on Windows
+   ```
+
+2. **Install dependencies:**
+   ```bash
+   uv pip install -e . # Installs the package in editable mode
+   ```
+
+## Features
+
+- **Complete Type Mapping** from PostgreSQL to Python types
+- **Dataclass Generation** for table returns
+- **Async Functions** using psycopg3
+- **Support for Complex Returns** (scalar, SETOF, TABLE, RECORD)
+- **Docstring Generation** from SQL comments
+- **Pythonic Parameter Names** (removes prefixes like p_)
+
+## Detailed Type Support
+
+* **SQL Parsing:**
+  * Parses `CREATE FUNCTION` and `CREATE TABLE` statements
+  * Extracts parameters, return types, and comments
+  * Handles various return structures (scalar, TABLE, SETOF, RECORD)
+
+* **Type Mapping:**
+  * Maps PostgreSQL types to Python equivalents (uuid → UUID, text → str, etc.)
+  * Handles array types (e.g., integer[] → List[int])
+  * Automatically adds necessary imports
+
 ## Limitations and Future Work
 
-*   **Complex SQL:** Does not handle very complex SQL syntax within the function body or advanced `CREATE FUNCTION` options (like `VOLATILE`, `STABLE`, security attributes etc., although they are ignored gracefully).
-*   **Error Handling:** Generated code assumes the SQL function executes successfully. Robust error handling within the generated Python wrappers might need manual addition.
-*   **Type Mapping:** While common types are covered, less common or custom PostgreSQL types might map to `Any`. The `TYPE_MAP` in `parser.py` can be extended.
-*   **Dependencies:** Relies on `psycopg` (v3 async interface) and `inflection`.
-*   **Testing:** While unit tests cover various scenarios, more complex integration testing might be beneficial.
+* **Complex SQL:** Does not handle very complex SQL syntax within function bodies
+* **Error Handling:** Generated code assumes successful execution
+* **Dependencies:** Relies on psycopg3 and inflection
+* **Custom Types:** Less common PostgreSQL types might map to Any
 
 ## Development
 
-*   Install development dependencies: `uv pip install -e ".[dev]"`
-*   Run tests: `pytest`
-*   Linting/Formatting: Uses `ruff`. Check with `ruff check .` and format with `ruff format .` 
+* Install development dependencies: `uv pip install -e ".[dev]"`
+* Run tests: `pytest`
+* Linting/Formatting: `ruff check .` and `ruff format .`
