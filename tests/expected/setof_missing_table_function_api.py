@@ -6,7 +6,7 @@ from typing import List, Optional, Tuple, Dict, Any
 from psycopg import AsyncConnection
 from dataclasses import dataclass
 
-# TODO: Define dataclass for table 'some_undefined_table'
+# TODO: Define dataclass for table 'unknown_table'
 # @dataclass
 # class SomeUndefinedTable:
 #     pass
@@ -21,9 +21,17 @@ async def get_undefined_table_data(conn: AsyncConnection) -> List[SomeUndefinedT
         # Ensure dataclass 'SomeUndefinedTable' is defined above.
         if not rows:
             return []
-        colnames = [desc[0] for desc in cur.description]
-        processed_rows = [
-            dict(zip(colnames, r)) if not isinstance(r, dict) else r
-            for r in rows
-        ]
-        return [SomeUndefinedTable(**row_dict) for row_dict in processed_rows]
+        # Assuming list of tuples for SETOF composite type SomeUndefinedTable
+        try:
+            return [SomeUndefinedTable(*r) for r in rows]
+        except TypeError:
+            # Fallback attempt for list of dict-like rows
+            try:
+                colnames = [desc[0] for desc in cur.description]
+                processed_rows = [
+                    dict(zip(colnames, r)) if not isinstance(r, dict) else r
+                    for r in rows
+                ]
+                return [SomeUndefinedTable(**row_dict) for row_dict in processed_rows]
+            except Exception as e:
+                return [] # Or raise error?

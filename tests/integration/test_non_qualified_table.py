@@ -26,10 +26,11 @@ def test_non_qualified_table_no_warnings():
     
     try:
         # Parse the SQL
-        parsed_functions, table_imports = parse_sql(sql_content)
+        parsed_functions, table_imports, composite_types = parse_sql(sql_content)
         
         # Check the log output for warnings
-        log_output = log_capture.getvalue()
+        log_capture.seek(0)
+        log_output = log_capture.read()
         assert "Unknown SQL type: users" not in log_output, \
             "Should not warn about unknown SQL type for table names"
         
@@ -46,7 +47,7 @@ def test_non_qualified_table_no_warnings():
         assert function.setof_table_name == "users"
         
         # Generate Python code
-        python_code = generate_python_code(parsed_functions, table_imports)
+        python_code = generate_python_code(parsed_functions, table_imports, composite_types)
         
         # Verify that the generated code contains the correct class and return type
         assert "class User:" in python_code

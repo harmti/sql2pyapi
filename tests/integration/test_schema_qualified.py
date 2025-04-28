@@ -16,7 +16,7 @@ def test_schema_qualified_table_names():
         sql_content = f.read()
     
     # Parse the SQL
-    parsed_functions, table_imports = parse_sql(sql_content)
+    parsed_functions, table_imports, composite_types = parse_sql(sql_content)
     
     # Verify that we found both functions
     assert len(parsed_functions) == 2
@@ -31,7 +31,7 @@ def test_schema_qualified_table_names():
     assert list_companies.setof_table_name == "public.companies"
     
     # Generate Python code
-    python_code = generate_python_code(parsed_functions, table_imports)
+    python_code = generate_python_code(parsed_functions, table_imports, composite_types)
     
     # Verify that the generated code contains the correct class and return type
     assert "class Company:" in python_code

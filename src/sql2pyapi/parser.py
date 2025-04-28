@@ -35,16 +35,13 @@ FUNCTION_REGEX = re.compile(
     r"""
     CREATE(?:\s+OR\s+REPLACE)?\s+FUNCTION\s+
     (?P<func_name>[a-zA-Z0-9_.]+)              # Function name (Group 'func_name')
-    \s*\(                                     # Opening parenthesis for params
-    (?P<params>[^)]*)                          # Parameters (Group 'params')
-    \)
-    \s+RETURNS\s+
-    # REVERTED: Capture the return definition NON-GREEDILY up to AS/LANGUAGE
-    (?P<return_def>.*?)                      # Use non-greedy again
-    # Stop before the actual function body starts - allow zero or more spaces before AS/LANG
-    (?:\s*AS\s+(?:\$\$|')|\s*LANGUAGE\s+\w+)
+    \s*\( (?P<params>[^)]*) \) \s*              # Use s* after params
+    RETURNS \s+                                # RETURNS keyword
+    (?P<return_def>.*?)                      # Non-greedy return definition (DOTALL allows newlines)
+    # Positive Lookahead for LANGUAGE or AS $$
+    (?=\s+(?:LANGUAGE|AS\s*\$\$))          
     """,
-    re.IGNORECASE | re.DOTALL | re.VERBOSE | re.MULTILINE,
+    re.IGNORECASE | re.DOTALL | re.VERBOSE, # Keep MULTILINE removed
 )
 
 # Regex to find comments (both -- and /* */)
@@ -551,6 +548,7 @@ class SQLParser:
 
     def _handle_returns_type_name(self, sql_return_type: str, is_setof: bool, initial_imports: set, function_name: str) -> Tuple[dict, set]:
         """Handles the logic for 'RETURNS [SETOF] type_name' clauses."""
+        logging.debug(f"Handling return type name for {function_name}: type='{sql_return_type}', setof={is_setof}") # Add log
         returns_info = {
             "return_type": "None", # Default base type
             "returns_record": False,
@@ -668,6 +666,8 @@ class SQLParser:
         if not return_def_raw:
             logging.warning(f"Could not find return definition for function '{function_name}'")
             return returns_info, current_imports
+
+        logging.debug(f"Parsing return clause for {function_name}: '{return_def_raw[:50]}...'") # Add log
 
         return_def = return_def_raw.strip()
         context = f"return clause of function '{function_name}'" if function_name else "return clause"
@@ -808,20 +808,27 @@ class SQLParser:
                  return ""
 
         sql_no_comments = COMMENT_REGEX.sub(comment_replacer, sql_content)
-        # >>> REMOVED DEBUG PRINT <<<
+        logging.debug(f"--- SQL Content after comment removal: ---\n{sql_no_comments}\n--------------------------------------------") # Corrected f-string
 
         # Find function definitions using module-level regex
         matches = FUNCTION_REGEX.finditer(sql_no_comments)
+        match_count = 0 # Initialize counter
+        # Convert iterator to list to count easily, store for iteration
+        match_list = list(matches)
+        match_count = len(match_list)
+        logging.debug(f"FUNCTION_REGEX found {match_count} potential matches.") # Log match count
+
         functions = []
         lines = sql_content.splitlines()
-        # >>> ADDED DEBUG LOG CONFIG
-        logging.basicConfig(level=logging.DEBUG) # Ensure DEBUG level is active for subsequent logs
+        # >>> REMOVED redundant basicConfig call <<<
+        # logging.basicConfig(level=logging.DEBUG) 
         parser_logger = logging.getLogger(__name__) # Get logger for this module
-        parser_logger.setLevel(logging.DEBUG)
-        logging.debug(f"Starting FUNCTION_REGEX iteration...") # DEBUG LOG
+        # >>> Ensure logger level is set if needed, but avoid basicConfig <<<
+        # parser_logger.setLevel(logging.DEBUG) # Might already be set by root config
+        # logging.debug(f"Starting FUNCTION_REGEX iteration...") # DEBUG LOG removed
 
-        for i, match in enumerate(matches):
-            logging.debug(f"Match {i+1}: Span={match.span()}, Groups={match.groupdict()}") # DEBUG LOG
+        for i, match in enumerate(match_list):
+            # logging.debug(f"Match {i+1}: Span={match.span()}, Groups={match.groupdict()}") # DEBUG LOG removed
             match_dict = match.groupdict() # Use group names
             sql_name = None
             function_start_line = -1 # Initialize
@@ -829,7 +836,7 @@ class SQLParser:
             approx_line_in_stripped = sql_no_comments[:stripped_content_start_byte].count('\\n') + 1
 
             try:
-                sql_name = match_dict['func_name'] # Use group name
+                sql_name = match_dict['func_name'].strip() # Add .strip()
                 python_name = sql_name
                 
                 # --- Find the accurate start line in the ORIGINAL content ---
@@ -944,7 +951,29 @@ class SQLParser:
                      raise # Keep original traceback for unexpected issues
 
         logging.debug(f"Finished FUNCTION_REGEX iteration. Found {len(functions)} functions.") # DEBUG LOG
-        return functions, self.table_schema_imports, self.composite_types
+
+        # Ensure table schemas used in SETOF returns are added to composite_types
+        # This makes them available for dataclass generation later.
+        composite_types_to_return = self.composite_types.copy()
+        imports_to_return = self.table_schema_imports.copy() # Start with table imports
+        imports_to_return.update(self.composite_type_imports) # Add composite type imports
+
+        for func in functions:
+            if func.returns_setof and func.setof_table_name:
+                table_name = func.setof_table_name
+                # Check if this table schema exists but isn't already in the composite types dict
+                if table_name in self.table_schemas and table_name not in composite_types_to_return:
+                    logging.debug(f"Adding schema for table '{table_name}' used in SETOF return to composite types for dataclass generation.")
+                    composite_types_to_return[table_name] = self.table_schemas[table_name]
+                    # Also ensure its imports are included
+                    if table_name in self.table_schema_imports:
+                         imports_to_return[table_name] = self.table_schema_imports[table_name]
+                elif table_name not in self.table_schemas and table_name not in composite_types_to_return:
+                     logging.warning(f"Function '{func.sql_name}' returns SETOF '{table_name}', but no schema found for this table/type.")
+
+
+        # Return the list of functions, the combined imports, and the composite types (now including SETOF table types)
+        return functions, imports_to_return, composite_types_to_return
 
 # ... (Public parse_sql function unchanged) ...
 def parse_sql(sql_content: str, schema_content: Optional[str] = None) -> Tuple[List[ParsedFunction], Dict[str, set], Dict[str, List[ReturnColumn]]]:
@@ -1002,5 +1031,3 @@ def _generate_dataclass_name(sql_func_name: str, is_return: bool = False) -> str
     elif not class_name:
          class_name = "GeneratedResult" # Fallback
     return class_name
-
-# ... existing code ...
