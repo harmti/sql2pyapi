@@ -58,11 +58,11 @@ def test_func2_generation_with_schema(tmp_path):
     tree = ast.parse(actual_content)
 
     # 1. Check Imports
-    expected_imports_from_typing = {"List", "Optional", "Tuple", "Dict", "Any"}
+    expected_imports_from_typing = {"List", "Optional"}
     expected_imports_other = {
         ("uuid", "UUID"),
-        ("datetime", "date"),
-        ("datetime", "datetime"),
+        # ("datetime", "date"), # Date seems unused in this specific file now
+        ("datetime", "datetime"), # Add datetime back
         ("psycopg", "AsyncConnection"),
         ("dataclasses", "dataclass")
     }
