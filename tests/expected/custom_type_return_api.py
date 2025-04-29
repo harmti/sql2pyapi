@@ -6,11 +6,13 @@ from uuid import UUID
 from psycopg import AsyncConnection
 from dataclasses import dataclass
 
+
 @dataclass
 class UserIdentity:
     user_id: Optional[UUID]
     clerk_id: Optional[str]
     is_active: Optional[bool]
+
 
 async def get_user_identity_by_clerk_id(conn: AsyncConnection, clerk_id: str) -> List[UserIdentity]:
     """Function returning the custom composite type
