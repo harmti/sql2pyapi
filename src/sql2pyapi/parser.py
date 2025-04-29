@@ -836,11 +836,11 @@ class SQLParser:
             approx_line_in_stripped = sql_no_comments[:stripped_content_start_byte].count('\\n') + 1
 
             try:
-                sql_name = match_dict['func_name'].strip() # Add .strip()
+                sql_name = match_dict['func_name'].strip()
                 python_name = sql_name
                 
                 # --- Find the accurate start line in the ORIGINAL content ---
-                # (Existing logic for finding start line seems okay) 
+                # (Keep existing logic for finding start line)
                 original_start_byte = -1
                 pattern1 = f"CREATE FUNCTION {sql_name}"
                 pattern2 = f"CREATE OR REPLACE FUNCTION {sql_name}"
@@ -861,6 +861,7 @@ class SQLParser:
                 else:
                     logging.error(f"CRITICAL: Cannot find function definition start for '{sql_name}' in original SQL. Comment association may be wrong.")
                     function_start_line = approx_line_in_stripped # Fallback to estimate
+                # --- END Find start line ---
 
                 # --- Parse Parameters (use self) ---
                 param_str = match_dict['params'] or ""
@@ -888,10 +889,8 @@ class SQLParser:
                             class_name = "Any"
                             if return_info.get("setof_table_name"):
                                 table_name = return_info["setof_table_name"]
-                                # Call module level function DIRECTLY
                                 class_name = _sanitize_for_class_name(table_name)
                             elif return_info.get("returns_table") and return_info.get("return_columns"):
-                                # Call module level function DIRECTLY
                                 class_name = _generate_dataclass_name(sql_name, is_return=True)
                             
                             final_py_type = f"List[{class_name}]"
@@ -905,7 +904,6 @@ class SQLParser:
                         if base_py_type == "DataclassPlaceholder":
                             class_name = "Any"
                             if return_info.get("return_columns"):
-                                # Call module level function DIRECTLY
                                 class_name = _generate_dataclass_name(sql_name, is_return=True)
                             
                             final_py_type = f"Optional[{class_name}]"
@@ -920,7 +918,8 @@ class SQLParser:
                 if "Any" in final_py_type: current_imports.add("Any")
                 current_imports.discard(None)
                 current_imports.discard('DataclassPlaceholder') # Remove placeholder
-
+                # --- END Type Hint Determination ---
+                
                 # --- Create ParsedFunction object ---
                 func_data = ParsedFunction(
                     sql_name=sql_name,
@@ -939,8 +938,13 @@ class SQLParser:
                 functions.append(func_data)
 
             except Exception as e:
+                # Determine line number more robustly if possible
+                # function_start_line = -1 # Initialize
+                # ... [Existing logic to find function_start_line] ...
+                # sql_name might not be defined if the strip() failed
+                func_name_for_log = sql_name if 'sql_name' in locals() else "<unknown>"
                 line_msg = f" near line {function_start_line}" if function_start_line > 0 else ""
-                func_msg = f" in function '{sql_name}'" if sql_name else ""
+                func_msg = f" in function '{func_name_for_log}'" 
                 logging.error(f"Parser error{func_msg}{line_msg}: {e}")
                 # Re-raise specific errors if needed, otherwise log and continue
                 if isinstance(e, (ParsingError, FunctionParsingError, TableParsingError, TypeMappingError, ReturnTypeError)):
