@@ -3,6 +3,7 @@
 
 from psycopg import AsyncConnection
 
+
 async def do_something(conn: AsyncConnection, item_id: int) -> None:
     """A function that does something but returns nothing"""
     async with conn.cursor() as cur:
