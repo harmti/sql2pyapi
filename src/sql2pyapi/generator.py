@@ -294,10 +294,12 @@ def _generate_single_row_return_body(func: ParsedFunction, final_dataclass_name:
     body_lines = []
     body_lines.append("    row = await cur.fetchone()")
     body_lines.append("    if row is None:")
-    body_lines.append(f"        return {'[]' if func.returns_table else 'None'}")
+    # If returns_table is true BUT returns_setof is false, the hint is Optional[Dataclass],
+    # so we should return None here, not [].
+    body_lines.append(f"        return None") 
 
     if func.returns_table:
-        # Handle single row table/composite type returns -> Hint is List[Dataclass]
+        # Handle single row table/composite type returns -> Hint is Optional[Dataclass]
         body_lines.append(f"    # Ensure dataclass '{final_dataclass_name}' is defined above.")
         body_lines.append(f"    # Expecting simple tuple return for composite type {final_dataclass_name}")
         body_lines.append(f"    try:")
@@ -305,8 +307,9 @@ def _generate_single_row_return_body(func: ParsedFunction, final_dataclass_name:
         body_lines.append(f"        # Check for 'empty' composite rows (all values are None) returned as a single tuple")
         body_lines.append(f"        # Note: This check might be DB-driver specific for NULL composites")
         body_lines.append(f"        if all(v is None for v in row):")
-        body_lines.append(f"             return [] # Return empty list if the single row represents a NULL composite")
-        body_lines.append(f"        return [instance] # Return list with one item")
+        # Return None if the single row represents a NULL composite (consistency with Optional hint)
+        body_lines.append(f"             return None") 
+        body_lines.append(f"        return instance") # Return the single instance, not a list
         body_lines.append(f"    except TypeError as e:")
         body_lines.append(f"        # Tuple unpacking failed. This often happens if the DB connection")
         body_lines.append(f"        # is configured with a dict-like row factory (e.g., DictRow).")
@@ -433,8 +436,13 @@ def _determine_return_type(func: ParsedFunction, custom_types: Dict[str, List[Re
     # Let's recalculate the final hint based on parser input and SETOF flag.
     
     if func.returns_table:
-        # This logic remains the same: Always List[Dataclass] for now
-        final_type_hint = f"List[{final_dataclass_name}]"
+        # Respect the returns_setof flag here
+        if func.returns_setof:
+            final_type_hint = f"List[{final_dataclass_name}]"
+        else:
+            # Non-SETOF table/composite return should be Optional
+            final_type_hint = f"Optional[{final_dataclass_name}]"
+            current_imports.add(PYTHON_IMPORTS.get("Optional"))
     elif func.returns_record:
         # This logic remains the same: Optional[Tuple] or List[Tuple]
         final_type_hint = "Tuple"

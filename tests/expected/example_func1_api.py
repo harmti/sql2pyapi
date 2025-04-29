@@ -13,20 +13,35 @@ from dataclasses import dataclass
 
 
 @dataclass
+class User:
+    id: UUID
+    clerk_id: str
+    email: Optional[str]
+    email_verified: Optional[bool]
+    first_name: Optional[str]
+    last_name: Optional[str]
+    last_sign_in_at: Optional[datetime]
+    created_at: datetime
+    updated_at: datetime
+    is_deleted: Optional[bool]
+
+
+@dataclass
+class Company:
+    id: UUID
+    name: str
+    industry: Optional[str]
+    size: Optional[str]
+    primary_address: Optional[str]
+    created_at: datetime
+    updated_at: datetime
+    created_by_user_id: UUID
+
+
+@dataclass
 class CreateUserResult:
     id: Optional[UUID]
     clerk_id: Optional[str]
-
-
-# TODO: Define dataclass for table 'users'
-# @dataclass
-# class User:
-#     pass
-
-# TODO: Define dataclass for table 'companies'
-# @dataclass
-# class Company:
-#     pass
 
 
 async def create_user(conn: AsyncConnection, clerk_id: str, email: Optional[str] = None, email_verified: Optional[bool] = None, first_name: Optional[str] = None, last_name: Optional[str] = None) -> List[CreateUserResult]:
@@ -139,17 +154,32 @@ async def delete_user(conn: AsyncConnection, id: UUID) -> Optional[UUID]:
         # Expecting a tuple even for scalar returns, access first element.
         return row[0]
 
-async def create_company(conn: AsyncConnection, name: str, industry: str, size: str, primary_address: str, user_id: UUID) -> Optional[Any]:
+async def create_company(conn: AsyncConnection, name: str, industry: str, size: str, primary_address: str, user_id: UUID) -> Optional[Company]:
     """Function to create a new company"""
     async with conn.cursor() as cur:
         await cur.execute("SELECT * FROM create_company(%s, %s, %s, %s, %s)", [name, industry, size, primary_address, user_id])
         row = await cur.fetchone()
         if row is None:
             return None
-        # Expecting a tuple even for scalar returns, access first element.
-        return row[0]
+        # Ensure dataclass 'Company' is defined above.
+        # Expecting simple tuple return for composite type Company
+        try:
+            instance = Company(*row)
+            # Check for 'empty' composite rows (all values are None) returned as a single tuple
+            # Note: This check might be DB-driver specific for NULL composites
+            if all(v is None for v in row):
+                 return None
+            return instance
+        except TypeError as e:
+            # Tuple unpacking failed. This often happens if the DB connection
+            # is configured with a dict-like row factory (e.g., DictRow).
+            # This generated code expects the default tuple row factory.
+            raise TypeError(
+                f"Failed to map single row result to dataclass Company. "
+                f"Check DB connection: Default tuple row_factory expected. Row: {row!r}. Error: {e}"
+            )
 
-async def get_company_by_id(conn: AsyncConnection, company_id: UUID) -> Optional[Any]:
+async def get_company_by_id(conn: AsyncConnection, company_id: UUID) -> Optional[Company]:
     """Function to get a specific company by ID
     Note: This basic version doesn't enforce specific user access rules beyond existence.
     You might want to add checks here later (e.g., user is creator, user is part of an org associated with the company).
@@ -159,8 +189,23 @@ async def get_company_by_id(conn: AsyncConnection, company_id: UUID) -> Optional
         row = await cur.fetchone()
         if row is None:
             return None
-        # Expecting a tuple even for scalar returns, access first element.
-        return row[0]
+        # Ensure dataclass 'Company' is defined above.
+        # Expecting simple tuple return for composite type Company
+        try:
+            instance = Company(*row)
+            # Check for 'empty' composite rows (all values are None) returned as a single tuple
+            # Note: This check might be DB-driver specific for NULL composites
+            if all(v is None for v in row):
+                 return None
+            return instance
+        except TypeError as e:
+            # Tuple unpacking failed. This often happens if the DB connection
+            # is configured with a dict-like row factory (e.g., DictRow).
+            # This generated code expects the default tuple row factory.
+            raise TypeError(
+                f"Failed to map single row result to dataclass Company. "
+                f"Check DB connection: Default tuple row_factory expected. Row: {row!r}. Error: {e}"
+            )
 
 async def list_user_companies(conn: AsyncConnection, user_id: UUID) -> List[Company]:
     """Function to list companies created by a specific user"""
@@ -182,15 +227,30 @@ async def list_user_companies(conn: AsyncConnection, user_id: UUID) -> List[Comp
                 f"Check DB connection: Default tuple row_factory expected. Error: {e}"
             )
 
-async def update_company(conn: AsyncConnection, company_id: UUID, user_id: UUID, name: Optional[str] = None, industry: Optional[str] = None, size: Optional[str] = None, primary_address: Optional[str] = None) -> Optional[Any]:
+async def update_company(conn: AsyncConnection, company_id: UUID, user_id: UUID, name: Optional[str] = None, industry: Optional[str] = None, size: Optional[str] = None, primary_address: Optional[str] = None) -> Optional[Company]:
     """Function to update an existing company"""
     async with conn.cursor() as cur:
         await cur.execute("SELECT * FROM update_company(%s, %s, %s, %s, %s, %s)", [company_id, user_id, name, industry, size, primary_address])
         row = await cur.fetchone()
         if row is None:
             return None
-        # Expecting a tuple even for scalar returns, access first element.
-        return row[0]
+        # Ensure dataclass 'Company' is defined above.
+        # Expecting simple tuple return for composite type Company
+        try:
+            instance = Company(*row)
+            # Check for 'empty' composite rows (all values are None) returned as a single tuple
+            # Note: This check might be DB-driver specific for NULL composites
+            if all(v is None for v in row):
+                 return None
+            return instance
+        except TypeError as e:
+            # Tuple unpacking failed. This often happens if the DB connection
+            # is configured with a dict-like row factory (e.g., DictRow).
+            # This generated code expects the default tuple row factory.
+            raise TypeError(
+                f"Failed to map single row result to dataclass Company. "
+                f"Check DB connection: Default tuple row_factory expected. Row: {row!r}. Error: {e}"
+            )
 
 async def delete_company(conn: AsyncConnection, company_id: UUID, user_id: UUID) -> None:
     """Function to delete a company"""

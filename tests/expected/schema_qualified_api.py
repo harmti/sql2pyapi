@@ -21,13 +21,13 @@ class Company:
     updated_at: datetime
 
 
-async def get_company_by_id(conn: AsyncConnection, company_id: UUID) -> List[Company]:
+async def get_company_by_id(conn: AsyncConnection, company_id: UUID) -> Optional[Company]:
     """Function returning a schema-qualified table"""
     async with conn.cursor() as cur:
         await cur.execute("SELECT * FROM get_company_by_id(%s)", [company_id])
         row = await cur.fetchone()
         if row is None:
-            return []
+            return None
         # Ensure dataclass 'Company' is defined above.
         # Expecting simple tuple return for composite type Company
         try:
@@ -35,8 +35,8 @@ async def get_company_by_id(conn: AsyncConnection, company_id: UUID) -> List[Com
             # Check for 'empty' composite rows (all values are None) returned as a single tuple
             # Note: This check might be DB-driver specific for NULL composites
             if all(v is None for v in row):
-                 return [] # Return empty list if the single row represents a NULL composite
-            return [instance] # Return list with one item
+                 return None
+            return instance
         except TypeError as e:
             # Tuple unpacking failed. This often happens if the DB connection
             # is configured with a dict-like row factory (e.g., DictRow).

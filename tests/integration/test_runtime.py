@@ -3,11 +3,21 @@ import psycopg
 from dataclasses import dataclass
 from unittest.mock import MagicMock, AsyncMock  # Use AsyncMock for async methods
 from typing import Optional, List
+from uuid import UUID, uuid4
+from datetime import datetime
 
 # Assume the generated code is importable for the test
 # In a real setup, this might require path adjustments or putting expected files
 # in a place recognized as a package.
 from tests.expected.scalar_function_api import get_item_count
+
+# Import functions from a generated file that return composite types
+from tests.expected.example_func1_api import (
+    get_user_by_id, 
+    create_company, 
+    User, 
+    Company
+)
 
 
 # 1. Define a sample dataclass similar to what sql2py might generate
@@ -143,3 +153,59 @@ async def test_generated_code_handles_dict_rows_fetchall():
 # 
 #     # Assert that the scalar value was correctly extracted
 #     assert result == 42 
+
+@pytest.mark.asyncio
+async def test_raises_type_error_on_dict_row_fetchone():
+    """Verify TypeError is raised for composite return if fetchone returns a non-tuple."""
+    mock_conn = AsyncMock(spec=psycopg.AsyncConnection)
+    mock_cursor = AsyncMock(spec=psycopg.AsyncCursor)
+
+    # Simulate fetchone returning something non-unpackable (like an int) 
+    # to trigger the TypeError directly on *row
+    mock_cursor.fetchone.return_value = 0 
+    # Description isn't strictly necessary here as the error should happen before it's used
+    # mock_cursor.description = [...] 
+
+    # Setup context manager behavior
+    mock_conn.cursor.return_value.__aenter__.return_value = mock_cursor
+    mock_conn.cursor.return_value.__aexit__.return_value = None
+
+    # Call the generated function and assert the specific TypeError
+    with pytest.raises(TypeError, match="Check DB connection: Default tuple row_factory expected"):
+        # Use a function that returns Optional[Company] like create_company
+        await create_company(
+            mock_conn,
+            name="DictCorp",
+            industry="Testing",
+            size="1",
+            primary_address="123 Mock St",
+            user_id=uuid4()
+        )
+
+    # Ensure fetchone was called
+    mock_cursor.fetchone.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_raises_type_error_on_dict_row_fetchall():
+    """Verify TypeError is raised for SETOF composite return if fetchall returns non-tuples."""
+    mock_conn = AsyncMock(spec=psycopg.AsyncConnection)
+    mock_cursor = AsyncMock(spec=psycopg.AsyncCursor)
+
+    user_id_1 = uuid4()
+    # Simulate fetchall returning a list containing a non-unpackable item
+    mock_cursor.fetchall.return_value = [0] # List containing an int
+    # Description isn't strictly necessary here as the error should happen before it's used
+    # mock_cursor.description = [...] 
+
+    # Setup context manager behavior
+    mock_conn.cursor.return_value.__aenter__.return_value = mock_cursor
+    mock_conn.cursor.return_value.__aexit__.return_value = None
+
+    # Call the generated function and assert the specific TypeError
+    with pytest.raises(TypeError, match="Check DB connection: Default tuple row_factory expected"):
+        # Use a function returning List[User] like get_user_by_id
+        await get_user_by_id(mock_conn, id=user_id_1)
+
+    # Ensure fetchall was called
+    mock_cursor.fetchall.assert_awaited_once() 
