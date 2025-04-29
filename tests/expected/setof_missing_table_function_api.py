@@ -5,16 +5,67 @@
 # psycopg tuple row factory. It will raise errors if used with
 # dictionary-based row factories (like DictRow).
 
-from typing import List, Optional, Tuple, Dict, Any
-from psycopg import AsyncConnection
 from dataclasses import dataclass
+from psycopg import AsyncConnection
+from typing import List, Optional, Tuple, Dict, Any
+from typing import TypeVar, Sequence
+
+
+# ===== SECTION: RESULT HELPERS =====
+# REMOVED redundant import line
+
+T = TypeVar('T')
+
+def get_optional(result: Optional[List[T]] | Optional[T]) -> Optional[T]:
+    """\
+    Safely retrieves an optional single result.
+
+    Handles cases where the input is:
+    - None
+    - An empty list
+    - A list with one item
+    - A single item (non-list, non-None)
+
+    Returns the item if exactly one is found, otherwise None.
+    """
+    if result is None:
+        return None
+    # Check if it's a list/tuple but not string/bytes
+    if isinstance(result, Sequence) and not isinstance(result, (str, bytes)):
+        if len(result) == 1:
+            return result[0]
+        else: # Empty list or list with more than one item
+            return None
+    else: # It's already a single item
+        return result
+
+def get_required(result: Optional[List[T]] | Optional[T]) -> T:
+    """\
+    Retrieves a required single result, raising an error if none or multiple are found.
+
+    Handles cases where the input is:
+    - None
+    - An empty list
+    - A list with one item
+    - A single item (non-list, non-None)
+
+    Returns the item if exactly one is found.
+    Raises ValueError otherwise.
+    """
+    item = get_optional(result)
+    if item is None:
+         # Improved error message
+         input_repr = repr(result)
+         if len(input_repr) > 80: # Truncate long inputs
+             input_repr = input_repr[:77] + '...'
+         raise ValueError(f"Expected exactly one result, but got none or multiple. Input was: {input_repr}")
+    return item
 
 
 # TODO: Define dataclass for table 'some_undefined_tables'
 # @dataclass
 # class SomeUndefinedTable:
 #     pass
-
 
 async def get_undefined_table_data(conn: AsyncConnection) -> List[SomeUndefinedTable]:
     """Returns a setof some_undefined_table records

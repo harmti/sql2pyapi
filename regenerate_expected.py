@@ -19,16 +19,16 @@ error_count = 0
 for sql_file in sql_files:
     base_name = os.path.splitext(sql_file)[0]
     # Determine expected .py file name
-    # Most use _api.py suffix, but check for specific patterns if needed
     expected_py_file = f"{base_name}_api.py" 
     
     sql_path = os.path.join(fixtures_dir, sql_file)
     expected_path = os.path.join(expected_dir, expected_py_file)
     
-    # Check if schema file exists (using example_schema1 convention for now)
-    schema_file_path = os.path.join(fixtures_dir, f"{base_name.split('_function')[0]}_schema.sql") # Simplified guess
+    # Check if schema file exists
+    schema_file_path = None
     if base_name == 'example_func1': schema_file_path = 'tests/fixtures/example_schema1.sql'
     if base_name == 'example_schema1': schema_file_path = 'tests/fixtures/example_schema1.sql'
+    if base_name == 'schema_qualified_example': schema_file_path = 'tests/fixtures/schema_qualified_schema.sql' # Add check for this test
     # Add more specific schema checks if needed for other tests
 
     command = [
@@ -37,7 +37,7 @@ for sql_file in sql_files:
         expected_path
     ]
     # Add schema file argument if it exists
-    if os.path.exists(schema_file_path):
+    if schema_file_path and os.path.exists(schema_file_path):
         command.extend(['--schema-file', schema_file_path])
     
     # print(f"Running: {' '.join(command)}") # Reduced verbosity

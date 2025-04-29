@@ -46,6 +46,11 @@ def main(
         "-v",
         help="Enable verbose (DEBUG) logging.",
     ),
+    no_helpers: bool = typer.Option(
+        False,
+        "--no-helpers",
+        help="Do not include helper functions (get_optional, get_required) in the output.",
+    ),
 ):
     """Generates Python async API wrappers from PostgreSQL function definitions."""
     # Configure logging level based on verbose flag
@@ -86,7 +91,13 @@ def main(
             # return # Optionally exit if no functions are found
 
         # Pass schema imports AND composite types to the generator
-        python_code = generate_python_code(functions, table_schema_imports, composite_types, source_sql_file=sql_file.name)
+        python_code = generate_python_code(
+            functions,
+            table_schema_imports,
+            composite_types,
+            source_sql_file=sql_file.name,
+            omit_helpers=no_helpers,
+        )
 
     except SQL2PyAPIError as e:
         logging.error(f"Failed to parse SQL: {e}")

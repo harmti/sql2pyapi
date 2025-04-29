@@ -526,19 +526,17 @@ def generate_python_code(
     table_schema_imports: Dict[str, set],  # Accept the schema imports
     parsed_composite_types: Dict[str, List[ReturnColumn]], # Accept composite types
     source_sql_file: str = "",
+    omit_helpers: bool = False,
 ) -> str:
     """
     Generates the full Python module code as a string.
-    
-    This is the main entry point for code generation. It processes all parsed SQL functions
-    and generates a complete Python module with imports, dataclass definitions, and
-    async function implementations.
     
     Args:
         functions (List[ParsedFunction]): List of parsed SQL function definitions
         table_schema_imports (Dict[str, set]): Imports needed for table schemas
         parsed_composite_types (Dict[str, List[ReturnColumn]]): Parsed composite type definitions
         source_sql_file (str, optional): Name of the source SQL file for header comment
+        omit_helpers (bool, optional): Whether to omit helper functions from the final output
     
     Returns:
         str: Complete Python module code as a string
@@ -660,10 +658,15 @@ def generate_python_code(
         logging.info(f"Attempting to generate function: {func.sql_name}") # DEBUG LOG
         generated_functions.append(_generate_function(func))
 
+    # --- Add imports needed for helper functions ---
+    # Ensure TypeVar and Sequence are imported if helpers are generated
+    # REMOVED UNCONDITIONAL ADDITION
+    # Optional and List should already be included if used elsewhere
+
     # --- Restore Import Calculation Logic ---
     # ... existing code ...
 
-    # --- Assemble code ---
+    # --- Assemble code --- REVISED
     current_imports.discard(None)
     # DEBUG: Print the final set of all collected imports before formatting
     # print(f"[GENERATOR DEBUG] Final current_imports before formatting: {current_imports}")
@@ -672,7 +675,8 @@ def generate_python_code(
     # Consolidate typing imports for better readability
     # Define standard imports that should always be present if used
     standard_imports_order = [
-        "from typing import List, Optional, Tuple, Dict, Any",
+        "from typing import List, Optional, Tuple, Dict, Any", # Base typing imports
+        "from typing import TypeVar, Sequence", # Helper function typing imports
         "from uuid import UUID",
         "from datetime import date, datetime",
         "from decimal import Decimal",
@@ -681,48 +685,114 @@ def generate_python_code(
     ]
 
     # Filter the standard imports based on what's actually in current_imports
+    # AND conditionally add helper imports
     present_standard_imports = []
-    temp_current_imports = current_imports.copy()
+    needed_typing_names = set() # Track specific names needed from typing
+    needed_other_modules = set() # Track other modules needed
 
+    # Collect all needed names/modules from current_imports
+    for imp_in_set in current_imports:
+        if imp_in_set.startswith("from typing import"):
+            names = {name.strip() for name in imp_in_set.split('import')[1].split(',')}
+            needed_typing_names.update(names)
+        elif imp_in_set.startswith("from"):
+            module = imp_in_set.split('import')[0].replace('from', '').strip()
+            needed_other_modules.add(module)
+        # Handle direct imports like 'import psycopg' if needed later
+
+    # Conditionally add helper function types if helpers are included
+    if not omit_helpers:
+        needed_typing_names.update(["TypeVar", "Sequence"])
+        # Ensure List/Optional are added if needed by helpers, even if not elsewhere
+        needed_typing_names.update(["List", "Optional"])
+
+
+    # Build the final list of standard import lines
     for std_imp in standard_imports_order:
-        # Check if any part of the standard import line matches an import in the set
-        # Example: Check if 'from typing import List' is needed if 'from typing import Optional' is also standard
         import_parts = std_imp.split('import')
         module = import_parts[0].replace('from', '').strip()
-        names = [name.strip() for name in import_parts[1].split(',')] if len(import_parts) > 1 else []
+        names_in_line = {name.strip() for name in import_parts[1].split(',')} if len(import_parts) > 1 else set()
 
-        needed = False
-        imports_to_remove = set()
-        for imp_in_set in temp_current_imports:
-            if imp_in_set.startswith(f"from {module} import"):
-                # Check if this standard import line covers one needed in the set
-                imp_names_in_set = [name.strip() for name in imp_in_set.split('import')[1].split(',')]
-                if any(name in imp_names_in_set for name in names):
-                    needed = True
-                    imports_to_remove.add(imp_in_set) # Mark for removal if covered by consolidated line
-            elif std_imp == imp_in_set: # Handle direct match like 'import psycopg'
-                needed = True
-                imports_to_remove.add(imp_in_set)
+        # Special handling for the TypeVar/Sequence import line
+        is_helper_import_line = "TypeVar" in names_in_line or "Sequence" in names_in_line
+        if is_helper_import_line and omit_helpers:
+            continue # Skip this line entirely if helpers are omitted
 
-        if needed:
+        if module == 'typing':
+            # Include the typing line if any of its names are needed
+            if any(name in needed_typing_names for name in names_in_line):
+                present_standard_imports.append(std_imp)
+                # Optionally remove covered names from needed_typing_names for stricter checks later
+                # needed_typing_names -= names_in_line
+        elif module in needed_other_modules:
+            # Include other standard lines if the module was required
             present_standard_imports.append(std_imp)
-            # Remove the specific imports that are now covered by the standard line
-            # This logic might need refinement for complex cases
-            # A simpler approach might be to just check if keywords like 'List', 'Optional' exist
-            # For now, let's stick to adding the standard line if *any* part is needed
-            temp_current_imports -= imports_to_remove # Imperfect removal, might leave unused specific imports
+            # Optionally remove covered module
+            # needed_other_modules.remove(module)
 
-    # Collect any remaining non-standard imports (e.g., custom types)
-    # This is still imperfect; we might add standard imports unnecessarily if a part matches.
-    # A better approach would be to parse all required names (List, Optional, UUID, etc.)
-    # and then build the standard import lines based ONLY on the names present.
-    # For now, prioritizing inclusion over perfect minimalism.
-    other_imports = sorted(list(temp_current_imports))
+    # Collect any remaining non-standard imports (this logic might need refinement)
+    # For now, we assume standard imports cover everything needed, which might be too broad.
+    # A more robust approach would track *all* required symbols and generate minimal imports.
+    other_imports = [] # Assume standard imports cover all for now
 
     # Combine standard and other imports
     import_statements = present_standard_imports + other_imports
 
     logging.debug(f"[DEBUG] Imports AFTER consolidation: {import_statements}") # Added debug log
+
+    # --- Define Helper Functions Code ---
+    # Conditionally define helper code
+    helper_functions_code = """
+# ===== SECTION: RESULT HELPERS =====
+# REMOVED redundant import line
+
+T = TypeVar('T')
+
+def get_optional(result: Optional[List[T]] | Optional[T]) -> Optional[T]:
+    \"\"\"\\
+    Safely retrieves an optional single result.
+
+    Handles cases where the input is:
+    - None
+    - An empty list
+    - A list with one item
+    - A single item (non-list, non-None)
+
+    Returns the item if exactly one is found, otherwise None.
+    \"\"\"
+    if result is None:
+        return None
+    # Check if it's a list/tuple but not string/bytes
+    if isinstance(result, Sequence) and not isinstance(result, (str, bytes)):
+        if len(result) == 1:
+            return result[0]
+        else: # Empty list or list with more than one item
+            return None
+    else: # It's already a single item
+        return result
+
+def get_required(result: Optional[List[T]] | Optional[T]) -> T:
+    \"\"\"\\
+    Retrieves a required single result, raising an error if none or multiple are found.
+
+    Handles cases where the input is:
+    - None
+    - An empty list
+    - A list with one item
+    - A single item (non-list, non-None)
+
+    Returns the item if exactly one is found.
+    Raises ValueError otherwise.
+    \"\"\"
+    item = get_optional(result)
+    if item is None:
+         # Improved error message
+         input_repr = repr(result)
+         if len(input_repr) > 80: # Truncate long inputs
+             input_repr = input_repr[:77] + '...'
+         raise ValueError(f"Expected exactly one result, but got none or multiple. Input was: {input_repr}")
+    return item
+""" if not omit_helpers else ""
 
     # --- Generate Header ---
     source_filename = os.path.basename(source_sql_file) if source_sql_file else "input.sql"
@@ -745,10 +815,19 @@ def generate_python_code(
     code_parts = non_empty_dataclasses + non_empty_functions
     code_body = "\n\n".join(code_parts)
 
-    # --- Assemble code ---
+    # --- Assemble final code --- REVISED
     final_parts = [header]
     if import_statements:
-        final_parts.append("\n".join(import_statements))
+        # Delete the incorrect block that re-adds helper imports
+        # (Lines defining needed_helper_imports, import_set, update, and recalculating final_imports from import_set)
+        
+        # Keep only the correct logic using the pre-calculated import_statements:
+        final_imports = sorted(list(import_statements))
+        final_parts.append("\n".join(final_imports))
+    
+    # Add Helpers (only if not omitted and code is non-empty)
+    if helper_functions_code:
+        final_parts.append(helper_functions_code)
 
     # Prepare dataclass and function blocks
     dataclass_block = ""
@@ -761,17 +840,19 @@ def generate_python_code(
     if non_empty_functions:
         function_block = "\n\n".join(non_empty_functions)
 
-    # Join Header and Imports
-    output = "\n\n".join(final_parts)
-
-    # Add Dataclasses (if any) with correct separator
+    # Add Dataclasses (if any)
     if dataclass_block:
-        output += "\n\n\n" + dataclass_block # Revert to 3 newlines
+        final_parts.append(dataclass_block)
 
-    # Add Functions (if any) with correct separator
+    # Add Functions (if any)
     if function_block:
-        # Use 3 newlines after imports or dataclasses
-        separator = "\n\n\n" # Revert to 3 newlines
-        output += separator + function_block
+        final_parts.append(function_block)
 
-    return output.strip() + "\n"
+    # Join parts with two newlines, add trailing newline
+    # Ensure empty parts don't create extra newlines by filtering them out
+    final_code = "\n\n".join(part for part in final_parts if part) + "\n"
+
+    return final_code
+
+# ===== SECTION: FILE WRITING =====
+# Function to write the generated code to a file

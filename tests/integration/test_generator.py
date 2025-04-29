@@ -64,7 +64,7 @@ def test_func2_generation_with_schema(tmp_path):
     tree = ast.parse(actual_content)
 
     # 1. Check Imports
-    expected_imports_from_typing = {"List", "Optional", "Tuple", "Dict", "Any"}
+    expected_imports_from_typing = {"List", "Optional", "Tuple", "Dict", "Any", "TypeVar", "Sequence"}
     expected_imports_other = {
         ("uuid", "UUID"),
         ("datetime", "date"),
@@ -936,3 +936,47 @@ def test_custom_type_return_generation(tmp_path):
     )
 
 # ===== END: Additional Test Cases =====
+
+def test_no_helpers_flag(tmp_path):
+    """Test that --no-helpers flag omits helper functions and imports."""
+    functions_sql_path = FIXTURES_DIR / "scalar_function.sql" # Use a simple fixture
+    actual_output_path = tmp_path / "scalar_function_no_helpers_api.py"
+
+    # Run the generator tool WITH the --no-helpers flag
+    # Use the helper function and add the flag to the command
+    cmd = [
+        sys.executable,  # Use the current Python executable
+        "-m",
+        "sql2pyapi.cli",  # Invoke the module's entry point
+        str(functions_sql_path),
+        str(actual_output_path),
+        "--no-helpers", # Add the flag
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True, cwd=PROJECT_ROOT, check=False)
+    assert result.returncode == 0, f"CLI tool failed with --no-helpers: {result.stderr}"
+
+    # --- Assertions --- 
+    assert actual_output_path.is_file(), "Generated file was not created."
+    actual_content = actual_output_path.read_text()
+
+    # 1. Check helper functions are NOT present
+    assert "def get_optional(" not in actual_content, "get_optional helper function found but should be omitted."
+    assert "def get_required(" not in actual_content, "get_required helper function found but should be omitted."
+    assert "# ===== SECTION: RESULT HELPERS ====" not in actual_content, "Helper section header found but should be omitted."
+
+    # 2. Check helper-specific imports are NOT present (unless needed otherwise)
+    # Use AST to be more robust than simple string checking
+    tree = ast.parse(actual_content)
+    found_typevar = False
+    found_sequence = False
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            if node.module == 'typing':
+                for alias in node.names:
+                    if alias.name == 'TypeVar':
+                        found_typevar = True
+                    if alias.name == 'Sequence':
+                        found_sequence = True
+            
+    assert not found_typevar, "TypeVar import found but should be omitted when helpers are excluded."
+    assert not found_sequence, "Sequence import found but should be omitted when helpers are excluded."
