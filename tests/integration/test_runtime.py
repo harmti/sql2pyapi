@@ -120,27 +120,26 @@ async def test_generated_code_handles_dict_rows_fetchall():
     assert results[1].name == "Beta"
     assert results[1].is_active is False
 
-@pytest.mark.asyncio
-async def test_scalar_return_with_dict_row():
-    """Verify the generated code for scalar returns works with dict rows."""
-    mock_conn = AsyncMock(spec=psycopg.AsyncConnection)
-    mock_cursor = AsyncMock(spec=psycopg.AsyncCursor)
-
-    # Configure mock cursor for a scalar function like get_item_count()
-    # The column name in the description matches the function name
-    mock_cursor.description = [("get_item_count",)]
-    # Simulate fetchone returning a dictionary with the function name as the key
-    mock_scalar_dict_row = {"get_item_count": 42}
-    mock_cursor.fetchone.return_value = mock_scalar_dict_row
-
-    # Setup context manager behavior
-    mock_conn.cursor.return_value.__aenter__.return_value = mock_cursor
-    mock_conn.cursor.return_value.__aexit__.return_value = None
-
-    # Call the actual generated function using the mock connection
-    result = await get_item_count(mock_conn)
-
-    # Assertions
-    mock_cursor.execute.assert_called_once_with("SELECT * FROM get_item_count()", [])
-    mock_cursor.fetchone.assert_awaited_once()
-    assert result == 42 
+# Test removed: No longer supporting direct handling of dict rows for scalar returns
+# @pytest.mark.asyncio
+# async def test_scalar_return_with_dict_row():
+#     """Verify the generated code for scalar returns works with dict rows."""
+#     mock_conn = AsyncMock(spec=psycopg.AsyncConnection)
+#     mock_cursor = AsyncMock(spec=psycopg.AsyncCursor)
+# 
+#     # Configure mock cursor for a scalar function like get_item_count()
+#     # The column name in the description matches the function name
+#     mock_cursor.description = [("get_item_count",)]
+#     # Simulate fetchone returning a dictionary with the function name as the key
+#     mock_scalar_dict_row = {"get_item_count": 42}
+#     mock_cursor.fetchone.return_value = mock_scalar_dict_row
+# 
+#     # Setup context manager behavior
+#     mock_conn.cursor.return_value.__aenter__.return_value = mock_cursor
+#     mock_conn.cursor.return_value.__aexit__.return_value = None
+# 
+#     # Call the actual generated function using the mock connection
+#     result = await get_item_count(mock_conn)
+# 
+#     # Assert that the scalar value was correctly extracted
+#     assert result == 42 

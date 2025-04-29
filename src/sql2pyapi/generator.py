@@ -255,21 +255,17 @@ def _generate_setof_return_body(func: ParsedFunction, final_dataclass_name: Opti
         # Logic for SETOF table_name / TABLE(...) (expect list of Row/dict or tuples)
         # Use tuple unpacking, assuming it works for list of tuples from custom types
         # This MIGHT break for SETOF table_name if list of dicts is returned.
-        body_lines.append(f"    # Assuming list of tuples for SETOF composite type {final_dataclass_name}")
+        body_lines.append(f"    # Expecting list of tuples for SETOF composite type {final_dataclass_name}")
         body_lines.append(f"    try:")
         body_lines.append(f"        return [{final_dataclass_name}(*r) for r in rows]")
-        body_lines.append(f"    except TypeError:")
-        body_lines.append(f"        # Fallback attempt for list of dict-like rows")
-        body_lines.append(f"        try:")
-        body_lines.append(f"            colnames = [desc[0] for desc in cur.description]")
-        body_lines.append(f"            processed_rows = [")
-        body_lines.append(f"                dict(zip(colnames, r)) if not isinstance(r, dict) else r")
-        body_lines.append(f"                for r in rows")
-        body_lines.append(f"            ]")
-        body_lines.append(f"            return [{final_dataclass_name}(**row_dict) for row_dict in processed_rows]")
-        body_lines.append(f"        except Exception as e:")
-        body_lines.append(f"            # Failed to map rows to dataclass list for {final_dataclass_name} - Error: {{e}}") # Optionally print or re-raise
-        body_lines.append(f"            return [] # Or raise error?") # Keep return
+        body_lines.append(f"    except TypeError as e:")
+        body_lines.append(f"        # Tuple unpacking failed. This often happens if the DB connection")
+        body_lines.append(f"        # is configured with a dict-like row factory (e.g., DictRow).")
+        body_lines.append(f"        # This generated code expects the default tuple row factory.")
+        body_lines.append(f"        raise TypeError(")
+        body_lines.append(f"            f\"Failed to map SETOF results to dataclass list for {final_dataclass_name}. \"")
+        body_lines.append(f"            f\"Check DB connection: Default tuple row_factory expected. Error: {{e}}\"")
+        body_lines.append(f"        )")
 
     elif func.returns_record:
         # SETOF RECORD -> List[Tuple]
@@ -303,24 +299,22 @@ def _generate_single_row_return_body(func: ParsedFunction, final_dataclass_name:
     if func.returns_table:
         # Handle single row table/composite type returns -> Hint is List[Dataclass]
         body_lines.append(f"    # Ensure dataclass '{final_dataclass_name}' is defined above.")
-        body_lines.append(f"    # Assuming simple tuple return for composite type {final_dataclass_name}")
+        body_lines.append(f"    # Expecting simple tuple return for composite type {final_dataclass_name}")
         body_lines.append(f"    try:")
-        body_lines.append(f"        # First attempt: Direct tuple unpacking")
         body_lines.append(f"        instance = {final_dataclass_name}(*row)")
-        body_lines.append(f"        return [instance]") # Return list with one item
-        body_lines.append(f"    except TypeError:")
-        body_lines.append(f"        # Fallback attempt for dict-like rows (e.g., from RETURNS table_name)")
-        body_lines.append(f"        try:")
-        body_lines.append(f"            colnames = [desc[0] for desc in cur.description]")
-        body_lines.append(f"            row_dict = dict(zip(colnames, row)) if not isinstance(row, dict) else row")
-        body_lines.append(f"            # Check for 'empty' composite rows (all values are None)")
-        body_lines.append(f"            if all(value is None for value in row_dict.values()):")
-        body_lines.append(f"                return []") # Return empty list
-        body_lines.append(f"            instance = {final_dataclass_name}(**row_dict)")
-        body_lines.append(f"            return [instance]") # Return list with one item
-        body_lines.append(f"        except Exception as e:")
-        body_lines.append(f"            # Failed to map row to dataclass {final_dataclass_name}: {{row}} - Error: {{e}}")
-        body_lines.append(f"            return [] # Return empty list on error")
+        body_lines.append(f"        # Check for 'empty' composite rows (all values are None) returned as a single tuple")
+        body_lines.append(f"        # Note: This check might be DB-driver specific for NULL composites")
+        body_lines.append(f"        if all(v is None for v in row):")
+        body_lines.append(f"             return [] # Return empty list if the single row represents a NULL composite")
+        body_lines.append(f"        return [instance] # Return list with one item")
+        body_lines.append(f"    except TypeError as e:")
+        body_lines.append(f"        # Tuple unpacking failed. This often happens if the DB connection")
+        body_lines.append(f"        # is configured with a dict-like row factory (e.g., DictRow).")
+        body_lines.append(f"        # This generated code expects the default tuple row factory.")
+        body_lines.append(f"        raise TypeError(")
+        body_lines.append(f"            f\"Failed to map single row result to dataclass {final_dataclass_name}. \"")
+        body_lines.append(f"            f\"Check DB connection: Default tuple row_factory expected. Row: {{row!r}}. Error: {{e}}\"")
+        body_lines.append(f"        )")
 
     elif func.returns_record:
         # RECORD -> Optional[Tuple] (Hint determined previously)
@@ -328,13 +322,9 @@ def _generate_single_row_return_body(func: ParsedFunction, final_dataclass_name:
         body_lines.append("    return row")
     else:
         # Scalar type -> Optional[basic_type] (Hint determined previously)
-        # Handle dict cursor case (common with DictCursor)
-        body_lines.append("    if isinstance(row, dict):")
-        body_lines.append("        # Assumes the key is the function name for dict rows")
-        body_lines.append(f"        return row['{func.sql_name}']")
-        body_lines.append("    else:")
-        body_lines.append("        # Fallback for tuple-like rows (index 0)")
-        body_lines.append("        return row[0]")
+        # Remove check for dict row - assume tuple factory provides tuple even for single col
+        body_lines.append("    # Expecting a tuple even for scalar returns, access first element.")
+        body_lines.append("    return row[0]")
 
     return body_lines
 
@@ -731,6 +721,10 @@ def generate_python_code(
     header_lines = [
         "# -*- coding: utf-8 -*-",
         f"# Auto-generated by sql2pyapi from {source_filename}",
+        "#",
+        "# IMPORTANT: This code expects the database connection to use the default",
+        "# psycopg tuple row factory. It will raise errors if used with",
+        "# dictionary-based row factories (like DictRow).",
     ]
     header = "\n".join(header_lines)
 
