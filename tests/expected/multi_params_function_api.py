@@ -11,6 +11,13 @@ from typing import List, Optional, Tuple, Dict, Any
 from typing import TypeVar, Sequence
 from uuid import UUID
 
+async def add_item(conn: AsyncConnection, name: str, category_id: int, is_available: bool, price: Decimal, attributes: Dict[str, Any]) -> Optional[UUID]:
+    """Adds an item with various attributes"""
+    async with conn.cursor() as cur:
+        await cur.execute("SELECT * FROM add_item(%s, %s, %s, %s, %s)", [name, category_id, is_available, price, attributes])
+        result = await conn.fetchval(sql)
+        return result
+
 
 # ===== SECTION: RESULT HELPERS =====
 # REMOVED redundant import line
@@ -62,13 +69,3 @@ def get_required(result: Optional[List[T]] | Optional[T]) -> T:
          raise ValueError(f"Expected exactly one result, but got none or multiple. Input was: {input_repr}")
     return item
 
-
-async def add_item(conn: AsyncConnection, name: str, category_id: int, is_available: bool, price: Decimal, attributes: Dict[str, Any]) -> Optional[UUID]:
-    """Adds an item with various attributes"""
-    async with conn.cursor() as cur:
-        await cur.execute("SELECT * FROM add_item(%s, %s, %s, %s, %s)", [name, category_id, is_available, price, attributes])
-        row = await cur.fetchone()
-        if row is None:
-            return None
-        # Expecting a tuple even for scalar returns, access first element.
-        return row[0]

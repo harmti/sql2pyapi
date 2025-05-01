@@ -10,6 +10,33 @@ from psycopg import AsyncConnection
 from typing import List, Optional, Tuple, Dict, Any
 from typing import TypeVar, Sequence
 
+# TODO: Define dataclass for table 'some_undefined_tables'
+# @dataclass
+# class SomeUndefinedTable:
+#     pass
+
+async def get_undefined_table_data(conn: AsyncConnection) -> List[SomeUndefinedTable]:
+    """Returns a setof some_undefined_table records
+    The schema for 'some_undefined_table' is intentionally missing.
+    """
+    async with conn.cursor() as cur:
+        await cur.execute("SELECT * FROM get_undefined_table_data()", [])
+        rows = await cur.fetchall()
+        # Ensure dataclass 'SomeUndefinedTable' is defined above.
+        if not rows:
+            return []
+        # Expecting list of tuples for SETOF composite type SomeUndefinedTable
+        try:
+            return [SomeUndefinedTable(*r) for r in rows]
+        except TypeError as e:
+            # Tuple unpacking failed. This often happens if the DB connection
+            # is configured with a dict-like row factory (e.g., DictRow).
+            # This generated code expects the default tuple row factory.
+            raise TypeError(
+                f"Failed to map SETOF results to dataclass list for SomeUndefinedTable. "
+                f"Check DB connection: Default tuple row_factory expected. Error: {e}"
+            )
+
 
 # ===== SECTION: RESULT HELPERS =====
 # REMOVED redundant import line
@@ -61,30 +88,3 @@ def get_required(result: Optional[List[T]] | Optional[T]) -> T:
          raise ValueError(f"Expected exactly one result, but got none or multiple. Input was: {input_repr}")
     return item
 
-
-# TODO: Define dataclass for table 'some_undefined_tables'
-# @dataclass
-# class SomeUndefinedTable:
-#     pass
-
-async def get_undefined_table_data(conn: AsyncConnection) -> List[SomeUndefinedTable]:
-    """Returns a setof some_undefined_table records
-    The schema for 'some_undefined_table' is intentionally missing.
-    """
-    async with conn.cursor() as cur:
-        await cur.execute("SELECT * FROM get_undefined_table_data()", [])
-        rows = await cur.fetchall()
-        # Ensure dataclass 'SomeUndefinedTable' is defined above.
-        if not rows:
-            return []
-        # Expecting list of tuples for SETOF composite type SomeUndefinedTable
-        try:
-            return [SomeUndefinedTable(*r) for r in rows]
-        except TypeError as e:
-            # Tuple unpacking failed. This often happens if the DB connection
-            # is configured with a dict-like row factory (e.g., DictRow).
-            # This generated code expects the default tuple row factory.
-            raise TypeError(
-                f"Failed to map SETOF results to dataclass list for SomeUndefinedTable. "
-                f"Check DB connection: Default tuple row_factory expected. Error: {e}"
-            )

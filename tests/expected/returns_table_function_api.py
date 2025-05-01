@@ -11,6 +11,32 @@ from typing import List, Optional, Tuple, Dict, Any
 from typing import TypeVar, Sequence
 from uuid import UUID
 
+@dataclass
+class GetUserBasicInfoResult:
+    user_id: Optional[UUID]
+    first_name: Optional[str]
+    is_active: Optional[bool]
+
+async def get_user_basic_info(conn: AsyncConnection, user_id: UUID) -> List[GetUserBasicInfoResult]:
+    """Returns a user's basic info as a table"""
+    async with conn.cursor() as cur:
+        await cur.execute("SELECT * FROM get_user_basic_info(%s)", [user_id])
+        rows = await cur.fetchall()
+        # Ensure dataclass 'GetUserBasicInfoResult' is defined above.
+        if not rows:
+            return []
+        # Expecting list of tuples for SETOF composite type GetUserBasicInfoResult
+        try:
+            return [GetUserBasicInfoResult(*r) for r in rows]
+        except TypeError as e:
+            # Tuple unpacking failed. This often happens if the DB connection
+            # is configured with a dict-like row factory (e.g., DictRow).
+            # This generated code expects the default tuple row factory.
+            raise TypeError(
+                f"Failed to map SETOF results to dataclass list for GetUserBasicInfoResult. "
+                f"Check DB connection: Default tuple row_factory expected. Error: {e}"
+            )
+
 
 # ===== SECTION: RESULT HELPERS =====
 # REMOVED redundant import line
@@ -62,29 +88,3 @@ def get_required(result: Optional[List[T]] | Optional[T]) -> T:
          raise ValueError(f"Expected exactly one result, but got none or multiple. Input was: {input_repr}")
     return item
 
-
-@dataclass
-class GetUserBasicInfoResult:
-    user_id: Optional[UUID]
-    first_name: Optional[str]
-    is_active: Optional[bool]
-
-async def get_user_basic_info(conn: AsyncConnection, user_id: UUID) -> List[GetUserBasicInfoResult]:
-    """Returns a user's basic info as a table"""
-    async with conn.cursor() as cur:
-        await cur.execute("SELECT * FROM get_user_basic_info(%s)", [user_id])
-        rows = await cur.fetchall()
-        # Ensure dataclass 'GetUserBasicInfoResult' is defined above.
-        if not rows:
-            return []
-        # Expecting list of tuples for SETOF composite type GetUserBasicInfoResult
-        try:
-            return [GetUserBasicInfoResult(*r) for r in rows]
-        except TypeError as e:
-            # Tuple unpacking failed. This often happens if the DB connection
-            # is configured with a dict-like row factory (e.g., DictRow).
-            # This generated code expects the default tuple row factory.
-            raise TypeError(
-                f"Failed to map SETOF results to dataclass list for GetUserBasicInfoResult. "
-                f"Check DB connection: Default tuple row_factory expected. Error: {e}"
-            )

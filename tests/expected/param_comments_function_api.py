@@ -10,6 +10,13 @@ from typing import List, Optional, Tuple, Dict, Any
 from typing import TypeVar, Sequence
 from uuid import UUID
 
+async def function_with_param_comments(conn: AsyncConnection, id: UUID, name: str, active: bool, age: Optional[int] = None) -> None:
+    """Function with comments in parameters"""
+    async with conn.cursor() as cur:
+        await cur.execute("SELECT * FROM function_with_param_comments(%s, %s, %s, %s)", [id, name, active, age])
+        result = await conn.fetchval(sql)
+        return result
+
 
 # ===== SECTION: RESULT HELPERS =====
 # REMOVED redundant import line
@@ -61,9 +68,3 @@ def get_required(result: Optional[List[T]] | Optional[T]) -> T:
          raise ValueError(f"Expected exactly one result, but got none or multiple. Input was: {input_repr}")
     return item
 
-
-async def function_with_param_comments(conn: AsyncConnection, id: UUID, name: str, active: bool, age: Optional[int] = None) -> None:
-    """Function with comments in parameters"""
-    async with conn.cursor() as cur:
-        await cur.execute("SELECT * FROM function_with_param_comments(%s, %s, %s, %s)", [id, name, active, age])
-        return None

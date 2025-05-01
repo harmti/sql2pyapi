@@ -11,6 +11,59 @@ from typing import List, Optional, Tuple, Dict, Any
 from typing import TypeVar, Sequence
 from uuid import UUID
 
+@dataclass
+class UserIdentity:
+    user_id: Optional[UUID]
+    clerk_id: Optional[str]
+    is_active: Optional[bool]
+
+async def get_user_identity_by_clerk_id(conn: AsyncConnection, clerk_id: str) -> Optional[UserIdentity]:
+    """Function returning the custom composite type
+    Assume this gets data from somewhere, exact logic doesn't matter for parsing
+    """
+    async with conn.cursor() as cur:
+        await cur.execute("SELECT * FROM get_user_identity_by_clerk_id(%s)", [clerk_id])
+        row = await cur.fetchone()
+        if row is None:
+            return None
+        # Ensure dataclass 'UserIdentity' is defined above.
+        # Expecting simple tuple return for composite type UserIdentity
+        try:
+            instance = UserIdentity(*row)
+            # Check for 'empty' composite rows (all values are None) returned as a single tuple
+            # Note: This check might be DB-driver specific for NULL composites
+            if all(v is None for v in row):
+                 return None
+            return instance
+        except TypeError as e:
+            # Tuple unpacking failed. This often happens if the DB connection
+            # is configured with a dict-like row factory (e.g., DictRow).
+            # This generated code expects the default tuple row factory.
+            raise TypeError(
+                f"Failed to map single row result to dataclass UserIdentity. "
+                f"Check DB connection: Default tuple row_factory expected. Row: {row!r}. Error: {e}"
+            )
+
+async def get_all_active_identities(conn: AsyncConnection) -> List[UserIdentity]:
+    """Function returning SETOF the custom composite type"""
+    async with conn.cursor() as cur:
+        await cur.execute("SELECT * FROM get_all_active_identities()", [])
+        rows = await cur.fetchall()
+        # Ensure dataclass 'None' is defined above.
+        if not rows:
+            return []
+        # Expecting list of tuples for SETOF composite type UserIdentity
+        try:
+            return [UserIdentity(*r) for r in rows]
+        except TypeError as e:
+            # Tuple unpacking failed. This often happens if the DB connection
+            # is configured with a dict-like row factory (e.g., DictRow).
+            # This generated code expects the default tuple row factory.
+            raise TypeError(
+                f"Failed to map SETOF results to dataclass list for UserIdentity. "
+                f"Check DB connection: Default tuple row_factory expected. Error: {e}"
+            )
+
 
 # ===== SECTION: RESULT HELPERS =====
 # REMOVED redundant import line
@@ -62,56 +115,3 @@ def get_required(result: Optional[List[T]] | Optional[T]) -> T:
          raise ValueError(f"Expected exactly one result, but got none or multiple. Input was: {input_repr}")
     return item
 
-
-@dataclass
-class UserIdentity:
-    user_id: Optional[UUID]
-    clerk_id: Optional[str]
-    is_active: Optional[bool]
-
-async def get_user_identity_by_clerk_id(conn: AsyncConnection, clerk_id: str) -> Optional[UserIdentity]:
-    """Function returning the custom composite type
-    Assume this gets data from somewhere, exact logic doesn't matter for parsing
-    """
-    async with conn.cursor() as cur:
-        await cur.execute("SELECT * FROM get_user_identity_by_clerk_id(%s)", [clerk_id])
-        row = await cur.fetchone()
-        if row is None:
-            return None
-        # Ensure dataclass 'UserIdentity' is defined above.
-        # Expecting simple tuple return for composite type UserIdentity
-        try:
-            instance = UserIdentity(*row)
-            # Check for 'empty' composite rows (all values are None) returned as a single tuple
-            # Note: This check might be DB-driver specific for NULL composites
-            if all(v is None for v in row):
-                 return None
-            return instance
-        except TypeError as e:
-            # Tuple unpacking failed. This often happens if the DB connection
-            # is configured with a dict-like row factory (e.g., DictRow).
-            # This generated code expects the default tuple row factory.
-            raise TypeError(
-                f"Failed to map single row result to dataclass UserIdentity. "
-                f"Check DB connection: Default tuple row_factory expected. Row: {row!r}. Error: {e}"
-            )
-
-async def get_all_active_identities(conn: AsyncConnection) -> List[UserIdentity]:
-    """Function returning SETOF the custom composite type"""
-    async with conn.cursor() as cur:
-        await cur.execute("SELECT * FROM get_all_active_identities()", [])
-        rows = await cur.fetchall()
-        # Ensure dataclass 'UserIdentity' is defined above.
-        if not rows:
-            return []
-        # Expecting list of tuples for SETOF composite type UserIdentity
-        try:
-            return [UserIdentity(*r) for r in rows]
-        except TypeError as e:
-            # Tuple unpacking failed. This often happens if the DB connection
-            # is configured with a dict-like row factory (e.g., DictRow).
-            # This generated code expects the default tuple row factory.
-            raise TypeError(
-                f"Failed to map SETOF results to dataclass list for UserIdentity. "
-                f"Check DB connection: Default tuple row_factory expected. Error: {e}"
-            )

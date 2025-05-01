@@ -26,7 +26,7 @@ def test_non_qualified_table_no_warnings():
     
     try:
         # Parse the SQL
-        parsed_functions, table_imports, composite_types = parse_sql(sql_content)
+        parsed_functions, table_imports, composite_types, enum_types = parse_sql(sql_content)
         
         # Check the log output for warnings
         log_capture.seek(0)
@@ -47,7 +47,7 @@ def test_non_qualified_table_no_warnings():
         assert function.setof_table_name == "users"
         
         # Generate Python code
-        python_code = generate_python_code(parsed_functions, table_imports, composite_types)
+        python_code = generate_python_code(parsed_functions, table_imports, composite_types, enum_types)
         
         # Verify that the generated code contains the correct class and return type
         assert "class User:" in python_code

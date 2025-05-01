@@ -46,6 +46,7 @@ PYTHON_IMPORTS = {
     "Tuple": "from typing import Tuple",  # Import for Tuple
     "Optional": "from typing import Optional", # Added Optional
     "dataclass": "from dataclasses import dataclass", # Added dataclass
+    "Enum": "from enum import Enum", # Added Enum for SQL ENUM types
 }
 
 
@@ -111,6 +112,7 @@ class ParsedFunction:
         setof_table_name (Optional[str]): For SETOF table_name, the table name
         sql_comment (Optional[str]): SQL comment preceding the function definition
         returns_sql_type_name (Optional[str]): Store original SQL name for RETURNS named_type
+        returns_enum_type (bool): Whether the function returns an ENUM type
     """
     sql_name: str
     python_name: str
@@ -125,4 +127,5 @@ class ParsedFunction:
     required_imports: Set[str] = field(default_factory=set) # Changed to Set[str]
     setof_table_name: Optional[str] = None
     returns_sql_type_name: Optional[str] = None # Store original SQL name for RETURNS named_type
-    sql_comment: Optional[str] = None  # Store the cleaned SQL comment 
+    sql_comment: Optional[str] = None  # Store the cleaned SQL comment
+    returns_enum_type: bool = False  # Whether the function returns an ENUM type

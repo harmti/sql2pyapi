@@ -9,6 +9,24 @@ from psycopg import AsyncConnection
 from typing import List, Optional, Tuple, Dict, Any
 from typing import TypeVar, Sequence
 
+async def get_item_ids(conn: AsyncConnection) -> Optional[List[int]]:
+    """Returns an array of integers"""
+    async with conn.cursor() as cur:
+        await cur.execute("SELECT * FROM get_item_ids()", [])
+        row = await cur.fetchone()
+        if row is None:
+            return None
+        return row[0]
+
+async def process_tags(conn: AsyncConnection, tags: List[str]) -> Optional[List[str]]:
+    """Takes and returns an array of text"""
+    async with conn.cursor() as cur:
+        await cur.execute("SELECT * FROM process_tags(%s)", [tags])
+        row = await cur.fetchone()
+        if row is None:
+            return None
+        return row[0]
+
 
 # ===== SECTION: RESULT HELPERS =====
 # REMOVED redundant import line
@@ -60,23 +78,3 @@ def get_required(result: Optional[List[T]] | Optional[T]) -> T:
          raise ValueError(f"Expected exactly one result, but got none or multiple. Input was: {input_repr}")
     return item
 
-
-async def get_item_ids(conn: AsyncConnection) -> Optional[List[int]]:
-    """Returns an array of integers"""
-    async with conn.cursor() as cur:
-        await cur.execute("SELECT * FROM get_item_ids()", [])
-        row = await cur.fetchone()
-        if row is None:
-            return None
-        # Expecting a tuple even for scalar returns, access first element.
-        return row[0]
-
-async def process_tags(conn: AsyncConnection, tags: List[str]) -> Optional[List[str]]:
-    """Takes and returns an array of text"""
-    async with conn.cursor() as cur:
-        await cur.execute("SELECT * FROM process_tags(%s)", [tags])
-        row = await cur.fetchone()
-        if row is None:
-            return None
-        # Expecting a tuple even for scalar returns, access first element.
-        return row[0]

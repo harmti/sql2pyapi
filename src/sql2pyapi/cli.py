@@ -79,8 +79,8 @@ def main(
         raise typer.Exit(code=1)
 
     try:
-        # Get functions, schema imports, AND composite types from parser
-        functions, table_schema_imports, composite_types = parse_sql(sql_content, schema_content=schema_content)
+        # Get functions, schema imports, composite types, AND enum types from parser
+        functions, table_schema_imports, composite_types, enum_types = parse_sql(sql_content, schema_content=schema_content)
 
         if not functions:
             logging.warning("No functions found or parsed successfully. Output file will reflect this.")
@@ -90,11 +90,12 @@ def main(
             # Decide if exiting here is desired, or generating an empty file is ok.
             # return # Optionally exit if no functions are found
 
-        # Pass schema imports AND composite types to the generator
+        # Pass schema imports, composite types, AND enum types to the generator
         python_code = generate_python_code(
             functions,
             table_schema_imports,
             composite_types,
+            enum_types,
             source_sql_file=sql_file.name,
             omit_helpers=no_helpers,
         )

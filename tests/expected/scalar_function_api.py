@@ -9,6 +9,24 @@ from psycopg import AsyncConnection
 from typing import List, Optional, Tuple, Dict, Any
 from typing import TypeVar, Sequence
 
+async def get_item_count(conn: AsyncConnection) -> Optional[int]:
+    """Returns a simple count"""
+    async with conn.cursor() as cur:
+        await cur.execute("SELECT * FROM get_item_count()", [])
+        row = await cur.fetchone()
+        if row is None:
+            return None
+        return row[0]
+
+async def get_item_name(conn: AsyncConnection, id: int) -> Optional[str]:
+    """Returns text, potentially null"""
+    async with conn.cursor() as cur:
+        await cur.execute("SELECT * FROM get_item_name(%s)", [id])
+        row = await cur.fetchone()
+        if row is None:
+            return None
+        return row[0]
+
 
 # ===== SECTION: RESULT HELPERS =====
 # REMOVED redundant import line
@@ -60,23 +78,3 @@ def get_required(result: Optional[List[T]] | Optional[T]) -> T:
          raise ValueError(f"Expected exactly one result, but got none or multiple. Input was: {input_repr}")
     return item
 
-
-async def get_item_count(conn: AsyncConnection) -> Optional[int]:
-    """Returns a simple count"""
-    async with conn.cursor() as cur:
-        await cur.execute("SELECT * FROM get_item_count()", [])
-        row = await cur.fetchone()
-        if row is None:
-            return None
-        # Expecting a tuple even for scalar returns, access first element.
-        return row[0]
-
-async def get_item_name(conn: AsyncConnection, id: int) -> Optional[str]:
-    """Returns text, potentially null"""
-    async with conn.cursor() as cur:
-        await cur.execute("SELECT * FROM get_item_name(%s)", [id])
-        row = await cur.fetchone()
-        if row is None:
-            return None
-        # Expecting a tuple even for scalar returns, access first element.
-        return row[0]

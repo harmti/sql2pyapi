@@ -3,6 +3,7 @@ import re
 # Removed dataclasses, field, List, Dict, Optional, Tuple - will be imported via sql_models
 # Also removing type-specific imports like UUID, datetime, date, Decimal, Any as they are in sql_models
 import logging
+from typing import Union
 import textwrap
 import math # Keep math if used elsewhere, otherwise remove
 from pathlib import Path
@@ -87,6 +88,15 @@ _TYPE_REGEX = re.compile(
 
 # ===== SECTION: SQLParser CLASS =====
 
+# Regex for CREATE TYPE name AS ENUM (...)
+_ENUM_TYPE_REGEX = re.compile(
+    r"CREATE\s+TYPE\s+([a-zA-Z0-9_.]+)"  # 1: Type name
+    r"\s+AS\s+ENUM\s*\("  # AS ENUM (
+    r"(.*?)" # 2: Everything inside parenthesis (non-greedy)
+    r"\)"        # Closing parenthesis
+    , re.IGNORECASE | re.DOTALL | re.MULTILINE
+)
+
 class SQLParser:
     """
     Parses SQL content containing CREATE FUNCTION and CREATE TABLE statements.
@@ -101,10 +111,36 @@ class SQLParser:
         self.table_schema_imports: Dict[str, set] = {}
         self.composite_types: Dict[str, List[ReturnColumn]] = {}
         self.composite_type_imports: Dict[str, set] = {}
+        self.enum_types: Dict[str, List[str]] = {}  # Store ENUM types and their values
         self.unnamed_param_count = 0 # Added initialization
         self._comments_cache: Dict[str, str] = {} # Placeholder for comment caching if needed
 
 
+    def _parse_enum_types(self, sql_content: str) -> None:
+        """
+        Parse SQL ENUM type definitions from the SQL content.
+        
+        Args:
+            sql_content (str): SQL content to parse
+            
+        Returns:
+            None: Updates self.enum_types with discovered ENUM types
+        """
+        # Find all ENUM type definitions
+        enum_matches = _ENUM_TYPE_REGEX.finditer(sql_content)
+        
+        for match in enum_matches:
+            enum_name = match.group(1)  # Type name
+            enum_values_str = match.group(2)  # Values inside parentheses
+            
+            # Parse the enum values (they are quoted strings separated by commas)
+            # Use a regex to extract quoted strings
+            values_regex = re.compile(r"'([^']*)'")
+            enum_values = values_regex.findall(enum_values_str)
+            
+            # Store the enum type and its values
+            self.enum_types[enum_name] = enum_values
+    
     def _map_sql_to_python_type(self, sql_type: str, is_optional: bool = False, context: str = None) -> Tuple[str, set]:
         """
         Maps a SQL type to its corresponding Python type and required imports.
@@ -121,6 +157,21 @@ class SQLParser:
         Raises:
             TypeMappingError: If the SQL type cannot be mapped to a Python type
         """
+        # --- Check for ENUM Type ---
+        if sql_type in self.enum_types:
+            # Convert enum_name to PascalCase for Python Enum class name
+            enum_name = ''.join(word.capitalize() for word in sql_type.split('_'))
+            imports = {'Enum'}
+            
+            # Add Optional wrapper if explicitly requested
+            if is_optional:
+                py_type = f"Optional[{enum_name}]"
+                imports.add('Optional')
+            else:
+                py_type = enum_name
+                
+            return py_type, imports
+        
         # --- Initial Check: Table Schema Reference --- 
         if sql_type in self.table_schemas or (not '.' in sql_type and sql_type.split('.')[-1] in self.table_schemas):
              return "Any", {"Any"}
@@ -285,14 +336,22 @@ class SQLParser:
 
         # --- Determine optionality and map type --- 
         is_optional = "not null" not in constraint_part and "primary key" not in constraint_part
-        try:
-            col_context = f"column '{col_name}'" + (f" in {context}" if context else "")
-            py_type, imports = self._map_sql_to_python_type(sql_type_extracted, is_optional, col_context)
-            required_imports.update(imports) # Update main import set
-        except TypeMappingError as e:
-            logging.warning(str(e))
-            py_type = "Any" if not is_optional else "Optional[Any]"
-            required_imports.update({"Any", "Optional"} if is_optional else {"Any"})
+        
+        # Special handling for ENUM types in table columns
+        if sql_type_extracted in self.enum_types:
+            # Convert enum_name to PascalCase for Python Enum class name
+            enum_name = ''.join(word.capitalize() for word in sql_type_extracted.split('_'))
+            py_type = enum_name
+            required_imports.add('Enum')
+        else:
+            try:
+                col_context = f"column '{col_name}'" + (f" in {context}" if context else "")
+                py_type, imports = self._map_sql_to_python_type(sql_type_extracted, is_optional, col_context)
+                required_imports.update(imports) # Update main import set
+            except TypeMappingError as e:
+                logging.warning(str(e))
+                py_type = "Any" if not is_optional else "Optional[Any]"
+                required_imports.update({"Any", "Optional"} if is_optional else {"Any"})
 
         # --- Create and return column --- 
         return ReturnColumn(name=col_name, sql_type=sql_type_extracted, python_type=py_type, is_optional=is_optional)
@@ -578,6 +637,18 @@ class SQLParser:
             columns = []
             imports_for_type = set()
 
+            # First check if it's an ENUM type
+            if type_key_qualified in self.enum_types or type_key_normalized in self.enum_types:
+                # Handle ENUM type
+                enum_key = type_key_qualified if type_key_qualified in self.enum_types else type_key_normalized
+                # Convert enum_name to PascalCase for Python Enum class name
+                enum_name = ''.join(word.capitalize() for word in enum_key.split('_'))
+                returns_info["return_type"] = enum_name
+                returns_info["returns_enum_type"] = True
+                returns_info["returns_sql_type_name"] = enum_key
+                current_imports.add("Enum")
+                return returns_info, current_imports
+                
             # Check both fully qualified and normalized names for both composite types and tables
             # First check composite types with both qualified and normalized names
             if type_key_qualified in self.composite_types:
@@ -723,6 +794,8 @@ class SQLParser:
             returns_info["return_columns"] = partial_info.get("return_columns", [])
             returns_info["setof_table_name"] = partial_info.get("setof_table_name", None)
             returns_info["returns_sql_type_name"] = partial_info.get("returns_sql_type_name", None) # Get the stored name
+            # Pass the returns_enum_type flag
+            returns_info["returns_enum_type"] = partial_info.get("returns_enum_type", False)
 
         # Clean up imports 
         current_imports.discard(None)
@@ -888,22 +961,54 @@ class SQLParser:
                 if base_py_type != "None":
                     if is_setof:
                         if base_py_type == "DataclassPlaceholder":
-                            # Handle SETOF table or composite type
-                            class_name = "Any"
-                            if return_info.get("setof_table_name"):
-                                # Use the original SQL table name (could be schema-qualified)
-                                table_name = return_info["setof_table_name"]
-                                # Sanitize for class name - handles schema qualification
-                                class_name = _sanitize_for_class_name(table_name)
-                                dataclass_name = class_name  # Store for later use
-                            elif return_info.get("returns_table") and return_info.get("return_columns"):
-                                # Generate a name based on function name for ad-hoc table returns
-                                class_name = _generate_dataclass_name(sql_name, is_return=True)
-                                dataclass_name = class_name  # Store for later use
-                            
-                            final_py_type = f"List[{class_name}]"
-                            current_imports.add("List")
-                            if class_name == "Any": current_imports.add("Any")
+                            # If the return type is a named type (not a built-in type), check if it's a table, composite type, or enum
+                            if return_info.get("returns_sql_type_name"):
+                                # Store the original SQL type name for later reference in return_info
+                                # We'll access it later when creating the ParsedFunction
+                                
+                                # Check if it's an ENUM type
+                                if return_info["returns_sql_type_name"] in self.enum_types:
+                                    # Convert enum_name to PascalCase for Python Enum class name
+                                    enum_name = ''.join(word.capitalize() for word in return_info["returns_sql_type_name"].split('_'))
+                                    final_py_type = f"List[{enum_name}]"
+                                    current_imports.add("List")
+                                    current_imports.add("Enum")
+                                # Check if it's a table reference
+                                elif return_info["returns_sql_type_name"] in self.table_schemas:
+                                    # For SETOF table returns, use the singular form of the table name
+                                    # This is important for schema-qualified table names
+                                    table_name = return_info["returns_sql_type_name"]
+                                    # Use _sanitize_for_class_name to handle schema-qualified names
+                                    class_name = _sanitize_for_class_name(table_name)
+                                    final_py_type = f"List[{class_name}]"
+                                    current_imports.add("List")
+                                    current_imports.add("dataclass")
+                                # Check if it's a composite type
+                                elif return_info["returns_sql_type_name"] in self.composite_types:
+                                    final_py_type = f"List[{_generate_dataclass_name(sql_name, is_return=True)}]"
+                                    current_imports.add("List")
+                                    current_imports.add("dataclass")
+                                else:
+                                    # Unknown type - create a placeholder
+                                    final_py_type = f"List[DataclassPlaceholder]"
+                                    current_imports.add("List")
+                            else:
+                                # Handle SETOF table or composite type
+                                class_name = "Any"
+                                if return_info.get("setof_table_name"):
+                                    # Use the original SQL table name (could be schema-qualified)
+                                    table_name = return_info["setof_table_name"]
+                                    # Sanitize for class name - handles schema qualification
+                                    class_name = _sanitize_for_class_name(table_name)
+                                    dataclass_name = class_name  # Store for later use
+                                elif return_info.get("returns_table") and return_info.get("return_columns"):
+                                    # Generate a name based on function name for ad-hoc table returns
+                                    class_name = _generate_dataclass_name(sql_name, is_return=True)
+                                    dataclass_name = class_name  # Store for later use
+                                
+                                final_py_type = f"List[{class_name}]"
+                                current_imports.add("List")
+                                if class_name == "Any": current_imports.add("Any")
                         else:
                             # Handle SETOF scalar type
                             final_py_type = f"List[{base_py_type}]"
@@ -911,12 +1016,30 @@ class SQLParser:
                     else:
                         # Not SETOF - handle single row returns
                         if base_py_type == "DataclassPlaceholder":
-                            # Handle single row table or composite type
-                            class_name = "Any"
+                            # If the return type is a named type (not a built-in type), check if it's a table, composite type, or enum
                             if return_info.get("returns_sql_type_name"):
-                                # Use the original SQL type name (could be schema-qualified)
-                                type_name = return_info["returns_sql_type_name"]
+                                # Store the original SQL type name for later reference in return_info
+                                # We'll access it later when creating the ParsedFunction
+                                
+                                # Check if it's an ENUM type
+                                if return_info["returns_sql_type_name"] in self.enum_types:
+                                    # Convert enum_name to PascalCase for Python Enum class name
+                                    enum_name = ''.join(word.capitalize() for word in return_info["returns_sql_type_name"].split('_'))
+                                    # Don't wrap ENUM types in Optional by default
+                                    final_py_type = enum_name
+                                    current_imports.add("Enum")
+                                # Check if it's a table reference
+                                elif return_info["returns_sql_type_name"] in self.table_schemas:
+                                    final_py_type = f"Optional[{_generate_dataclass_name(sql_name, is_return=True)}]"
+                                    current_imports.add("Optional")
+                                    current_imports.add("dataclass")
+                                # Check if it's a composite type
+                                elif return_info["returns_sql_type_name"] in self.composite_types:
+                                    final_py_type = f"Optional[{_generate_dataclass_name(sql_name, is_return=True)}]"
+                                    current_imports.add("Optional")
+                                    current_imports.add("dataclass")
                                 # For functions returning a table, use the function name + Result
+                                type_name = return_info["returns_sql_type_name"]
                                 if sql_name in ['get_user_by_email', 'get_order_details'] or (type_name.lower() in ['users', 'public.users', 'orders', 'public.orders']):
                                     class_name = _generate_dataclass_name(sql_name, is_return=True)
                                 else:
@@ -933,8 +1056,15 @@ class SQLParser:
                             if class_name == "Any": current_imports.add("Any")
                         else:
                             # Handle single row scalar type
-                            final_py_type = f"Optional[{base_py_type}]"
-                            current_imports.add("Optional")
+                            # Check if this is an ENUM type that was already processed in _handle_returns_type_name
+                            if return_info.get("returns_enum_type"):
+                                # Don't wrap ENUM types in Optional
+                                final_py_type = base_py_type
+                                current_imports.add("Enum")
+                            else:
+                                # For non-ENUM scalar types, wrap in Optional
+                                final_py_type = f"Optional[{base_py_type}]"
+                                current_imports.add("Optional")
 
                 # Ensure necessary base types are imported
                 if "Tuple" in final_py_type: current_imports.add("Tuple")
@@ -959,6 +1089,7 @@ class SQLParser:
                     sql_comment=sql_comment,
                     dataclass_name=dataclass_name,
                     return_type_hint=None,  # Set to None for compatibility with tests
+                    returns_enum_type=return_info.get("returns_enum_type", False),  # Include the returns_enum_type flag
                 ))
 
             except Exception as e:
@@ -1003,8 +1134,8 @@ class SQLParser:
         # Return the list of functions, the combined imports, and the composite types (now including SETOF table types)
         return functions, imports_to_return, composite_types_to_return
 
-# ... (Public parse_sql function unchanged) ...
-def parse_sql(sql_content: str, schema_content: Optional[str] = None) -> Tuple[List[ParsedFunction], Dict[str, set], Dict[str, List[ReturnColumn]]]:
+# ... (Public parse_sql function updated) ...
+def parse_sql(sql_content: str, schema_content: Optional[str] = None) -> Tuple[List[ParsedFunction], Dict[str, set], Dict[str, List[ReturnColumn]], Dict[str, List[str]]]:
     """
     Top-level function to parse SQL content using the SQLParser class.
 
@@ -1017,9 +1148,27 @@ def parse_sql(sql_content: str, schema_content: Optional[str] = None) -> Tuple[L
           - list of ParsedFunction objects.
           - dictionary mapping table names to required imports for their schemas.
           - dictionary mapping composite type names to their field definitions.
+          - dictionary mapping enum type names to their values.
     """
     parser = SQLParser()
-    return parser.parse(sql_content, schema_content)
+    
+    # Parse ENUM types first
+    parser._parse_enum_types(sql_content)
+    if schema_content:
+        parser._parse_enum_types(schema_content)
+    
+    # If schema content is provided separately, parse it first
+    if schema_content:
+        # Use parse method with schema content instead of non-existent parse_schema_content
+        # This is a temporary fix for backward compatibility
+        parser._parse_create_table(schema_content)
+        parser._parse_create_type(schema_content)
+    
+    # Parse the main SQL content
+    functions, imports_to_return, composite_types_to_return = parser.parse(sql_content, schema_content)
+    
+    # Always return enum_types
+    return functions, imports_to_return, composite_types_to_return, parser.enum_types
 
 # ... (Removed legacy sections) ...
 

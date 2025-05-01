@@ -9,6 +9,13 @@ from psycopg import AsyncConnection
 from typing import List, Optional, Tuple, Dict, Any
 from typing import TypeVar, Sequence
 
+async def do_something(conn: AsyncConnection, item_id: int) -> None:
+    """A function that does something but returns nothing"""
+    async with conn.cursor() as cur:
+        await cur.execute("SELECT * FROM do_something(%s)", [item_id])
+        # Function returns void, no results to fetch
+        return None
+
 
 # ===== SECTION: RESULT HELPERS =====
 # REMOVED redundant import line
@@ -60,9 +67,3 @@ def get_required(result: Optional[List[T]] | Optional[T]) -> T:
          raise ValueError(f"Expected exactly one result, but got none or multiple. Input was: {input_repr}")
     return item
 
-
-async def do_something(conn: AsyncConnection, item_id: int) -> None:
-    """A function that does something but returns nothing"""
-    async with conn.cursor() as cur:
-        await cur.execute("SELECT * FROM do_something(%s)", [item_id])
-        return None

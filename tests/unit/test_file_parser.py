@@ -149,7 +149,7 @@ def test_parse_sql_with_complex_file_content(tmp_path):
 
     # --- Call the function under test ---
     # Call parse_sql with the read content
-    parsed_functions, table_imports, composite_types = parse_sql(sql_content, schema_content)
+    parsed_functions, table_imports, composite_types, enum_types = parse_sql(sql_content, schema_content)
 
     # --- Assertions ---
     assert len(parsed_functions) == 10, f"Expected 10 functions, found {len(parsed_functions)}"

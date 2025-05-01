@@ -23,7 +23,8 @@ PYTHON_IMPORTS = {
     "datetime": "from datetime import datetime",
     "date": "from datetime import date",
     "Decimal": "from decimal import Decimal",
-    "dataclass": "from dataclasses import dataclass"
+    "dataclass": "from dataclasses import dataclass",
+    "Enum": "from enum import Enum"
     # Add others if needed directly by generator logic, but prefer parser-provided imports
 }
 
@@ -61,6 +62,35 @@ def _to_singular_camel_case(name: str) -> str:
     singular_snake = inflection.singularize(table_name)
     # Convert snake_case to CamelCase
     return inflection.camelize(singular_snake)
+
+
+# ===== SECTION: ENUM GENERATION =====
+# Function for generating Python Enum classes from SQL ENUM types
+
+def _generate_enum_class(enum_name: str, enum_values: List[str]) -> str:
+    """
+    Generates a Python Enum class definition string based on SQL ENUM type.
+    
+    Args:
+        enum_name (str): Name of the SQL ENUM type
+        enum_values (List[str]): List of values for the ENUM
+    
+    Returns:
+        str: Python code for the Enum class definition as a string
+    """
+    # Convert enum_name to PascalCase for Python Enum class name
+    class_name = ''.join(word.capitalize() for word in enum_name.split('_'))
+    
+    # Generate enum members (convert values to UPPER_SNAKE_CASE)
+    members = []
+    for value in enum_values:
+        # Convert value to UPPER_SNAKE_CASE for Python enum member
+        member_name = value.upper()
+        members.append(f"    {member_name} = '{value}'")
+    
+    members_str = "\n".join(members)
+    
+    return f"class {class_name}(Enum):\n{members_str}\n"
 
 
 # ===== SECTION: DATACLASS GENERATION =====
@@ -212,17 +242,42 @@ def _generate_function_body(func: ParsedFunction, final_dataclass_name: Optional
     """
     body_lines = []
     
-    # Common setup for all function types
+    # For ENUM type returns, use a simpler query format and fetchval
+    if func.returns_enum_type:
+        body_lines = []
+        sql_query = f"SELECT {func.sql_name}({sql_args_placeholders});"
+        
+        # Use proper indentation and string formatting for the SQL query
+        body_lines.append(f'    async with conn.cursor() as cur:')
+        body_lines.append(f'        await cur.execute("SELECT * FROM {func.sql_name}({sql_args_placeholders})", {python_args_list})')
+        body_lines.append(f'        row = await cur.fetchone()')
+        body_lines.append(f'        if row is None:')
+        body_lines.append(f'            return None')
+        body_lines.append(f'        return {func.return_type}(row[0])')
+        return body_lines
+        
+    # Common setup for all other function types
     body_lines.append("async with conn.cursor() as cur:")
     body_lines.append(
         f'    await cur.execute("SELECT * FROM {func.sql_name}({sql_args_placeholders})", {python_args_list})'
     )
     
-    # Handle different return types
-    if not func.returns_table and func.return_type == "None":
-        # Void function - simplest case, just execute and return None
+    # For void returns, no need to fetch any results
+    if func.return_type == 'None':
+        body_lines.append("    # Function returns void, no results to fetch")
         body_lines.append("    return None")
-    elif func.returns_setof:
+        return body_lines
+        
+    # For scalar returns (int, str, bool, etc.), use fetchone
+    if not func.returns_table and not func.returns_record and not func.returns_enum_type:
+        body_lines.append("    row = await cur.fetchone()")
+        body_lines.append("    if row is None:")
+        body_lines.append("        return None")
+        body_lines.append("    return row[0]")
+        return body_lines
+    
+    # Handle different return types
+    if func.returns_setof:
         # Handle SETOF returns (multiple rows)
         body_lines.extend(_generate_setof_return_body(func, final_dataclass_name))
     else:
@@ -246,6 +301,13 @@ def _generate_setof_return_body(func: ParsedFunction, final_dataclass_name: Opti
     body_lines = []
     body_lines.append("    rows = await cur.fetchall()")
     
+    # Handle SETOF ENUM type
+    if func.returns_enum_type:
+        body_lines.append("    if not rows:")
+        body_lines.append("        return []")
+        body_lines.append(f"    return [{func.return_type}(row[0]) for row in rows]")
+        return body_lines
+    
     if func.returns_table:
         # Covers SETOF table_name, SETOF custom_type_name, SETOF TABLE(...)
         body_lines.append(f"    # Ensure dataclass '{final_dataclass_name}' is defined above.")
@@ -261,9 +323,26 @@ def _generate_setof_return_body(func: ParsedFunction, final_dataclass_name: Opti
         if func.returns_table and func.setof_table_name:
             singular_class_name = _to_singular_camel_case(func.setof_table_name)
             
+        # Check if any columns are ENUM types
+        has_enum_columns = any(col.python_type.endswith('Type') for col in func.return_columns)
+        
         body_lines.append(f"    # Expecting list of tuples for SETOF composite type {singular_class_name}")
         body_lines.append(f"    try:")
-        body_lines.append(f"        return [{singular_class_name}(*r) for r in rows]")
+        
+        if has_enum_columns:
+            # Generate field assignments with ENUM conversions
+            field_assignments = []
+            for i, col in enumerate(func.return_columns):
+                if col.python_type.endswith('Type') and 'Enum' in func.required_imports:
+                    field_assignments.append(f"{col.name}={col.python_type}(r[{i}])")
+                else:
+                    field_assignments.append(f"{col.name}=r[{i}]")
+            field_assignments_str = ",\n                ".join(field_assignments)
+            
+            body_lines.append(f"        return [\n            {singular_class_name}(\n                {field_assignments_str}\n            )\n            for r in rows\n        ]")
+        else:
+            body_lines.append(f"        return [{singular_class_name}(*r) for r in rows]")
+            
         body_lines.append(f"    except TypeError as e:")
         body_lines.append(f"        # Tuple unpacking failed. This often happens if the DB connection")
         body_lines.append(f"        # is configured with a dict-like row factory (e.g., DictRow).")
@@ -304,6 +383,11 @@ def _generate_single_row_return_body(func: ParsedFunction, final_dataclass_name:
     # so we should return None here, not [].
     body_lines.append(f"        return None") 
 
+    # Handle ENUM type returns
+    if func.returns_enum_type:
+        body_lines.append(f"    return {func.return_type}(row[0])")
+        return body_lines
+
     if func.returns_table:
         # Handle single row table/composite type returns -> Hint is Optional[Dataclass]
         # Ensure we use the singular form of the class name
@@ -314,14 +398,36 @@ def _generate_single_row_return_body(func: ParsedFunction, final_dataclass_name:
             
         body_lines.append(f"    # Ensure dataclass '{singular_class_name}' is defined above.")
         body_lines.append(f"    # Expecting simple tuple return for composite type {singular_class_name}")
-        body_lines.append(f"    try:")
-        body_lines.append(f"        instance = {singular_class_name}(*row)")
-        body_lines.append(f"        # Check for 'empty' composite rows (all values are None) returned as a single tuple")
-        body_lines.append(f"        # Note: This check might be DB-driver specific for NULL composites")
-        body_lines.append(f"        if all(v is None for v in row):")
-        # Return None if the single row represents a NULL composite (consistency with Optional hint)
-        body_lines.append(f"             return None") 
-        body_lines.append(f"        return instance") # Return the single instance, not a list
+        # Check if any columns are ENUM types
+        has_enum_columns = any(col.python_type.endswith('Type') for col in func.return_columns)
+        
+        if has_enum_columns:
+            # Generate field assignments with ENUM conversions
+            field_assignments = []
+            for i, col in enumerate(func.return_columns):
+                if col.python_type.endswith('Type') and 'Enum' in func.required_imports:
+                    field_assignments.append(f"{col.name}={col.python_type}(row[{i}])")
+                else:
+                    field_assignments.append(f"{col.name}=row[{i}]")
+            field_assignments_str = ",\n                ".join(field_assignments)
+            
+            body_lines.append(f"    try:")
+            body_lines.append(f"        instance = {singular_class_name}(\n                {field_assignments_str}\n            )")
+            body_lines.append(f"        # Check for 'empty' composite rows (all values are None) returned as a single tuple")
+            body_lines.append(f"        # Note: This check might be DB-driver specific for NULL composites")
+            body_lines.append(f"        if all(v is None for v in row):")
+            # Return None if the single row represents a NULL composite (consistency with Optional hint)
+            body_lines.append(f"             return None") 
+            body_lines.append(f"        return instance") # Return the single instance, not a list
+        else:
+            body_lines.append(f"    try:")
+            body_lines.append(f"        instance = {singular_class_name}(*row)")
+            body_lines.append(f"        # Check for 'empty' composite rows (all values are None) returned as a single tuple")
+            body_lines.append(f"        # Note: This check might be DB-driver specific for NULL composites")
+            body_lines.append(f"        if all(v is None for v in row):")
+            # Return None if the single row represents a NULL composite (consistency with Optional hint)
+            body_lines.append(f"             return None") 
+            body_lines.append(f"        return instance") # Return the single instance, not a list
         body_lines.append(f"    except TypeError as e:")
         body_lines.append(f"        # Tuple unpacking failed. This often happens if the DB connection")
         body_lines.append(f"        # is configured with a dict-like row factory (e.g., DictRow).")
@@ -504,6 +610,7 @@ def generate_python_code(
     functions: List[ParsedFunction],
     table_schema_imports: Dict[str, set],  # Accept the schema imports
     parsed_composite_types: Dict[str, List[ReturnColumn]], # Accept composite types
+    parsed_enum_types: Dict[str, List[str]] = None, # Accept enum types
     source_sql_file: str = "",
     omit_helpers: bool = False,
 ) -> str:
@@ -578,6 +685,29 @@ def generate_python_code(
                 # If we don't have a mapping, just add the name as-is (for debugging)
                 current_imports.add(imp_name)
 
+    # --- Generate Enum classes section ---
+    enum_classes_section_list = []
+    processed_enum_names = set()
+    
+    # Generate Enum classes if we have parsed enum types
+    if parsed_enum_types:
+        for enum_name, enum_values in parsed_enum_types.items():
+            # Convert enum_name to PascalCase for Python Enum class name
+            class_name = ''.join(word.capitalize() for word in enum_name.split('_'))
+            
+            if class_name in processed_enum_names:
+                continue  # Avoid duplicates
+            processed_enum_names.add(class_name)
+            
+            # Generate the Enum class code
+            enum_class_code = _generate_enum_class(enum_name, enum_values)
+            enum_classes_section_list.append(enum_class_code)
+            
+            # Ensure Enum is imported
+            current_imports.add(PYTHON_IMPORTS['Enum'])
+    
+    enum_classes_section = "\n\n".join(enum_classes_section_list)
+    
     # --- Generate Dataclasses section --- 
     dataclasses_section_list = []
     processed_dataclass_names = set()
@@ -654,6 +784,7 @@ def generate_python_code(
         "from decimal import Decimal",
         "from psycopg import AsyncConnection",
         "from dataclasses import dataclass",
+        "from enum import Enum",
     ]
 
     # Filter the standard imports based on what's actually in current_imports
@@ -778,47 +909,30 @@ def get_required(result: Optional[List[T]] | Optional[T]) -> T:
     ]
     header = "\n".join(header_lines)
 
-    # --- Generate Dataclasses and Functions (without section headers) ---
+    # --- Generate Enum classes, Dataclasses and Functions (without section headers) ---
     # Filter out empty strings before joining
+    non_empty_enums = [enum_class for enum_class in enum_classes_section_list if enum_class.strip()]
     non_empty_dataclasses = [dc for dc in [dataclasses_section.strip()] if dc]
     non_empty_functions = [func.strip() for func in generated_functions if func.strip()]
     
     # Combine definitions with minimal spacing, handling empty sections
-    code_parts = non_empty_dataclasses + non_empty_functions
+    code_parts = non_empty_enums + non_empty_dataclasses + non_empty_functions
     code_body = "\n\n".join(code_parts)
 
     # --- Assemble final code --- REVISED
     final_parts = [header]
     if import_statements:
-        # Delete the incorrect block that re-adds helper imports
-        # (Lines defining needed_helper_imports, import_set, update, and recalculating final_imports from import_set)
-        
         # Keep only the correct logic using the pre-calculated import_statements:
         final_imports = sorted(list(import_statements))
         final_parts.append("\n".join(final_imports))
     
+    # Add code body (enums, dataclasses, and functions)
+    if code_body:
+        final_parts.append(code_body)
+    
     # Add Helpers (only if not omitted and code is non-empty)
     if helper_functions_code:
         final_parts.append(helper_functions_code)
-
-    # Prepare dataclass and function blocks
-    dataclass_block = ""
-    function_block = ""
-    non_empty_dataclasses = [dc for dc in [dataclasses_section.strip()] if dc]
-    non_empty_functions = [func.strip() for func in generated_functions if func.strip()]
-
-    if non_empty_dataclasses:
-        dataclass_block = "\n\n".join(non_empty_dataclasses)
-    if non_empty_functions:
-        function_block = "\n\n".join(non_empty_functions)
-
-    # Add Dataclasses (if any)
-    if dataclass_block:
-        final_parts.append(dataclass_block)
-
-    # Add Functions (if any)
-    if function_block:
-        final_parts.append(function_block)
 
     # Join parts with two newlines, add trailing newline
     # Ensure empty parts don't create extra newlines by filtering them out
