@@ -657,23 +657,27 @@ class SQLParser:
                 key_to_use = type_key_qualified
                 columns = self.composite_types.get(key_to_use, [])
                 imports_for_type = self.composite_type_imports.get(key_to_use, set())
+                logging.debug(f"Found composite type using qualified name: {type_key_qualified}")
             elif type_key_normalized in self.composite_types:
                 schema_found = True
                 is_composite_type = True
                 key_to_use = type_key_normalized
                 columns = self.composite_types.get(key_to_use, [])
                 imports_for_type = self.composite_type_imports.get(key_to_use, set())
+                logging.debug(f"Found composite type using normalized name: {type_key_normalized}")
             # Then check table schemas with both qualified and normalized names
             elif type_key_qualified in self.table_schemas:
                 schema_found = True
                 key_to_use = type_key_qualified
                 columns = self.table_schemas.get(key_to_use, [])
                 imports_for_type = self.table_schema_imports.get(key_to_use, set())
+                logging.debug(f"Found table schema using qualified name: {type_key_qualified}")
             elif type_key_normalized in self.table_schemas:
                 schema_found = True
                 key_to_use = type_key_normalized
                 columns = self.table_schemas.get(key_to_use, [])
                 imports_for_type = self.table_schema_imports.get(key_to_use, set())
+                logging.debug(f"Found table schema using normalized name: {type_key_normalized}")
 
             if schema_found:
                 # Known table name or custom type
