@@ -53,8 +53,9 @@ instance/
 *.sln
 *.sw?
 
-# Generated code output
+# Temp dirs
 generated/
+temp/
 
 # Cursor
 .cursor/
