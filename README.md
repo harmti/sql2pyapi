@@ -79,22 +79,35 @@ SQL offers significant benefits for data-intensive applications. SQL2PyAPI helps
 The tool provides a command-line interface:
 
 ```bash
-sql2pyapi <input_sql_file> <output_python_file>
+sql2pyapi <input_sql_file> <output_python_file> [options]
 ```
 
-Example:
-```bash
-sql2pyapi functions.sql generated_api.py
-```
+**Arguments:**
 
-With a schema file:
+*   `<input_sql_file>`: Path to the input `.sql` file containing function definitions (and optionally table/type definitions).
+*   `<output_python_file>`: Path where the generated Python API file will be written.
+
+**Options:**
+
+*   `--schema-file FILE`: Optional path to a separate `.sql` file containing table/type schema definitions (`CREATE TABLE`, `CREATE TYPE`).
+*   `--no-helpers`: Do not include helper functions (`get_optional`, `get_required`) in the generated output.
+*   `--allow-missing-schemas`: If specified, the tool will log a warning and generate placeholder comments (instead of failing) when it encounters a function returning a table/type whose schema definition (`CREATE TABLE`/`CREATE TYPE`) cannot be found. **Note:** Using this flag may result in generated code that fails at runtime with a `NameError` if functions returning the missing types are called.
+*   `--verbose` / `-v`: Enable verbose (DEBUG) logging.
+
+**Default Behavior (Schema Handling):**
+
+By default, `sql2pyapi` requires schema definitions (`CREATE TABLE` or `CREATE TYPE`) for any tables or composite types returned by your SQL functions (unless they are simple scalar types or anonymous `RECORD`s). If a required schema definition is missing from the input SQL or the provided `--schema-file`, the tool will **fail with an error**, preventing the generation of potentially broken code.
+
+If you understand the risks and want the tool to proceed despite missing schemas (logging warnings and generating placeholders instead), use the `--allow-missing-schemas` flag.
+
+**Example:**
+
 ```bash
+# Basic usage (will fail if schemas for returned tables/types are missing)
 sql2pyapi functions.sql generated_api.py --schema-file schema.sql
-```
 
-Omit helper functions:
-```bash
-sql2pyapi functions.sql generated_api.py --no-helpers
+# Allow generation even if some schemas are missing (will warn and create placeholders - potential runtime errors!)
+sql2pyapi functions.sql generated_api.py --schema-file schema.sql --allow-missing-schemas
 ```
 
 ### Important: Database Connection Configuration (Row Factory)

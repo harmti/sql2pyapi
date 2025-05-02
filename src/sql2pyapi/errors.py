@@ -93,3 +93,14 @@ class ReturnTypeError(SQL2PyAPIError):
             details += f" for return type '{return_type}'"
             
         super().__init__(f"{message}{details}")
+
+
+class MissingSchemaError(SQL2PyAPIError):
+    """Error raised when a required table or type schema is not found."""
+    def __init__(self, type_name: str, function_name: str = None):
+        self.type_name = type_name
+        self.function_name = function_name
+        message = f"Required schema definition for table/type '{type_name}' was not found"
+        if function_name:
+            message += f" (needed by function '{function_name}')"
+        super().__init__(message)

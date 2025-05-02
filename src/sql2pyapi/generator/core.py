@@ -10,6 +10,7 @@ import logging
 # Local imports
 from ..sql_models import ParsedFunction, ReturnColumn, SQLParameter
 from ..constants import *
+from ..errors import MissingSchemaError # Added import
 from .function_generator import _generate_function
 from .enum_generator import _generate_enum_class
 from .dataclass_generator import _generate_dataclass
@@ -32,6 +33,7 @@ def generate_python_code(
     parsed_enum_types: Dict[str, List[str]] = None, # Accept enum types
     source_sql_file: str = "",
     omit_helpers: bool = False,
+    fail_on_missing_schema: bool = True, # Added parameter
 ) -> str:
     """
     Generates the full Python module code as a string.
@@ -43,9 +45,14 @@ def generate_python_code(
         parsed_enum_types (Dict[str, List[str]], optional): Definitions for ENUM types. Defaults to None.
         source_sql_file (str, optional): Name of the source SQL file for header comment
         omit_helpers (bool, optional): Whether to omit helper functions from the final output
+        fail_on_missing_schema (bool, optional): If True (default), raise an error if a required schema is missing.
+                                               If False, log a warning and generate a placeholder.
     
     Returns:
         str: Complete Python module code as a string
+    
+    Raises:
+        MissingSchemaError: If `fail_on_missing_schema` is True and a required schema is not found.
     
     Notes:
         - Imports are automatically collected based on types used
@@ -78,7 +85,7 @@ def generate_python_code(
 
         # If we have a dataclass name, ensure its definition exists in current_custom_types
         if determined_dataclass_name:
-            # For ad-hoc dataclasses (those ending with 'Result')
+            # For ad-hoc dataclasses (those ending with 'Result') - These are defined by the function itself, so no schema lookup needed
             if determined_dataclass_name.endswith("Result") and determined_dataclass_name not in current_custom_types:
                 if func.return_columns:
                     # Create placeholder entry if missing. The actual generation happens later.
@@ -88,13 +95,26 @@ def generate_python_code(
                     # Add dataclass import generally if any ad-hoc is needed
                     current_imports.add(PYTHON_IMPORTS["dataclass"])
                 else:
+                    # This case might indicate a parser issue, but we don't fail here.
                     logging.warning(f"Function {func.sql_name} needs ad-hoc dataclass {determined_dataclass_name} but has no return columns.")
-            
-            # For non-ad-hoc dataclasses that are missing (e.g., SETOF table_name where table schema wasn't found)
-            elif determined_dataclass_name not in current_custom_types:
-                logging.warning(f"Schema for type '{determined_dataclass_name}' (likely from function '{func.sql_name}') not found. Generating placeholder dataclass.")
-                # Add entry with empty columns list to trigger placeholder generation
-                current_custom_types[determined_dataclass_name] = []
+
+            # For non-ad-hoc dataclasses (based on existing tables/types)
+            else:
+                # Determine the original SQL name (could be SETOF table, single table, or custom type)
+                original_sql_type_name = func.setof_table_name or func.returns_sql_type_name
+
+                # Check if the *original* SQL type name exists in the parsed types
+                if original_sql_type_name and original_sql_type_name not in current_custom_types:
+                    # Schema is missing!
+                    error_message = f"Schema for type '{determined_dataclass_name}' (SQL: '{original_sql_type_name}', likely from function '{func.sql_name}') not found."
+                    if fail_on_missing_schema:
+                        raise MissingSchemaError(type_name=original_sql_type_name, function_name=func.sql_name)
+                    else:
+                        # Original behavior: Warn and create placeholder
+                        logging.warning(f"{error_message} Generating placeholder dataclass.")
+                        # Add entry with empty columns list to trigger placeholder generation
+                        # Use the *Python class name* as the key here, because the dataclass generation loop later expects it
+                        current_custom_types[determined_dataclass_name] = []
 
         # Update current_imports with requirements from function parameters
         # (Parser should have added base type imports like UUID, Decimal to func.required_imports)

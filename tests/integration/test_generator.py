@@ -14,7 +14,7 @@ EXPECTED_DIR = TESTS_ROOT_DIR / "expected"
 PROJECT_ROOT = TESTS_ROOT_DIR.parent # Go up one level from tests/ to project root
 
 
-def run_cli_tool(functions_sql: Path, output_py: Path, schema_sql: Path = None, verbose: bool = False):
+def run_cli_tool(functions_sql: Path, output_py: Path, schema_sql: Path = None, verbose: bool = False, allow_missing_schemas: bool = False):
     """Helper function to run the CLI tool as a subprocess."""
     cmd = [
         sys.executable,  # Use the current Python executable
@@ -27,6 +27,8 @@ def run_cli_tool(functions_sql: Path, output_py: Path, schema_sql: Path = None, 
         cmd.extend(["--schema-file", str(schema_sql)])
     if verbose:
         cmd.append("-v") # Add verbose flag if requested
+    if allow_missing_schemas:
+        cmd.append("--allow-missing-schemas")
 
     # Run from the project root directory
     result = subprocess.run(cmd, capture_output=True, text=True, cwd=PROJECT_ROOT, check=False)
@@ -289,8 +291,9 @@ def test_setof_missing_table_function_generation(tmp_path):
     expected_output_path = EXPECTED_DIR / "setof_missing_table_function_api.py"
     actual_output_path = tmp_path / "setof_missing_table_function_api.py"
 
-    # Run the generator tool (no schema file needed)
-    run_cli_tool(functions_sql_path, actual_output_path)
+    # Run the generator tool (no schema file needed) - Re-add flag
+    result = run_cli_tool(functions_sql_path, actual_output_path, allow_missing_schemas=True)
+    assert result.returncode == 0, f"CLI failed even with --allow-missing-schemas: {result.stderr}"
 
     # Compare the generated file with the expected file
     assert actual_output_path.is_file(), "Generated file was not created."
@@ -472,8 +475,9 @@ def test_optional_params_function_generation(tmp_path):
     # expected_output_path = EXPECTED_DIR / "optional_params_function_api.py"
     actual_output_path = tmp_path / "optional_params_function_api.py"
 
-    # Run the generator tool
-    run_cli_tool(functions_sql_path, actual_output_path)
+    # Run the generator tool - Re-add flag (because 'items' table is missing)
+    result = run_cli_tool(functions_sql_path, actual_output_path, allow_missing_schemas=True)
+    assert result.returncode == 0, f"CLI failed even with --allow-missing-schemas: {result.stderr}"
 
     # --- AST Based Assertions ---
     assert actual_output_path.is_file(), "Generated file was not created."
@@ -679,7 +683,8 @@ def test_comment_formats_generation(tmp_path):
     actual_output_path = tmp_path / "comment_formats_api.py"
 
     # Run the generator tool
-    run_cli_tool(functions_sql_path, actual_output_path)
+    result = run_cli_tool(functions_sql_path, actual_output_path)
+    assert result.returncode == 0, f"CLI failed: {result.stderr}"
 
     # --- AST Based Assertions ---
     assert actual_output_path.is_file(), "Generated file was not created."
@@ -740,7 +745,8 @@ def test_param_comments_function_generation(tmp_path):
     # expected_output_path = EXPECTED_DIR / "param_comments_function_api.py"
     actual_output_path = tmp_path / "param_comments_function_api.py"
 
-    run_cli_tool(functions_sql_path, actual_output_path)
+    result = run_cli_tool(functions_sql_path, actual_output_path)
+    assert result.returncode == 0, f"CLI failed: {result.stderr}"
 
     # --- AST Based Assertions ---
     assert actual_output_path.is_file(), "Generated file was not created."
@@ -824,7 +830,8 @@ def test_table_col_comments_generation(tmp_path):
     actual_output_path = tmp_path / "table_col_comments_api.py"
 
     # Run the generator tool
-    run_cli_tool(functions_sql_path, actual_output_path)
+    result = run_cli_tool(functions_sql_path, actual_output_path)
+    assert result.returncode == 0, f"CLI failed: {result.stderr}"
 
     # Read expected and actual content
     assert actual_output_path.is_file(), "Generated file was not created."
@@ -873,7 +880,8 @@ def test_returns_table_non_setof_generates_list_and_fetchall(tmp_path):
     functions_sql_path = FIXTURES_DIR / "returns_table_function.sql"
     actual_output_path = tmp_path / "returns_table_non_setof_api.py"
 
-    run_cli_tool(functions_sql_path, actual_output_path)
+    result = run_cli_tool(functions_sql_path, actual_output_path)
+    assert result.returncode == 0, f"CLI failed: {result.stderr}"
 
     assert actual_output_path.is_file(), "Generated file was not created."
     actual_content = actual_output_path.read_text()
@@ -920,7 +928,8 @@ def test_custom_type_return_generation(tmp_path):
     actual_output_path = tmp_path / "custom_type_return_api.py"
 
     # Run the generator tool (no separate schema needed, type is inline)
-    run_cli_tool(functions_sql_path, actual_output_path, verbose=True)
+    result = run_cli_tool(functions_sql_path, actual_output_path, verbose=True)
+    assert result.returncode == 0, f"CLI failed: {result.stderr}"
 
     # Compare the generated file with the expected file
     assert actual_output_path.is_file(), "Generated file was not created."

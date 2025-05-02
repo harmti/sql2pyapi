@@ -51,6 +51,12 @@ def main(
         "--no-helpers",
         help="Do not include helper functions (get_optional, get_required) in the output.",
     ),
+    allow_missing_schemas: bool = typer.Option(
+        False,
+        "--allow-missing-schemas",
+        help="Warn and generate placeholders instead of failing if a function's return table/type schema is not found. "
+             "Warning: This may produce code that fails at runtime.",
+    ),
 ):
     """Generates Python async API wrappers from PostgreSQL function definitions."""
     # Configure logging level based on verbose flag
@@ -98,6 +104,7 @@ def main(
             enum_types,
             source_sql_file=sql_file.name,
             omit_helpers=no_helpers,
+            fail_on_missing_schema=not allow_missing_schemas,
         )
 
     except SQL2PyAPIError as e:
