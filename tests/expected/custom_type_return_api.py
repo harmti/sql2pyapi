@@ -52,7 +52,6 @@ async def get_all_active_identities(conn: AsyncConnection) -> List[UserIdentity]
         # Ensure dataclass 'None' is defined above.
         if not rows:
             return []
-        # Expecting list of tuples for SETOF composite type UserIdentity
         try:
             return [UserIdentity(*r) for r in rows]
         except TypeError as e:

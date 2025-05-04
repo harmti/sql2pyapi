@@ -104,6 +104,33 @@ def _generate_function_body(func: ParsedFunction, final_dataclass_name: Optional
         body_lines.append(f'        return {func.return_type}(row[0])')
         return body_lines
         
+    # Check if there are any enum parameters by checking if 'Enum' is in required imports
+    # and if any parameter types match enum class names
+    is_enum_import = 'Enum' in func.required_imports
+    has_enum_params = False
+    
+    if is_enum_import:
+        # Check for parameters with types that could be enums
+        has_enum_params = any(not p.python_type.startswith(('Optional[', 'List[')) and 
+                              not p.python_type in ('str', 'int', 'float', 'bool', 'UUID', 'datetime', 'date', 'Decimal', 'Any', 'dict', 'Dict[str, Any]')
+                              for p in func.params)
+    
+    # If we have enum parameters, we need to extract the .value attribute
+    if has_enum_params:
+        body_lines.append("# Extract .value from enum parameters")
+        for p in func.params:
+            if not p.python_type.startswith(('Optional[', 'List[')) and not p.python_type in ('str', 'int', 'float', 'bool', 'UUID', 'datetime', 'date', 'Decimal', 'Any', 'dict', 'Dict[str, Any]'):
+                body_lines.append(f"    {p.python_name}_value = {p.python_name}.value if {p.python_name} is not None else None")
+        
+        # Modify the python_args_list to use the *_value variables for enum parameters
+        enum_args_list = []
+        for p in func.params:
+            if not p.python_type.startswith(('Optional[', 'List[')) and not p.python_type in ('str', 'int', 'float', 'bool', 'UUID', 'datetime', 'date', 'Decimal', 'Any', 'dict', 'Dict[str, Any]'):
+                enum_args_list.append(f"{p.python_name}_value")
+            else:
+                enum_args_list.append(p.python_name)
+        python_args_list = "[" + ", ".join(enum_args_list) + "]"
+    
     # Common setup for all other function types
     body_lines.append("async with conn.cursor() as cur:")
     body_lines.append(
@@ -171,24 +198,36 @@ def _generate_setof_return_body(func: ParsedFunction, final_dataclass_name: Opti
         if func.returns_table and func.setof_table_name:
             singular_class_name = _to_singular_camel_case(func.setof_table_name)
             
-        # Check if any columns are ENUM types
-        has_enum_columns = any(col.python_type.endswith('Type') for col in func.return_columns)
+        # Check if any columns are ENUM types by checking if 'Enum' is in required imports
+        is_enum_import = 'Enum' in func.required_imports
+        has_enum_columns = False
         
-        body_lines.append(f"    # Expecting list of tuples for SETOF composite type {singular_class_name}")
-        body_lines.append(f"    try:")
+        if is_enum_import:
+            # Check for columns with types that could be enums
+            has_enum_columns = any(not col.python_type.startswith(('Optional[', 'List[')) and 
+                                  not col.python_type in ('str', 'int', 'float', 'bool', 'UUID', 'datetime', 'date', 'Decimal', 'Any', 'dict', 'Dict[str, Any]')
+                                  for col in func.return_columns)
         
         if has_enum_columns:
+            # Generate an inner helper function to efficiently convert enum values during object creation
+            body_lines.append(f"    # Inner helper function for efficient conversion")
+            body_lines.append(f"    def create_{singular_class_name.lower()}(row):")
+            
             # Generate field assignments with ENUM conversions
             field_assignments = []
             for i, col in enumerate(func.return_columns):
-                if col.python_type.endswith('Type') and 'Enum' in func.required_imports:
-                    field_assignments.append(f"{col.name}={col.python_type}(r[{i}])")
+                if not col.python_type.startswith(('Optional[', 'List[')) and not col.python_type in ('str', 'int', 'float', 'bool', 'UUID', 'datetime', 'date', 'Decimal', 'Any', 'dict', 'Dict[str, Any]'):
+                    field_assignments.append(f"{col.name}={col.python_type}(row[{i}]) if row[{i}] is not None else None")
                 else:
-                    field_assignments.append(f"{col.name}=r[{i}]")
+                    field_assignments.append(f"{col.name}=row[{i}]")
             field_assignments_str = ",\n                ".join(field_assignments)
             
-            body_lines.append(f"        return [\n            {singular_class_name}(\n                {field_assignments_str}\n            )\n            for r in rows\n        ]")
+            body_lines.append(f"        return {singular_class_name}(\n                {field_assignments_str}\n            )")
+            body_lines.append(f"")
+            body_lines.append(f"    try:")
+            body_lines.append(f"        return [create_{singular_class_name.lower()}(row) for row in rows]")
         else:
+            body_lines.append(f"    try:")
             body_lines.append(f"        return [{singular_class_name}(*r) for r in rows]")
             
         body_lines.append(f"    except TypeError as e:")
@@ -246,15 +285,23 @@ def _generate_single_row_return_body(func: ParsedFunction, final_dataclass_name:
             
         body_lines.append(f"    # Ensure dataclass '{singular_class_name}' is defined above.")
         body_lines.append(f"    # Expecting simple tuple return for composite type {singular_class_name}")
-        # Check if any columns are ENUM types
-        has_enum_columns = any(col.python_type.endswith('Type') for col in func.return_columns)
+        
+        # Check if any columns are ENUM types by checking if 'Enum' is in required imports
+        is_enum_import = 'Enum' in func.required_imports
+        has_enum_columns = False
+        
+        if is_enum_import:
+            # Check for columns with types that could be enums
+            has_enum_columns = any(not col.python_type.startswith(('Optional[', 'List[')) and 
+                                  not col.python_type in ('str', 'int', 'float', 'bool', 'UUID', 'datetime', 'date', 'Decimal', 'Any', 'dict', 'Dict[str, Any]')
+                                  for col in func.return_columns)
         
         if has_enum_columns:
             # Generate field assignments with ENUM conversions
             field_assignments = []
             for i, col in enumerate(func.return_columns):
-                if col.python_type.endswith('Type') and 'Enum' in func.required_imports:
-                    field_assignments.append(f"{col.name}={col.python_type}(row[{i}])")
+                if not col.python_type.startswith(('Optional[', 'List[')) and not col.python_type in ('str', 'int', 'float', 'bool', 'UUID', 'datetime', 'date', 'Decimal', 'Any', 'dict', 'Dict[str, Any]'):
+                    field_assignments.append(f"{col.name}=row[{i}]")
                 else:
                     field_assignments.append(f"{col.name}=row[{i}]")
             field_assignments_str = ",\n                ".join(field_assignments)
@@ -266,6 +313,13 @@ def _generate_single_row_return_body(func: ParsedFunction, final_dataclass_name:
             body_lines.append(f"        if all(v is None for v in row):")
             # Return None if the single row represents a NULL composite (consistency with Optional hint)
             body_lines.append(f"             return None") 
+            
+            # Convert string values to enum objects after creating the instance
+            for i, col in enumerate(func.return_columns):
+                if not col.python_type.startswith(('Optional[', 'List[')) and not col.python_type in ('str', 'int', 'float', 'bool', 'UUID', 'datetime', 'date', 'Decimal', 'Any', 'dict', 'Dict[str, Any]'):
+                    body_lines.append(f"        if instance.{col.name} is not None:")
+                    body_lines.append(f"            instance.{col.name} = {col.python_type}(instance.{col.name})")
+            
             body_lines.append(f"        return instance") # Return the single instance, not a list
         else:
             body_lines.append(f"    try:")

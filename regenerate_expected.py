@@ -16,6 +16,12 @@ print(f"Found {len(sql_files)} SQL files in {fixtures_dir}. Regenerating expecte
 success_count = 0
 error_count = 0
 
+# Files that need special handling with allow-missing-schemas flag
+files_with_missing_schemas = [
+    'setof_missing_table_function.sql',
+    'optional_params_function.sql',
+]
+
 for sql_file in sql_files:
     base_name = os.path.splitext(sql_file)[0]
     # Determine expected .py file name
@@ -39,6 +45,10 @@ for sql_file in sql_files:
     # Add schema file argument if it exists
     if schema_file_path and os.path.exists(schema_file_path):
         command.extend(['--schema-file', schema_file_path])
+    
+    # Add allow-missing-schemas flag for files that need it
+    if sql_file in files_with_missing_schemas:
+        command.append('--allow-missing-schemas')
     
     # print(f"Running: {' '.join(command)}") # Reduced verbosity
     

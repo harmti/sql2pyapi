@@ -9,6 +9,55 @@ from psycopg import AsyncConnection
 from typing import List, Optional, Tuple, Dict, Any
 from typing import TypeVar, Sequence
 
+async def function_with_multiline_dash_comment(conn: AsyncConnection) -> Optional[int]:
+    """This is a multi-line comment
+    describing the first function.
+    It has three lines.
+    """
+    async with conn.cursor() as cur:
+        await cur.execute("SELECT * FROM function_with_multiline_dash_comment()", [])
+        row = await cur.fetchone()
+        if row is None:
+            return None
+        return row[0]
+
+async def function_with_single_block_comment(conn: AsyncConnection) -> Optional[str]:
+    """This is a single-line block comment."""
+    async with conn.cursor() as cur:
+        await cur.execute("SELECT * FROM function_with_single_block_comment()", [])
+        row = await cur.fetchone()
+        if row is None:
+            return None
+        return row[0]
+
+async def function_with_multi_block_comment(conn: AsyncConnection) -> Optional[bool]:
+    """This is a multi-line block comment.
+    It uses asterisks for alignment.
+      And has some indentation.
+    """
+    async with conn.cursor() as cur:
+        await cur.execute("SELECT * FROM function_with_multi_block_comment()", [])
+        row = await cur.fetchone()
+        if row is None:
+            return None
+        return row[0]
+
+async def function_with_no_comment(conn: AsyncConnection) -> None:
+    """Call PostgreSQL function function_with_no_comment()."""
+    async with conn.cursor() as cur:
+        await cur.execute("SELECT * FROM function_with_no_comment()", [])
+        # Function returns void, no results to fetch
+        return None
+
+async def function_with_separated_comment(conn: AsyncConnection) -> Optional[int]:
+    """Call PostgreSQL function function_with_separated_comment()."""
+    async with conn.cursor() as cur:
+        await cur.execute("SELECT * FROM function_with_separated_comment()", [])
+        row = await cur.fetchone()
+        if row is None:
+            return None
+        return row[0]
+
 
 # ===== SECTION: RESULT HELPERS =====
 # REMOVED redundant import line
@@ -60,55 +109,3 @@ def get_required(result: Optional[List[T]] | Optional[T]) -> T:
          raise ValueError(f"Expected exactly one result, but got none or multiple. Input was: {input_repr}")
     return item
 
-
-async def function_with_multiline_dash_comment(conn: AsyncConnection) -> Optional[int]:
-    """This is a multi-line comment
-    describing the first function.
-    It has three lines.
-    """
-    async with conn.cursor() as cur:
-        await cur.execute("SELECT * FROM function_with_multiline_dash_comment()", [])
-        row = await cur.fetchone()
-        if row is None:
-            return None
-        # Expecting a tuple even for scalar returns, access first element.
-        return row[0]
-
-async def function_with_single_block_comment(conn: AsyncConnection) -> Optional[str]:
-    """This is a single-line block comment."""
-    async with conn.cursor() as cur:
-        await cur.execute("SELECT * FROM function_with_single_block_comment()", [])
-        row = await cur.fetchone()
-        if row is None:
-            return None
-        # Expecting a tuple even for scalar returns, access first element.
-        return row[0]
-
-async def function_with_multi_block_comment(conn: AsyncConnection) -> Optional[bool]:
-    """This is a multi-line block comment.
-    It uses asterisks for alignment.
-      And has some indentation.
-    """
-    async with conn.cursor() as cur:
-        await cur.execute("SELECT * FROM function_with_multi_block_comment()", [])
-        row = await cur.fetchone()
-        if row is None:
-            return None
-        # Expecting a tuple even for scalar returns, access first element.
-        return row[0]
-
-async def function_with_no_comment(conn: AsyncConnection) -> None:
-    """Call PostgreSQL function function_with_no_comment()."""
-    async with conn.cursor() as cur:
-        await cur.execute("SELECT * FROM function_with_no_comment()", [])
-        return None
-
-async def function_with_separated_comment(conn: AsyncConnection) -> Optional[int]:
-    """Call PostgreSQL function function_with_separated_comment()."""
-    async with conn.cursor() as cur:
-        await cur.execute("SELECT * FROM function_with_separated_comment()", [])
-        row = await cur.fetchone()
-        if row is None:
-            return None
-        # Expecting a tuple even for scalar returns, access first element.
-        return row[0]

@@ -12,58 +12,6 @@ from typing import List, Optional, Tuple, Dict, Any
 from typing import TypeVar, Sequence
 from uuid import UUID
 
-
-# ===== SECTION: RESULT HELPERS =====
-# REMOVED redundant import line
-
-T = TypeVar('T')
-
-def get_optional(result: Optional[List[T]] | Optional[T]) -> Optional[T]:
-    """\
-    Safely retrieves an optional single result.
-
-    Handles cases where the input is:
-    - None
-    - An empty list
-    - A list with one item
-    - A single item (non-list, non-None)
-
-    Returns the item if exactly one is found, otherwise None.
-    """
-    if result is None:
-        return None
-    # Check if it's a list/tuple but not string/bytes
-    if isinstance(result, Sequence) and not isinstance(result, (str, bytes)):
-        if len(result) == 1:
-            return result[0]
-        else: # Empty list or list with more than one item
-            return None
-    else: # It's already a single item
-        return result
-
-def get_required(result: Optional[List[T]] | Optional[T]) -> T:
-    """\
-    Retrieves a required single result, raising an error if none or multiple are found.
-
-    Handles cases where the input is:
-    - None
-    - An empty list
-    - A list with one item
-    - A single item (non-list, non-None)
-
-    Returns the item if exactly one is found.
-    Raises ValueError otherwise.
-    """
-    item = get_optional(result)
-    if item is None:
-         # Improved error message
-         input_repr = repr(result)
-         if len(input_repr) > 80: # Truncate long inputs
-             input_repr = input_repr[:77] + '...'
-         raise ValueError(f"Expected exactly one result, but got none or multiple. Input was: {input_repr}")
-    return item
-
-
 @dataclass
 class User:
     id: UUID
@@ -103,7 +51,6 @@ async def create_user(conn: AsyncConnection, clerk_id: str, email: Optional[str]
         # Ensure dataclass 'CreateUserResult' is defined above.
         if not rows:
             return []
-        # Expecting list of tuples for SETOF composite type CreateUserResult
         try:
             return [CreateUserResult(*r) for r in rows]
         except TypeError as e:
@@ -120,10 +67,9 @@ async def get_user_by_clerk_id(conn: AsyncConnection, clerk_id: str) -> List[Use
     async with conn.cursor() as cur:
         await cur.execute("SELECT * FROM get_user_by_clerk_id(%s)", [clerk_id])
         rows = await cur.fetchall()
-        # Ensure dataclass 'User' is defined above.
+        # Ensure dataclass 'None' is defined above.
         if not rows:
             return []
-        # Expecting list of tuples for SETOF composite type User
         try:
             return [User(*r) for r in rows]
         except TypeError as e:
@@ -140,10 +86,9 @@ async def get_user_by_id(conn: AsyncConnection, id: UUID) -> List[User]:
     async with conn.cursor() as cur:
         await cur.execute("SELECT * FROM get_user_by_id(%s)", [id])
         rows = await cur.fetchall()
-        # Ensure dataclass 'User' is defined above.
+        # Ensure dataclass 'None' is defined above.
         if not rows:
             return []
-        # Expecting list of tuples for SETOF composite type User
         try:
             return [User(*r) for r in rows]
         except TypeError as e:
@@ -160,10 +105,9 @@ async def get_users(conn: AsyncConnection) -> List[User]:
     async with conn.cursor() as cur:
         await cur.execute("SELECT * FROM get_users()", [])
         rows = await cur.fetchall()
-        # Ensure dataclass 'User' is defined above.
+        # Ensure dataclass 'None' is defined above.
         if not rows:
             return []
-        # Expecting list of tuples for SETOF composite type User
         try:
             return [User(*r) for r in rows]
         except TypeError as e:
@@ -180,10 +124,9 @@ async def update_user(conn: AsyncConnection, id: UUID, email: Optional[str] = No
     async with conn.cursor() as cur:
         await cur.execute("SELECT * FROM update_user(%s, %s, %s, %s, %s, %s)", [id, email, email_verified, first_name, last_name, last_sign_in_at])
         rows = await cur.fetchall()
-        # Ensure dataclass 'User' is defined above.
+        # Ensure dataclass 'None' is defined above.
         if not rows:
             return []
-        # Expecting list of tuples for SETOF composite type User
         try:
             return [User(*r) for r in rows]
         except TypeError as e:
@@ -202,7 +145,6 @@ async def delete_user(conn: AsyncConnection, id: UUID) -> Optional[UUID]:
         row = await cur.fetchone()
         if row is None:
             return None
-        # Expecting a tuple even for scalar returns, access first element.
         return row[0]
 
 async def create_company(conn: AsyncConnection, name: str, industry: str, size: str, primary_address: str, user_id: UUID) -> Optional[Company]:
@@ -263,10 +205,9 @@ async def list_user_companies(conn: AsyncConnection, user_id: UUID) -> List[Comp
     async with conn.cursor() as cur:
         await cur.execute("SELECT * FROM list_user_companies(%s)", [user_id])
         rows = await cur.fetchall()
-        # Ensure dataclass 'Company' is defined above.
+        # Ensure dataclass 'None' is defined above.
         if not rows:
             return []
-        # Expecting list of tuples for SETOF composite type Company
         try:
             return [Company(*r) for r in rows]
         except TypeError as e:
@@ -307,4 +248,57 @@ async def delete_company(conn: AsyncConnection, company_id: UUID, user_id: UUID)
     """Function to delete a company"""
     async with conn.cursor() as cur:
         await cur.execute("SELECT * FROM delete_company(%s, %s)", [company_id, user_id])
+        # Function returns void, no results to fetch
         return None
+
+
+# ===== SECTION: RESULT HELPERS =====
+# REMOVED redundant import line
+
+T = TypeVar('T')
+
+def get_optional(result: Optional[List[T]] | Optional[T]) -> Optional[T]:
+    """\
+    Safely retrieves an optional single result.
+
+    Handles cases where the input is:
+    - None
+    - An empty list
+    - A list with one item
+    - A single item (non-list, non-None)
+
+    Returns the item if exactly one is found, otherwise None.
+    """
+    if result is None:
+        return None
+    # Check if it's a list/tuple but not string/bytes
+    if isinstance(result, Sequence) and not isinstance(result, (str, bytes)):
+        if len(result) == 1:
+            return result[0]
+        else: # Empty list or list with more than one item
+            return None
+    else: # It's already a single item
+        return result
+
+def get_required(result: Optional[List[T]] | Optional[T]) -> T:
+    """\
+    Retrieves a required single result, raising an error if none or multiple are found.
+
+    Handles cases where the input is:
+    - None
+    - An empty list
+    - A list with one item
+    - A single item (non-list, non-None)
+
+    Returns the item if exactly one is found.
+    Raises ValueError otherwise.
+    """
+    item = get_optional(result)
+    if item is None:
+         # Improved error message
+         input_repr = repr(result)
+         if len(input_repr) > 80: # Truncate long inputs
+             input_repr = input_repr[:77] + '...'
+         raise ValueError(f"Expected exactly one result, but got none or multiple. Input was: {input_repr}")
+    return item
+

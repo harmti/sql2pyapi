@@ -14,8 +14,8 @@ async def function_with_param_comments(conn: AsyncConnection, id: UUID, name: st
     """Function with comments in parameters"""
     async with conn.cursor() as cur:
         await cur.execute("SELECT * FROM function_with_param_comments(%s, %s, %s, %s)", [id, name, active, age])
-        result = await conn.fetchval(sql)
-        return result
+        # Function returns void, no results to fetch
+        return None
 
 
 # ===== SECTION: RESULT HELPERS =====

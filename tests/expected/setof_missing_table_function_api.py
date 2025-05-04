@@ -25,7 +25,6 @@ async def get_undefined_table_data(conn: AsyncConnection) -> List[SomeUndefinedT
         # Ensure dataclass 'SomeUndefinedTable' is defined above.
         if not rows:
             return []
-        # Expecting list of tuples for SETOF composite type SomeUndefinedTable
         try:
             return [SomeUndefinedTable(*r) for r in rows]
         except TypeError as e:

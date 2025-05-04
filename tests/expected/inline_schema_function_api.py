@@ -11,6 +11,33 @@ from psycopg import AsyncConnection
 from typing import List, Optional, Tuple, Dict, Any
 from typing import TypeVar, Sequence
 
+@dataclass
+class Product:
+    product_id: int
+    product_name: str
+    price: Optional[Decimal]
+
+async def get_all_products(conn: AsyncConnection) -> List[Product]:
+    """Function that returns rows from the products table
+    Should use the schema defined above
+    """
+    async with conn.cursor() as cur:
+        await cur.execute("SELECT * FROM get_all_products()", [])
+        rows = await cur.fetchall()
+        # Ensure dataclass 'None' is defined above.
+        if not rows:
+            return []
+        try:
+            return [Product(*r) for r in rows]
+        except TypeError as e:
+            # Tuple unpacking failed. This often happens if the DB connection
+            # is configured with a dict-like row factory (e.g., DictRow).
+            # This generated code expects the default tuple row factory.
+            raise TypeError(
+                f"Failed to map SETOF results to dataclass list for Product. "
+                f"Check DB connection: Default tuple row_factory expected. Error: {e}"
+            )
+
 
 # ===== SECTION: RESULT HELPERS =====
 # REMOVED redundant import line
@@ -62,31 +89,3 @@ def get_required(result: Optional[List[T]] | Optional[T]) -> T:
          raise ValueError(f"Expected exactly one result, but got none or multiple. Input was: {input_repr}")
     return item
 
-
-@dataclass
-class Product:
-    product_id: int
-    product_name: str
-    price: Optional[Decimal]
-
-async def get_all_products(conn: AsyncConnection) -> List[Product]:
-    """Function that returns rows from the products table
-    Should use the schema defined above
-    """
-    async with conn.cursor() as cur:
-        await cur.execute("SELECT * FROM get_all_products()", [])
-        rows = await cur.fetchall()
-        # Ensure dataclass 'Product' is defined above.
-        if not rows:
-            return []
-        # Expecting list of tuples for SETOF composite type Product
-        try:
-            return [Product(*r) for r in rows]
-        except TypeError as e:
-            # Tuple unpacking failed. This often happens if the DB connection
-            # is configured with a dict-like row factory (e.g., DictRow).
-            # This generated code expects the default tuple row factory.
-            raise TypeError(
-                f"Failed to map SETOF results to dataclass list for Product. "
-                f"Check DB connection: Default tuple row_factory expected. Error: {e}"
-            )

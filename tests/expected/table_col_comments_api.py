@@ -12,6 +12,34 @@ from typing import List, Optional, Tuple, Dict, Any
 from typing import TypeVar, Sequence
 from uuid import UUID
 
+@dataclass
+class TableWithColComment:
+    id: UUID
+    name: str
+    industry: Optional[str]
+    size: Optional[str]
+    notes: Optional[str]
+    created_at: datetime
+
+async def get_table_with_col_comments(conn: AsyncConnection) -> List[TableWithColComment]:
+    """Function using the table (needed for test structure)"""
+    async with conn.cursor() as cur:
+        await cur.execute("SELECT * FROM get_table_with_col_comments()", [])
+        rows = await cur.fetchall()
+        # Ensure dataclass 'None' is defined above.
+        if not rows:
+            return []
+        try:
+            return [TableWithColComment(*r) for r in rows]
+        except TypeError as e:
+            # Tuple unpacking failed. This often happens if the DB connection
+            # is configured with a dict-like row factory (e.g., DictRow).
+            # This generated code expects the default tuple row factory.
+            raise TypeError(
+                f"Failed to map SETOF results to dataclass list for TableWithColComment. "
+                f"Check DB connection: Default tuple row_factory expected. Error: {e}"
+            )
+
 
 # ===== SECTION: RESULT HELPERS =====
 # REMOVED redundant import line
@@ -63,32 +91,3 @@ def get_required(result: Optional[List[T]] | Optional[T]) -> T:
          raise ValueError(f"Expected exactly one result, but got none or multiple. Input was: {input_repr}")
     return item
 
-
-@dataclass
-class TableWithColComment:
-    id: UUID
-    name: str
-    industry: Optional[str]
-    size: Optional[str]
-    notes: Optional[str]
-    created_at: datetime
-
-async def get_table_with_col_comments(conn: AsyncConnection) -> List[TableWithColComment]:
-    """Function using the table (needed for test structure)"""
-    async with conn.cursor() as cur:
-        await cur.execute("SELECT * FROM get_table_with_col_comments()", [])
-        rows = await cur.fetchall()
-        # Ensure dataclass 'TableWithColComment' is defined above.
-        if not rows:
-            return []
-        # Expecting list of tuples for SETOF composite type TableWithColComment
-        try:
-            return [TableWithColComment(*r) for r in rows]
-        except TypeError as e:
-            # Tuple unpacking failed. This often happens if the DB connection
-            # is configured with a dict-like row factory (e.g., DictRow).
-            # This generated code expects the default tuple row factory.
-            raise TypeError(
-                f"Failed to map SETOF results to dataclass list for TableWithColComment. "
-                f"Check DB connection: Default tuple row_factory expected. Error: {e}"
-            )

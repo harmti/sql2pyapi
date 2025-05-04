@@ -11,6 +11,31 @@ from typing import List, Optional, Tuple, Dict, Any
 from typing import TypeVar, Sequence
 from uuid import UUID
 
+@dataclass
+class FunctionWithReturnsTableCommentsResult:
+    col_id: Optional[UUID]
+    col_value: Optional[str]
+    col_status: Optional[bool]
+
+async def function_with_returns_table_comments(conn: AsyncConnection, filter: str) -> List[FunctionWithReturnsTableCommentsResult]:
+    """Call PostgreSQL function function_with_returns_table_comments()."""
+    async with conn.cursor() as cur:
+        await cur.execute("SELECT * FROM function_with_returns_table_comments(%s)", [filter])
+        rows = await cur.fetchall()
+        # Ensure dataclass 'FunctionWithReturnsTableCommentsResult' is defined above.
+        if not rows:
+            return []
+        try:
+            return [FunctionWithReturnsTableCommentsResult(*r) for r in rows]
+        except TypeError as e:
+            # Tuple unpacking failed. This often happens if the DB connection
+            # is configured with a dict-like row factory (e.g., DictRow).
+            # This generated code expects the default tuple row factory.
+            raise TypeError(
+                f"Failed to map SETOF results to dataclass list for FunctionWithReturnsTableCommentsResult. "
+                f"Check DB connection: Default tuple row_factory expected. Error: {e}"
+            )
+
 
 # ===== SECTION: RESULT HELPERS =====
 # REMOVED redundant import line
@@ -62,29 +87,3 @@ def get_required(result: Optional[List[T]] | Optional[T]) -> T:
          raise ValueError(f"Expected exactly one result, but got none or multiple. Input was: {input_repr}")
     return item
 
-
-@dataclass
-class FunctionWithReturnsTableCommentsResult:
-    col_id: Optional[UUID]
-    col_value: Optional[str]
-    col_status: Optional[bool]
-
-async def function_with_returns_table_comments(conn: AsyncConnection, filter: str) -> List[FunctionWithReturnsTableCommentsResult]:
-    """Call PostgreSQL function function_with_returns_table_comments()."""
-    async with conn.cursor() as cur:
-        await cur.execute("SELECT * FROM function_with_returns_table_comments(%s)", [filter])
-        rows = await cur.fetchall()
-        # Ensure dataclass 'FunctionWithReturnsTableCommentsResult' is defined above.
-        if not rows:
-            return []
-        # Expecting list of tuples for SETOF composite type FunctionWithReturnsTableCommentsResult
-        try:
-            return [FunctionWithReturnsTableCommentsResult(*r) for r in rows]
-        except TypeError as e:
-            # Tuple unpacking failed. This often happens if the DB connection
-            # is configured with a dict-like row factory (e.g., DictRow).
-            # This generated code expects the default tuple row factory.
-            raise TypeError(
-                f"Failed to map SETOF results to dataclass list for FunctionWithReturnsTableCommentsResult. "
-                f"Check DB connection: Default tuple row_factory expected. Error: {e}"
-            )

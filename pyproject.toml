@@ -27,7 +27,7 @@ dependencies = [
     "inflection>=0.5.1,<1.0.0", # Added for dataclass naming
 ]
 
-[project.optional-dependencies]
+[dependency-groups]
 dev = [
     "pytest>=8.0.0", # Or pin to a specific version range if needed
     "pytest-asyncio", # Added for testing async functions
@@ -40,6 +40,9 @@ dev = [
 
 [project.scripts]
 sql2pyapi = "sql2pyapi.cli:app"
+
+[tool.uv]
+default-groups = ["dev"]
 
 [tool.hatch.version]
 path = "src/sql2pyapi/__init__.py" # Optional: manage version in __init__.py

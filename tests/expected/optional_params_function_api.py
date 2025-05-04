@@ -10,6 +10,30 @@ from psycopg import AsyncConnection
 from typing import List, Optional, Tuple, Dict, Any
 from typing import TypeVar, Sequence
 
+# TODO: Define dataclass for table 'items'
+# @dataclass
+# class Item:
+#     pass
+
+async def search_items(conn: AsyncConnection, query: str, limit: Optional[int] = None, include_unavailable: Optional[bool] = None) -> List[Item]:
+    """Search for items with optional filters"""
+    async with conn.cursor() as cur:
+        await cur.execute("SELECT * FROM search_items(%s, %s, %s)", [query, limit, include_unavailable])
+        rows = await cur.fetchall()
+        # Ensure dataclass 'Items' is defined above.
+        if not rows:
+            return []
+        try:
+            return [Item(*r) for r in rows]
+        except TypeError as e:
+            # Tuple unpacking failed. This often happens if the DB connection
+            # is configured with a dict-like row factory (e.g., DictRow).
+            # This generated code expects the default tuple row factory.
+            raise TypeError(
+                f"Failed to map SETOF results to dataclass list for Item. "
+                f"Check DB connection: Default tuple row_factory expected. Error: {e}"
+            )
+
 
 # ===== SECTION: RESULT HELPERS =====
 # REMOVED redundant import line
@@ -61,28 +85,3 @@ def get_required(result: Optional[List[T]] | Optional[T]) -> T:
          raise ValueError(f"Expected exactly one result, but got none or multiple. Input was: {input_repr}")
     return item
 
-
-# TODO: Define dataclass for table 'items'
-# @dataclass
-# class Item:
-#     pass
-
-async def search_items(conn: AsyncConnection, query: str, limit: Optional[int] = None, include_unavailable: Optional[bool] = None) -> List[Item]:
-    """Search for items with optional filters"""
-    async with conn.cursor() as cur:
-        await cur.execute("SELECT * FROM search_items(%s, %s, %s)", [query, limit, include_unavailable])
-        rows = await cur.fetchall()
-        # Ensure dataclass 'Item' is defined above.
-        if not rows:
-            return []
-        # Expecting list of tuples for SETOF composite type Item
-        try:
-            return [Item(*r) for r in rows]
-        except TypeError as e:
-            # Tuple unpacking failed. This often happens if the DB connection
-            # is configured with a dict-like row factory (e.g., DictRow).
-            # This generated code expects the default tuple row factory.
-            raise TypeError(
-                f"Failed to map SETOF results to dataclass list for Item. "
-                f"Check DB connection: Default tuple row_factory expected. Error: {e}"
-            )

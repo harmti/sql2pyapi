@@ -15,8 +15,10 @@ async def add_item(conn: AsyncConnection, name: str, category_id: int, is_availa
     """Adds an item with various attributes"""
     async with conn.cursor() as cur:
         await cur.execute("SELECT * FROM add_item(%s, %s, %s, %s, %s)", [name, category_id, is_available, price, attributes])
-        result = await conn.fetchval(sql)
-        return result
+        row = await cur.fetchone()
+        if row is None:
+            return None
+        return row[0]
 
 
 # ===== SECTION: RESULT HELPERS =====

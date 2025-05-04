@@ -25,7 +25,6 @@ async def get_user_basic_info(conn: AsyncConnection, user_id: UUID) -> List[GetU
         # Ensure dataclass 'GetUserBasicInfoResult' is defined above.
         if not rows:
             return []
-        # Expecting list of tuples for SETOF composite type GetUserBasicInfoResult
         try:
             return [GetUserBasicInfoResult(*r) for r in rows]
         except TypeError as e:

@@ -12,6 +12,38 @@ from typing import List, Optional, Tuple, Dict, Any
 from typing import TypeVar, Sequence
 from uuid import UUID
 
+@dataclass
+class User:
+    id: UUID
+    clerk_id: str
+    email: Optional[str]
+    email_verified: Optional[bool]
+    first_name: Optional[str]
+    last_name: Optional[str]
+    last_sign_in_at: Optional[datetime]
+    created_at: datetime
+    updated_at: datetime
+    is_deleted: Optional[bool]
+
+async def get_user_by_clerk_id(conn: AsyncConnection, clerk_id: str) -> List[User]:
+    """Function returning a non-schema-qualified table"""
+    async with conn.cursor() as cur:
+        await cur.execute("SELECT * FROM get_user_by_clerk_id(%s)", [clerk_id])
+        rows = await cur.fetchall()
+        # Ensure dataclass 'None' is defined above.
+        if not rows:
+            return []
+        try:
+            return [User(*r) for r in rows]
+        except TypeError as e:
+            # Tuple unpacking failed. This often happens if the DB connection
+            # is configured with a dict-like row factory (e.g., DictRow).
+            # This generated code expects the default tuple row factory.
+            raise TypeError(
+                f"Failed to map SETOF results to dataclass list for User. "
+                f"Check DB connection: Default tuple row_factory expected. Error: {e}"
+            )
+
 
 # ===== SECTION: RESULT HELPERS =====
 # REMOVED redundant import line
@@ -63,36 +95,3 @@ def get_required(result: Optional[List[T]] | Optional[T]) -> T:
          raise ValueError(f"Expected exactly one result, but got none or multiple. Input was: {input_repr}")
     return item
 
-
-@dataclass
-class User:
-    id: UUID
-    clerk_id: str
-    email: Optional[str]
-    email_verified: Optional[bool]
-    first_name: Optional[str]
-    last_name: Optional[str]
-    last_sign_in_at: Optional[datetime]
-    created_at: datetime
-    updated_at: datetime
-    is_deleted: Optional[bool]
-
-async def get_user_by_clerk_id(conn: AsyncConnection, clerk_id: str) -> List[User]:
-    """Function returning a non-schema-qualified table"""
-    async with conn.cursor() as cur:
-        await cur.execute("SELECT * FROM get_user_by_clerk_id(%s)", [clerk_id])
-        rows = await cur.fetchall()
-        # Ensure dataclass 'User' is defined above.
-        if not rows:
-            return []
-        # Expecting list of tuples for SETOF composite type User
-        try:
-            return [User(*r) for r in rows]
-        except TypeError as e:
-            # Tuple unpacking failed. This often happens if the DB connection
-            # is configured with a dict-like row factory (e.g., DictRow).
-            # This generated code expects the default tuple row factory.
-            raise TypeError(
-                f"Failed to map SETOF results to dataclass list for User. "
-                f"Check DB connection: Default tuple row_factory expected. Error: {e}"
-            )

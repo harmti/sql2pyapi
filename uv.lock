@@ -269,7 +269,7 @@ dependencies = [
     { name = "typer" },
 ]
 
-[package.optional-dependencies]
+[package.dev-dependencies]
 dev = [
     { name = "pytest" },
     { name = "pytest-asyncio" },
@@ -280,12 +280,15 @@ dev = [
 requires-dist = [
     { name = "inflection", specifier = ">=0.5.1,<1.0.0" },
     { name = "psycopg", extras = ["binary", "pool"], specifier = ">=3.1.9,<4.0.0" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0.0" },
-    { name = "pytest-asyncio", marker = "extra == 'dev'" },
-    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.5.5" },
     { name = "typer", extras = ["all"], specifier = ">=0.9.0,<1.0.0" },
 ]
-provides-extras = ["dev"]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "pytest", specifier = ">=8.0.0" },
+    { name = "pytest-asyncio" },
+    { name = "ruff", specifier = ">=0.5.5" },
+]
 
 [[package]]
 name = "tomli"

@@ -9,6 +9,15 @@ from psycopg import AsyncConnection
 from typing import List, Optional, Tuple, Dict, Any
 from typing import TypeVar, Sequence
 
+async def trigger_set_timestamp(conn: AsyncConnection) -> Optional[Any]:
+    """Trigger function to set updated_at timestamp"""
+    async with conn.cursor() as cur:
+        await cur.execute("SELECT * FROM trigger_set_timestamp()", [])
+        row = await cur.fetchone()
+        if row is None:
+            return None
+        return row[0]
+
 
 # ===== SECTION: RESULT HELPERS =====
 # REMOVED redundant import line
@@ -60,13 +69,3 @@ def get_required(result: Optional[List[T]] | Optional[T]) -> T:
          raise ValueError(f"Expected exactly one result, but got none or multiple. Input was: {input_repr}")
     return item
 
-
-async def trigger_set_timestamp(conn: AsyncConnection) -> Optional[Any]:
-    """Trigger function to set updated_at timestamp"""
-    async with conn.cursor() as cur:
-        await cur.execute("SELECT * FROM trigger_set_timestamp()", [])
-        row = await cur.fetchone()
-        if row is None:
-            return None
-        # Expecting a tuple even for scalar returns, access first element.
-        return row[0]
