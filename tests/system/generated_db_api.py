@@ -103,10 +103,9 @@ async def get_all_item_names(conn: AsyncConnection) -> List[str]:
     """Function returning SETOF scalar"""
     async with conn.cursor() as cur:
         await cur.execute("SELECT * FROM get_all_item_names()", [])
-        row = await cur.fetchone()
-        if row is None:
-            return None
-        return row[0]
+        rows = await cur.fetchall()
+        # Assuming SETOF returns list of single-element tuples for scalars
+        return [row[0] for row in rows if row]
 
 async def get_items_with_mood(conn: AsyncConnection, mood: Mood) -> List[Item]:
     """Function returning SETOF rows matching a table structure"""

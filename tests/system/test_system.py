@@ -200,17 +200,14 @@ async def test_get_item_by_id_found(db_conn, generated_api_module):
 
 @pytest.mark.asyncio
 async def test_get_item_by_id_not_found(db_conn, generated_api_module):
-    """Test retrieving a non-existent item by ID."""
-    retrieved_item = await generated_api_module.get_item_by_id(db_conn, item_id=999)
-    # sql2pyapi needs to define how 'not found' is represented.
-    # psycopg returns None for fetchone() when no row matches.
-    # Assume the generated wrapper returns None.
-    assert retrieved_item is None
+    """Test retrieving a non-existent item."""
+    item = await generated_api_module.get_item_by_id(db_conn, item_id=999)
+    assert item is None
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(reason="Generator currently uses fetchone() for SETOF scalar.")
+# @pytest.mark.xfail(reason="Generator currently uses fetchone() for SETOF scalar.") # Removed xfail
 async def test_get_all_item_names(db_conn, generated_api_module):
-    """Test retrieving all item names."""
+    """Test getting all item names using SETOF TEXT."""
     names = await generated_api_module.get_all_item_names(db_conn)
     assert sorted(names) == sorted(["Apple", "Banana", "inactive Chair"])
 

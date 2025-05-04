@@ -13,10 +13,9 @@ async def get_item_ids_by_category(conn: AsyncConnection, category_name: str) ->
     """Returns a list of item IDs for a given category"""
     async with conn.cursor() as cur:
         await cur.execute("SELECT * FROM get_item_ids_by_category(%s)", [category_name])
-        row = await cur.fetchone()
-        if row is None:
-            return None
-        return row[0]
+        rows = await cur.fetchall()
+        # Assuming SETOF returns list of single-element tuples for scalars
+        return [row[0] for row in rows if row]
 
 
 # ===== SECTION: RESULT HELPERS =====

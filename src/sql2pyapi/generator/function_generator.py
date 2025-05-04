@@ -143,8 +143,8 @@ def _generate_function_body(func: ParsedFunction, final_dataclass_name: Optional
         body_lines.append("    return None")
         return body_lines
         
-    # For scalar returns (int, str, bool, etc.), use fetchone
-    if not func.returns_table and not func.returns_record and not func.returns_enum_type:
+    # For scalar returns (int, str, bool, etc.), use fetchone - ONLY if NOT SETOF
+    if not func.returns_table and not func.returns_record and not func.returns_enum_type and not func.returns_setof:
         body_lines.append("    row = await cur.fetchone()")
         body_lines.append("    if row is None:")
         body_lines.append("        return None")
