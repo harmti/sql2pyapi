@@ -1,0 +1,20 @@
+# tests/system/docker-compose.yml
+version: '3.8'
+
+services:
+  postgres_test:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: testdb        # Database name
+      POSTGRES_USER: testuser    # Database user
+      POSTGRES_PASSWORD: testpass # Database password
+    ports:
+      - "5433:5432" # Expose on host port 5433
+    volumes:
+      # Mount the SQL scripts relative to this docker-compose file
+      - ./sql:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U testuser -d testdb"]
+      interval: 5s
+      timeout: 5s
+      retries: 5 
