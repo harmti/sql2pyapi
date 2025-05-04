@@ -9,7 +9,7 @@ from datetime import datetime
 # Assume the generated code is importable for the test
 # In a real setup, this might require path adjustments or putting expected files
 # in a place recognized as a package.
-from tests.expected.scalar_function_api import get_item_count
+# from tests.expected.scalar_function_api import get_item_count # REMOVED
 
 # Import functions from a generated file that return composite types
 from tests.expected.example_func1_api import (

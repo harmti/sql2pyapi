@@ -200,178 +200,844 @@ def test_func2_generation_with_schema(tmp_path):
 def test_void_function_generation(tmp_path):
     """Test generating a function that returns void."""
     functions_sql_path = FIXTURES_DIR / "void_function.sql"
-    expected_output_path = EXPECTED_DIR / "void_function_api.py"
     actual_output_path = tmp_path / "void_function_api.py"
 
     # Run the generator tool (no schema file needed)
     run_cli_tool(functions_sql_path, actual_output_path)
 
-    # Compare the generated file with the expected file
+    # --- AST Based Assertions ---
     assert actual_output_path.is_file(), "Generated file was not created."
-
-    expected_content = expected_output_path.read_text()
     actual_content = actual_output_path.read_text()
+    tree = ast.parse(actual_content)
 
-    assert actual_content == expected_content, (
-        f"Generated file content does not match expected content.\n"
-        f"Expected ({expected_output_path}):\n{expected_content}\n"
-        f"Actual ({actual_output_path}):\n{actual_content}"
-    )
+    # Find the generated function
+    func_node = None
+    for node in ast.walk(tree):
+        if isinstance(node, ast.AsyncFunctionDef) and node.name == 'do_something':
+            func_node = node
+            break
+
+    assert func_node is not None, "Async function definition 'do_something' not found"
+
+    # Check parameters
+    expected_params = {'conn': 'AsyncConnection', 'item_id': 'int'}
+    actual_params = {arg.arg: ast.unparse(arg.annotation) for arg in func_node.args.args}
+    assert actual_params == expected_params, f"Mismatch in do_something parameters. Expected {expected_params}, Got {actual_params}"
+
+    # Check return annotation (should be None)
+    assert func_node.returns is not None and isinstance(func_node.returns, ast.Constant) and func_node.returns.value is None, \
+        f"Return annotation should be 'None', but got: {ast.unparse(func_node.returns) if func_node.returns else 'None (implicit)'}"
+
+    # Check docstring
+    docstring = ast.get_docstring(func_node)
+    assert docstring is not None, "do_something is missing a docstring"
+    assert docstring == "A function that does something but returns nothing", "Docstring content mismatch for do_something"
+
+    # Check function body for execute call
+    execute_call = None
+    sql_query = None
+    for node in ast.walk(func_node):
+        if isinstance(node, ast.Await) and isinstance(node.value, ast.Call):
+            call = node.value
+            if isinstance(call.func, ast.Attribute) and call.func.attr == 'execute':
+                execute_call = call
+                # Assume first arg is the SQL query string literal
+                if len(call.args) > 0 and isinstance(call.args[0], ast.Constant):
+                    sql_query = call.args[0].value
+                break # Assume only one execute call for simplicity
+
+    assert execute_call is not None, "'cur.execute' call not found in do_something"
+    assert sql_query == "SELECT * FROM do_something(%s)", f"SQL query mismatch in execute call. Found: '{sql_query}'"
+    # Check execute parameters
+    assert len(execute_call.args) == 2, "execute call should have 2 arguments"
+    assert isinstance(execute_call.args[1], ast.List), "Second argument to execute should be a list"
+    assert len(execute_call.args[1].elts) == 1 and isinstance(execute_call.args[1].elts[0], ast.Name) and execute_call.args[1].elts[0].id == 'item_id', \
+        "Execute parameters mismatch"
+
+    # Check explicit return None
+    return_node = None
+    # Search the whole function body, not just top-level statements
+    for node in ast.walk(func_node):
+        if isinstance(node, ast.Return):
+            # Ensure the return is directly within the target function,
+            # not a nested function (if any were possible)
+            # This check might be overly cautious but safe.
+            # Find the parent FunctionDef/AsyncFunctionDef
+            parent_func = next((p for p in ast.walk(func_node) if isinstance(p, (ast.FunctionDef, ast.AsyncFunctionDef)) and node in ast.walk(p)), None)
+            if parent_func == func_node:
+                 return_node = node
+                 break # Found the return statement for our function
+
+    assert return_node is not None, "No return statement found within the function body"
+    assert isinstance(return_node.value, ast.Constant) and return_node.value.value is None, "Function does not explicitly return None"
 
 
 def test_scalar_function_generation(tmp_path):
     """Test generating functions that return simple scalar types."""
     functions_sql_path = FIXTURES_DIR / "scalar_function.sql"
-    expected_output_path = EXPECTED_DIR / "scalar_function_api.py"
+    # expected_output_path = EXPECTED_DIR / "scalar_function_api.py" # No longer needed
     actual_output_path = tmp_path / "scalar_function_api.py"
 
     # Run the generator tool
     run_cli_tool(functions_sql_path, actual_output_path)
 
-    # Compare the generated file with the expected file
+    # --- AST Based Assertions ---
     assert actual_output_path.is_file(), "Generated file was not created."
-
-    expected_content = expected_output_path.read_text()
     actual_content = actual_output_path.read_text()
+    tree = ast.parse(actual_content)
 
-    assert actual_content == expected_content, (
-        f"Generated file content does not match expected content.\n"
-        f"Expected ({expected_output_path}):\n{expected_content}\n"
-        f"Actual ({actual_output_path}):\n{actual_content}"
-    )
+    # --- Check get_item_count function ---
+    count_func_node = None
+    for node in ast.walk(tree):
+        if isinstance(node, ast.AsyncFunctionDef) and node.name == 'get_item_count':
+            count_func_node = node
+            break
+    assert count_func_node is not None, "Async function 'get_item_count' not found"
+
+    # Check parameters
+    expected_params_count = {'conn': 'AsyncConnection'}
+    actual_params_count = {arg.arg: ast.unparse(arg.annotation) for arg in count_func_node.args.args}
+    assert actual_params_count == expected_params_count, f"Mismatch in get_item_count parameters. Expected {expected_params_count}, Got {actual_params_count}"
+
+    # Check return annotation
+    expected_return_count = 'Optional[int]'
+    actual_return_count = ast.unparse(count_func_node.returns)
+    assert actual_return_count == expected_return_count, f"Mismatch in get_item_count return type. Expected {expected_return_count}, Got {actual_return_count}"
+
+    # Check docstring
+    docstring_count = ast.get_docstring(count_func_node)
+    assert docstring_count == "Returns a simple count", "Docstring content mismatch for get_item_count"
+
+    # Check body for execute and fetchone
+    execute_call_count = None
+    sql_query_count = None
+    fetchone_call_count = None
+    return_logic_count = False
+    for node in ast.walk(count_func_node):
+        if isinstance(node, ast.Await) and isinstance(node.value, ast.Call):
+            call = node.value
+            if isinstance(call.func, ast.Attribute) and call.func.attr == 'execute':
+                execute_call_count = call
+                if len(call.args) > 0 and isinstance(call.args[0], ast.Constant):
+                    sql_query_count = call.args[0].value
+            elif isinstance(call.func, ast.Attribute) and call.func.attr == 'fetchone':
+                fetchone_call_count = call
+        elif isinstance(node, ast.Return):
+            # Check for 'return row[0]'
+            if isinstance(node.value, ast.Subscript) and \
+               isinstance(node.value.value, ast.Name) and node.value.value.id == 'row' and \
+               isinstance(node.value.slice, ast.Constant) and node.value.slice.value == 0:
+                return_logic_count = True
+
+    assert execute_call_count is not None, "execute call not found in get_item_count"
+    assert sql_query_count == "SELECT * FROM get_item_count()", f"SQL query mismatch in get_item_count. Found '{sql_query_count}'"
+    # Check execute params is empty list
+    assert len(execute_call_count.args) == 2 and isinstance(execute_call_count.args[1], ast.List) and not execute_call_count.args[1].elts, "Execute parameters mismatch for get_item_count"
+    assert fetchone_call_count is not None, "fetchone call not found in get_item_count"
+    assert return_logic_count, "'return row[0]' logic not found in get_item_count"
+
+
+    # --- Check get_item_name function ---
+    name_func_node = None
+    for node in ast.walk(tree):
+        if isinstance(node, ast.AsyncFunctionDef) and node.name == 'get_item_name':
+            name_func_node = node
+            break
+    assert name_func_node is not None, "Async function 'get_item_name' not found"
+
+    # Check parameters
+    expected_params_name = {'conn': 'AsyncConnection', 'id': 'int'}
+    actual_params_name = {arg.arg: ast.unparse(arg.annotation) for arg in name_func_node.args.args}
+    assert actual_params_name == expected_params_name, f"Mismatch in get_item_name parameters. Expected {expected_params_name}, Got {actual_params_name}"
+
+    # Check return annotation
+    expected_return_name = 'Optional[str]'
+    actual_return_name = ast.unparse(name_func_node.returns)
+    assert actual_return_name == expected_return_name, f"Mismatch in get_item_name return type. Expected {expected_return_name}, Got {actual_return_name}"
+
+    # Check docstring
+    docstring_name = ast.get_docstring(name_func_node)
+    assert docstring_name == "Returns text, potentially null", "Docstring content mismatch for get_item_name"
+
+    # Check body for execute and fetchone
+    execute_call_name = None
+    sql_query_name = None
+    fetchone_call_name = None
+    return_logic_name = False
+    execute_params_name = []
+    for node in ast.walk(name_func_node):
+        if isinstance(node, ast.Await) and isinstance(node.value, ast.Call):
+            call = node.value
+            if isinstance(call.func, ast.Attribute) and call.func.attr == 'execute':
+                execute_call_name = call
+                if len(call.args) > 0 and isinstance(call.args[0], ast.Constant):
+                    sql_query_name = call.args[0].value
+                if len(call.args) > 1 and isinstance(call.args[1], ast.List):
+                    execute_params_name = [elt.id for elt in call.args[1].elts if isinstance(elt, ast.Name)]
+            elif isinstance(call.func, ast.Attribute) and call.func.attr == 'fetchone':
+                fetchone_call_name = call
+        elif isinstance(node, ast.Return):
+            if isinstance(node.value, ast.Subscript) and \
+               isinstance(node.value.value, ast.Name) and node.value.value.id == 'row' and \
+               isinstance(node.value.slice, ast.Constant) and node.value.slice.value == 0:
+                return_logic_name = True
+
+    assert execute_call_name is not None, "execute call not found in get_item_name"
+    assert sql_query_name == "SELECT * FROM get_item_name(%s)", f"SQL query mismatch in get_item_name. Found '{sql_query_name}'"
+    assert execute_params_name == ['id'], f"Execute parameters mismatch for get_item_name. Expected ['id'], Got {execute_params_name}"
+    assert fetchone_call_name is not None, "fetchone call not found in get_item_name"
+    assert return_logic_name, "'return row[0]' logic not found in get_item_name"
 
 
 def test_setof_scalar_function_generation(tmp_path):
     """Test generating a function that returns SETOF scalar."""
     functions_sql_path = FIXTURES_DIR / "setof_scalar_function.sql"
-    expected_output_path = EXPECTED_DIR / "setof_scalar_function_api.py"
+    # expected_output_path = EXPECTED_DIR / "setof_scalar_function_api.py"
     actual_output_path = tmp_path / "setof_scalar_function_api.py"
 
     # Run the generator tool
     run_cli_tool(functions_sql_path, actual_output_path)
 
-    # Compare the generated file with the expected file
+    # --- AST Based Assertions ---
     assert actual_output_path.is_file(), "Generated file was not created."
-
-    expected_content = expected_output_path.read_text()
     actual_content = actual_output_path.read_text()
+    tree = ast.parse(actual_content)
 
-    assert actual_content == expected_content, (
-        f"Generated file content does not match expected content.\n"
-        f"Expected ({expected_output_path}):\n{expected_content}\n"
-        f"Actual ({actual_output_path}):\n{actual_content}"
-    )
+    # --- Check get_item_ids_by_category function ---
+    func_node = None
+    for node in ast.walk(tree):
+        if isinstance(node, ast.AsyncFunctionDef) and node.name == 'get_item_ids_by_category':
+            func_node = node
+            break
+    assert func_node is not None, "Async function 'get_item_ids_by_category' not found"
+
+    # Check parameters
+    expected_params = {'conn': 'AsyncConnection', 'category_name': 'str'}
+    actual_params = {arg.arg: ast.unparse(arg.annotation) for arg in func_node.args.args}
+    assert actual_params == expected_params, f"Mismatch in parameters. Expected {expected_params}, Got {actual_params}"
+
+    # Check return annotation
+    expected_return = 'List[int]'
+    actual_return = ast.unparse(func_node.returns)
+    assert actual_return == expected_return, f"Mismatch in return type. Expected {expected_return}, Got {actual_return}"
+
+    # Check docstring
+    docstring = ast.get_docstring(func_node)
+    assert docstring == "Returns a list of item IDs for a given category", "Docstring content mismatch"
+
+    # Check body for execute, fetchall, and list comprehension
+    execute_call = None
+    sql_query = None
+    fetchall_call = None
+    list_comp = None
+    execute_params = []
+    for node in ast.walk(func_node):
+        if isinstance(node, ast.Await) and isinstance(node.value, ast.Call):
+            call = node.value
+            if isinstance(call.func, ast.Attribute) and call.func.attr == 'execute':
+                execute_call = call
+                if len(call.args) > 0 and isinstance(call.args[0], ast.Constant):
+                    sql_query = call.args[0].value
+                if len(call.args) > 1 and isinstance(call.args[1], ast.List):
+                    execute_params = [elt.id for elt in call.args[1].elts if isinstance(elt, ast.Name)]
+            elif isinstance(call.func, ast.Attribute) and call.func.attr == 'fetchall':
+                fetchall_call = call
+        elif isinstance(node, ast.Return):
+            # Check for 'return [row[0] for row in rows if row]'
+            if isinstance(node.value, ast.ListComp):
+                list_comp = node.value
+                # Check element is row[0]
+                is_elt_row_zero = (
+                    isinstance(list_comp.elt, ast.Subscript) and \
+                    isinstance(list_comp.elt.value, ast.Name) and list_comp.elt.value.id == 'row' and \
+                    isinstance(list_comp.elt.slice, ast.Constant) and list_comp.elt.slice.value == 0
+                )
+                # Check generator target is row
+                comp = list_comp.generators[0]
+                is_target_row = isinstance(comp.target, ast.Name) and comp.target.id == 'row'
+                # Check iterable is rows
+                is_iter_rows = isinstance(comp.iter, ast.Name) and comp.iter.id == 'rows'
+                # Check if condition is 'if row'
+                has_if_row = len(comp.ifs) == 1 and isinstance(comp.ifs[0], ast.Name) and comp.ifs[0].id == 'row'
+                
+                if not (is_elt_row_zero and is_target_row and is_iter_rows and has_if_row):
+                    list_comp = None # Mark as not found if structure is wrong
+
+    assert execute_call is not None, "execute call not found"
+    assert sql_query == "SELECT * FROM get_item_ids_by_category(%s)", f"SQL query mismatch. Found '{sql_query}'"
+    assert execute_params == ['category_name'], f"Execute parameters mismatch. Expected ['category_name'], Got {execute_params}"
+    assert fetchall_call is not None, "fetchall call not found"
+    assert list_comp is not None, "List comprehension '[row[0] for row in rows if row]' not found or has wrong structure"
 
 
 def test_returns_table_function_generation(tmp_path):
     """Test generating a function that returns TABLE(...)."""
     functions_sql_path = FIXTURES_DIR / "returns_table_function.sql"
-    expected_output_path = EXPECTED_DIR / "returns_table_function_api.py"
+    # expected_output_path = EXPECTED_DIR / "returns_table_function_api.py" # No longer needed
     actual_output_path = tmp_path / "returns_table_function_api.py"
 
     # Run the generator tool
     run_cli_tool(functions_sql_path, actual_output_path)
 
-    # Compare the generated file with the expected file
+    # --- AST Based Assertions ---
     assert actual_output_path.is_file(), "Generated file was not created."
-
-    expected_content = expected_output_path.read_text()
     actual_content = actual_output_path.read_text()
+    tree = ast.parse(actual_content)
 
-    assert actual_content == expected_content, (
-        f"Generated file content does not match expected content.\n"
-        f"Expected ({expected_output_path}):\n{expected_content}\n"
-        f"Actual ({actual_output_path}):\n{actual_content}"
-    )
+    # 1. Check Imports (dataclass, List, Optional, UUID)
+    found_typing_imports = set()
+    found_dataclass = False
+    found_uuid = False
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            if node.module == 'typing':
+                for alias in node.names:
+                    found_typing_imports.add(alias.name)
+            elif node.module == 'dataclasses' and any(alias.name == 'dataclass' for alias in node.names):
+                 found_dataclass = True
+            elif node.module == 'uuid' and any(alias.name == 'UUID' for alias in node.names):
+                 found_uuid = True
+    assert {'List', 'Optional'}.issubset(found_typing_imports), "Missing required typing imports"
+    assert found_dataclass, "Missing dataclass import"
+    assert found_uuid, "Missing UUID import"
+
+    # 2. Check GetUserBasicInfoResult Dataclass
+    dataclass_node = None
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ClassDef) and node.name == 'GetUserBasicInfoResult':
+            dataclass_node = node
+            break
+    assert dataclass_node is not None, "Dataclass 'GetUserBasicInfoResult' not found"
+    assert any(isinstance(d, ast.Name) and d.id == 'dataclass' for d in dataclass_node.decorator_list), "Class is not decorated with @dataclass"
+    
+    expected_fields = {
+        'user_id': 'Optional[UUID]',
+        'first_name': 'Optional[str]',
+        'is_active': 'Optional[bool]'
+    }
+    actual_fields = {stmt.target.id: ast.unparse(stmt.annotation) 
+                     for stmt in dataclass_node.body if isinstance(stmt, ast.AnnAssign)}
+    assert actual_fields == expected_fields, "GetUserBasicInfoResult dataclass fields mismatch"
+
+    # 3. Check get_user_basic_info Function
+    func_node = None
+    for node in ast.walk(tree):
+        if isinstance(node, ast.AsyncFunctionDef) and node.name == 'get_user_basic_info':
+            func_node = node
+            break
+    assert func_node is not None, "Async function 'get_user_basic_info' not found"
+
+    # Check parameters
+    expected_params = {'conn': 'AsyncConnection', 'user_id': 'UUID'}
+    actual_params = {arg.arg: ast.unparse(arg.annotation) for arg in func_node.args.args}
+    assert actual_params == expected_params, f"Parameter mismatch. Expected {expected_params}, Got {actual_params}"
+
+    # Check return annotation
+    expected_return = 'List[GetUserBasicInfoResult]'
+    actual_return = ast.unparse(func_node.returns)
+    assert actual_return == expected_return, f"Return type mismatch. Expected {expected_return}, Got {actual_return}"
+
+    # Check docstring
+    docstring = ast.get_docstring(func_node)
+    assert docstring == "Returns a user's basic info as a table", "Docstring content mismatch"
+
+    # Check body for execute, fetchall, and list comprehension with try/except
+    execute_call = None
+    sql_query = None
+    fetchall_call = None
+    list_comp_call = None # The call GetUserBasicInfoResult(*r)
+    try_except_node = None
+    execute_params = []
+    for node in ast.walk(func_node):
+        if isinstance(node, ast.Await) and isinstance(node.value, ast.Call):
+            call = node.value
+            if isinstance(call.func, ast.Attribute) and call.func.attr == 'execute':
+                execute_call = call
+                if len(call.args) > 0 and isinstance(call.args[0], ast.Constant):
+                    sql_query = call.args[0].value
+                if len(call.args) > 1 and isinstance(call.args[1], ast.List):
+                     execute_params = [elt.id for elt in call.args[1].elts if isinstance(elt, ast.Name)]
+            elif isinstance(call.func, ast.Attribute) and call.func.attr == 'fetchall':
+                fetchall_call = call
+        elif isinstance(node, ast.Try):
+            try_except_node = node
+            # Find the list comprehension inside the try block
+            for try_node in ast.walk(node):
+                if isinstance(try_node, ast.ListComp):
+                     # Check the element: GetUserBasicInfoResult(*r)
+                     if (
+                         isinstance(try_node.elt, ast.Call) and \
+                         isinstance(try_node.elt.func, ast.Name) and try_node.elt.func.id == 'GetUserBasicInfoResult' and \
+                         len(try_node.elt.args) == 1 and isinstance(try_node.elt.args[0], ast.Starred) and \
+                         isinstance(try_node.elt.args[0].value, ast.Name) and try_node.elt.args[0].value.id == 'r'
+                     ):
+                         # Check the generator: for r in rows
+                         comp = try_node.generators[0]
+                         if (
+                             isinstance(comp.target, ast.Name) and comp.target.id == 'r' and \
+                             isinstance(comp.iter, ast.Name) and comp.iter.id == 'rows'
+                         ):
+                             list_comp_call = try_node.elt # Store the call node if structure matches
+                             break # Found it
+            # Check the except handler catches TypeError
+            assert len(node.handlers) == 1, "Expected one except handler"
+            handler = node.handlers[0]
+            assert isinstance(handler.type, ast.Name) and handler.type.id == 'TypeError', "Except handler should catch TypeError"
+            # Check if it raises a TypeError
+            raises_type_error = False
+            for except_node in ast.walk(handler):
+                if isinstance(except_node, ast.Raise) and isinstance(except_node.exc, ast.Call) and \
+                   isinstance(except_node.exc.func, ast.Name) and except_node.exc.func.id == 'TypeError':
+                   raises_type_error = True
+                   break
+            assert raises_type_error, "Except handler should raise a TypeError"
+
+    assert execute_call is not None, "execute call not found"
+    assert sql_query == "SELECT * FROM get_user_basic_info(%s)", f"SQL query mismatch. Found '{sql_query}'"
+    assert execute_params == ['user_id'], f"Execute parameters mismatch. Expected ['user_id'], Got {execute_params}"
+    assert fetchall_call is not None, "fetchall call not found"
+    assert try_except_node is not None, "Try/except block not found"
+    assert list_comp_call is not None, "List comprehension '[GetUserBasicInfoResult(*r) for r in rows]' not found or has wrong structure inside try block"
 
 
 def test_setof_missing_table_function_generation(tmp_path):
     """Test generating a function that returns SETOF table_name where the schema is missing."""
     functions_sql_path = FIXTURES_DIR / "setof_missing_table_function.sql"
-    expected_output_path = EXPECTED_DIR / "setof_missing_table_function_api.py"
+    # expected_output_path = EXPECTED_DIR / "setof_missing_table_function_api.py" # No longer needed
     actual_output_path = tmp_path / "setof_missing_table_function_api.py"
 
-    # Run the generator tool (no schema file needed) - Re-add flag
+    # Run the generator tool (no schema file needed) with allow_missing_schemas
     result = run_cli_tool(functions_sql_path, actual_output_path, allow_missing_schemas=True)
     assert result.returncode == 0, f"CLI failed even with --allow-missing-schemas: {result.stderr}"
 
-    # Compare the generated file with the expected file
+    # --- AST Based Assertions ---
     assert actual_output_path.is_file(), "Generated file was not created."
-
-    expected_content = expected_output_path.read_text()
     actual_content = actual_output_path.read_text()
+    tree = ast.parse(actual_content)
 
-    assert actual_content == expected_content, (
-        f"Generated file content does not match expected content.\n"
-        f"Expected ({expected_output_path}):\n{expected_content}\n"
-        f"Actual ({actual_output_path}):\n{actual_content}"
-    )
+    # 1. Check Imports (dataclass, List)
+    # Optional might not be imported if the placeholder class has no Optional fields
+    # We don't expect Optional here.
+    found_typing_list = False
+    found_dataclass = False # dataclass should be imported even for placeholder
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            if node.module == 'typing' and any(alias.name == 'List' for alias in node.names):
+                 found_typing_list = True
+            elif node.module == 'dataclasses' and any(alias.name == 'dataclass' for alias in node.names):
+                 found_dataclass = True
+    assert found_typing_list, "Missing List import from typing"
+    assert found_dataclass, "Missing dataclass import"
+
+    # 2. Check for Placeholder Dataclass Comment
+    # Verify the exact comment text generated
+    assert "# TODO: Define dataclass for table 'some_undefined_tables'" in actual_content, \
+           "Missing or incorrect placeholder TODO comment for SomeUndefinedTable"
+    assert "# @dataclass" in actual_content, "Missing placeholder @dataclass comment"
+    assert "# class SomeUndefinedTable:" in actual_content, "Missing placeholder class definition comment"
+    # Ensure the actual class definition is NOT present
+    class_def_found = False
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ClassDef) and node.name == 'SomeUndefinedTable':
+            class_def_found = True
+            break
+    assert not class_def_found, "Actual class definition for SomeUndefinedTable should not be present"
+
+
+    # 3. Check get_undefined_table_data Function
+    func_node = None
+    for node in ast.walk(tree):
+        if isinstance(node, ast.AsyncFunctionDef) and node.name == 'get_undefined_table_data':
+            func_node = node
+            break
+    assert func_node is not None, "Async function 'get_undefined_table_data' not found"
+
+    # Check parameters (should only be conn)
+    expected_params = {'conn': 'AsyncConnection'}
+    actual_params = {arg.arg: ast.unparse(arg.annotation) for arg in func_node.args.args}
+    assert actual_params == expected_params, f"Parameter mismatch. Expected {expected_params}, Got {actual_params}"
+
+    # Check return annotation (uses placeholder class name)
+    expected_return = 'List[SomeUndefinedTable]'
+    actual_return = ast.unparse(func_node.returns)
+    assert actual_return == expected_return, f"Return type mismatch. Expected {expected_return}, Got {actual_return}"
+
+    # Check docstring
+    docstring = ast.get_docstring(func_node)
+    expected_docstring_part1 = "Returns a setof some_undefined_table records"
+    expected_docstring_part2 = "The schema for 'some_undefined_table' is intentionally missing."
+    assert docstring is not None and expected_docstring_part1 in docstring and expected_docstring_part2 in docstring, \
+           f"Docstring content mismatch. Expected parts '{expected_docstring_part1}' and '{expected_docstring_part2}', Got '{docstring}'"
+
+    # Check body for execute, fetchall, and list comprehension with try/except using placeholder
+    execute_call = None
+    sql_query = None
+    fetchall_call = None
+    list_comp_call = None # The call SomeUndefinedTable(*r)
+    try_except_node = None
+    execute_params = []
+    for node in ast.walk(func_node):
+        if isinstance(node, ast.Await) and isinstance(node.value, ast.Call):
+            call = node.value
+            if isinstance(call.func, ast.Attribute) and call.func.attr == 'execute':
+                execute_call = call
+                if len(call.args) > 0 and isinstance(call.args[0], ast.Constant):
+                    sql_query = call.args[0].value
+                if len(call.args) > 1 and isinstance(call.args[1], ast.List):
+                     # Check params list is empty
+                     assert not call.args[1].elts, "Execute should have empty parameter list"
+                     execute_params = [] # Mark as checked
+            elif isinstance(call.func, ast.Attribute) and call.func.attr == 'fetchall':
+                fetchall_call = call
+        elif isinstance(node, ast.Try):
+            try_except_node = node
+            for try_node in ast.walk(node):
+                if isinstance(try_node, ast.ListComp):
+                     # Check the element: SomeUndefinedTable(*r)
+                     if (
+                         isinstance(try_node.elt, ast.Call) and \
+                         isinstance(try_node.elt.func, ast.Name) and try_node.elt.func.id == 'SomeUndefinedTable' and \
+                         len(try_node.elt.args) == 1 and isinstance(try_node.elt.args[0], ast.Starred) and \
+                         isinstance(try_node.elt.args[0].value, ast.Name) and try_node.elt.args[0].value.id == 'r'
+                     ):
+                         comp = try_node.generators[0]
+                         if (
+                             isinstance(comp.target, ast.Name) and comp.target.id == 'r' and \
+                             isinstance(comp.iter, ast.Name) and comp.iter.id == 'rows'
+                         ):
+                             list_comp_call = try_node.elt
+                             break
+            # Check the except handler
+            assert len(node.handlers) == 1
+            handler = node.handlers[0]
+            assert isinstance(handler.type, ast.Name) and handler.type.id == 'TypeError'
+            raises_type_error = False
+            for except_node in ast.walk(handler):
+                if isinstance(except_node, ast.Raise) and isinstance(except_node.exc, ast.Call) and \
+                   isinstance(except_node.exc.func, ast.Name) and except_node.exc.func.id == 'TypeError':
+                   raises_type_error = True
+                   break
+            assert raises_type_error
+
+    assert execute_call is not None, "execute call not found"
+    assert sql_query == "SELECT * FROM get_undefined_table_data()", f"SQL query mismatch. Found '{sql_query}'"
+    assert execute_params == [], "Execute parameters mismatch (should be empty)"
+    assert fetchall_call is not None, "fetchall call not found"
+    assert try_except_node is not None, "Try/except block not found"
+    assert list_comp_call is not None, "List comprehension '[SomeUndefinedTable(*r) for r in rows]' not found or has wrong structure inside try block"
 
 
 def test_returns_record_function_generation(tmp_path):
     """Test generating functions that return record or SETOF record."""
     functions_sql_path = FIXTURES_DIR / "returns_record_function.sql"
-    expected_output_path = EXPECTED_DIR / "returns_record_function_api.py"
+    # expected_output_path = EXPECTED_DIR / "returns_record_function_api.py" # No longer needed
     actual_output_path = tmp_path / "returns_record_function_api.py"
 
     # Run the generator tool
     run_cli_tool(functions_sql_path, actual_output_path)
 
-    # Compare the generated file with the expected file
+    # --- AST Based Assertions ---
     assert actual_output_path.is_file(), "Generated file was not created."
-
-    expected_content = expected_output_path.read_text()
     actual_content = actual_output_path.read_text()
+    tree = ast.parse(actual_content)
 
-    assert actual_content == expected_content, (
-        f"Generated file content does not match expected content.\n"
-        f"Expected ({expected_output_path}):\n{expected_content}\n"
-        f"Actual ({actual_output_path}):\n{actual_content}"
-    )
+    # 1. Check Imports (Tuple, List, Optional)
+    found_typing_imports = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module == 'typing':
+            for alias in node.names:
+                found_typing_imports.add(alias.name)
+    assert {'List', 'Optional', 'Tuple'}.issubset(found_typing_imports), "Missing required typing imports"
+
+    # 2. Check get_processing_status Function (returns Optional[Tuple])
+    status_func_node = None
+    for node in ast.walk(tree):
+        if isinstance(node, ast.AsyncFunctionDef) and node.name == 'get_processing_status':
+            status_func_node = node
+            break
+    assert status_func_node is not None, "Async function 'get_processing_status' not found"
+
+    # Check parameters
+    expected_params_status = {'conn': 'AsyncConnection'}
+    actual_params_status = {arg.arg: ast.unparse(arg.annotation) for arg in status_func_node.args.args}
+    assert actual_params_status == expected_params_status, f"Mismatch in get_processing_status parameters"
+
+    # Check return annotation
+    expected_return_status = 'Optional[Tuple]'
+    actual_return_status = ast.unparse(status_func_node.returns)
+    assert actual_return_status == expected_return_status, f"Mismatch in get_processing_status return type"
+
+    # Check docstring
+    docstring_status = ast.get_docstring(status_func_node)
+    assert docstring_status == "Returns an anonymous record containing status and count", "Docstring mismatch for get_processing_status"
+
+    # Check body for execute, fetchone, and return row
+    execute_call_status = None
+    sql_query_status = None
+    fetchone_call_status = None
+    return_row_status = False
+    for node in ast.walk(status_func_node):
+        if isinstance(node, ast.Await) and isinstance(node.value, ast.Call):
+            call = node.value
+            if isinstance(call.func, ast.Attribute) and call.func.attr == 'execute':
+                execute_call_status = call
+                if len(call.args) > 0 and isinstance(call.args[0], ast.Constant):
+                    sql_query_status = call.args[0].value
+                assert len(call.args) == 2 and isinstance(call.args[1], ast.List) and not call.args[1].elts, "Params should be empty list"
+            elif isinstance(call.func, ast.Attribute) and call.func.attr == 'fetchone':
+                fetchone_call_status = call
+        elif isinstance(node, ast.Return):
+            if isinstance(node.value, ast.Name) and node.value.id == 'row':
+                return_row_status = True
+
+    assert execute_call_status is not None, "execute call not found in get_processing_status"
+    assert sql_query_status == "SELECT * FROM get_processing_status()", f"SQL query mismatch"
+    assert fetchone_call_status is not None, "fetchone call not found in get_processing_status"
+    assert return_row_status, "'return row' logic not found in get_processing_status"
+
+    # 3. Check get_all_statuses Function (returns List[Tuple])
+    all_status_func_node = None
+    for node in ast.walk(tree):
+        if isinstance(node, ast.AsyncFunctionDef) and node.name == 'get_all_statuses':
+            all_status_func_node = node
+            break
+    assert all_status_func_node is not None, "Async function 'get_all_statuses' not found"
+
+    # Check parameters
+    expected_params_all = {'conn': 'AsyncConnection'}
+    actual_params_all = {arg.arg: ast.unparse(arg.annotation) for arg in all_status_func_node.args.args}
+    assert actual_params_all == expected_params_all, f"Mismatch in get_all_statuses parameters"
+
+    # Check return annotation
+    expected_return_all = 'List[Tuple]'
+    actual_return_all = ast.unparse(all_status_func_node.returns)
+    assert actual_return_all == expected_return_all, f"Mismatch in get_all_statuses return type"
+
+    # Check docstring
+    docstring_all = ast.get_docstring(all_status_func_node)
+    assert docstring_all == "Returns a setof anonymous records", "Docstring mismatch for get_all_statuses"
+
+    # Check body for execute, fetchall, and return rows
+    execute_call_all = None
+    sql_query_all = None
+    fetchall_call_all = None
+    return_rows_all = False
+    for node in ast.walk(all_status_func_node):
+        if isinstance(node, ast.Await) and isinstance(node.value, ast.Call):
+            call = node.value
+            if isinstance(call.func, ast.Attribute) and call.func.attr == 'execute':
+                execute_call_all = call
+                if len(call.args) > 0 and isinstance(call.args[0], ast.Constant):
+                    sql_query_all = call.args[0].value
+                assert len(call.args) == 2 and isinstance(call.args[1], ast.List) and not call.args[1].elts, "Params should be empty list"
+            elif isinstance(call.func, ast.Attribute) and call.func.attr == 'fetchall':
+                fetchall_call_all = call
+        elif isinstance(node, ast.Return):
+            if isinstance(node.value, ast.Name) and node.value.id == 'rows':
+                return_rows_all = True
+
+    assert execute_call_all is not None, "execute call not found in get_all_statuses"
+    assert sql_query_all == "SELECT * FROM get_all_statuses()", f"SQL query mismatch"
+    assert fetchall_call_all is not None, "fetchall call not found in get_all_statuses"
+    assert return_rows_all, "'return rows' logic not found in get_all_statuses"
 
 
 def test_array_types_function_generation(tmp_path):
     """Test generating functions that take/return array types."""
     functions_sql_path = FIXTURES_DIR / "array_types_function.sql"
-    expected_output_path = EXPECTED_DIR / "array_types_function_api.py"
+    # expected_output_path = EXPECTED_DIR / "array_types_function_api.py"
     actual_output_path = tmp_path / "array_types_function_api.py"
 
     # Run the generator tool
     run_cli_tool(functions_sql_path, actual_output_path)
 
-    # Compare the generated file with the expected file
+    # --- AST Based Assertions ---
     assert actual_output_path.is_file(), "Generated file was not created."
-
-    expected_content = expected_output_path.read_text()
     actual_content = actual_output_path.read_text()
+    tree = ast.parse(actual_content)
 
-    assert actual_content == expected_content, (
-        f"Generated file content does not match expected content.\n"
-        f"Expected ({expected_output_path}):\n{expected_content}\n"
-        f"Actual ({actual_output_path}):\n{actual_content}"
-    )
+    # 1. Check Imports (List, Optional)
+    found_typing_imports = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module == 'typing':
+            for alias in node.names:
+                found_typing_imports.add(alias.name)
+    assert {'List', 'Optional'}.issubset(found_typing_imports), "Missing required typing imports (List, Optional)"
+
+    # 2. Check get_item_ids Function (returns Optional[List[int]])
+    ids_func_node = None
+    for node in ast.walk(tree):
+        if isinstance(node, ast.AsyncFunctionDef) and node.name == 'get_item_ids':
+            ids_func_node = node
+            break
+    assert ids_func_node is not None, "Async function 'get_item_ids' not found"
+
+    # Check parameters
+    expected_params_ids = {'conn': 'AsyncConnection'}
+    actual_params_ids = {arg.arg: ast.unparse(arg.annotation) for arg in ids_func_node.args.args}
+    assert actual_params_ids == expected_params_ids, f"Mismatch in get_item_ids parameters"
+
+    # Check return annotation
+    expected_return_ids = 'Optional[List[int]]'
+    actual_return_ids = ast.unparse(ids_func_node.returns)
+    assert actual_return_ids == expected_return_ids, f"Mismatch in get_item_ids return type"
+
+    # Check docstring
+    docstring_ids = ast.get_docstring(ids_func_node)
+    assert docstring_ids == "Returns an array of integers", "Docstring mismatch for get_item_ids"
+
+    # Check body for execute, fetchone, and return row[0]
+    execute_call_ids = None
+    sql_query_ids = None
+    fetchone_call_ids = None
+    return_logic_ids = False
+    for node in ast.walk(ids_func_node):
+        if isinstance(node, ast.Await) and isinstance(node.value, ast.Call):
+            call = node.value
+            if isinstance(call.func, ast.Attribute) and call.func.attr == 'execute':
+                execute_call_ids = call
+                if len(call.args) > 0 and isinstance(call.args[0], ast.Constant):
+                    sql_query_ids = call.args[0].value
+                assert len(call.args) == 2 and isinstance(call.args[1], ast.List) and not call.args[1].elts, "Params should be empty list"
+            elif isinstance(call.func, ast.Attribute) and call.func.attr == 'fetchone':
+                fetchone_call_ids = call
+        elif isinstance(node, ast.Return):
+            if isinstance(node.value, ast.Subscript) and \
+               isinstance(node.value.value, ast.Name) and node.value.value.id == 'row' and \
+               isinstance(node.value.slice, ast.Constant) and node.value.slice.value == 0:
+                return_logic_ids = True
+
+    assert execute_call_ids is not None, "execute call not found in get_item_ids"
+    assert sql_query_ids == "SELECT * FROM get_item_ids()", f"SQL query mismatch"
+    assert fetchone_call_ids is not None, "fetchone call not found in get_item_ids"
+    assert return_logic_ids, "'return row[0]' logic not found in get_item_ids"
+
+    # 3. Check process_tags Function (takes List[str], returns Optional[List[str]])
+    tags_func_node = None
+    for node in ast.walk(tree):
+        if isinstance(node, ast.AsyncFunctionDef) and node.name == 'process_tags':
+            tags_func_node = node
+            break
+    assert tags_func_node is not None, "Async function 'process_tags' not found"
+
+    # Check parameters
+    expected_params_tags = {'conn': 'AsyncConnection', 'tags': 'List[str]'}
+    actual_params_tags = {arg.arg: ast.unparse(arg.annotation) for arg in tags_func_node.args.args}
+    assert actual_params_tags == expected_params_tags, f"Mismatch in process_tags parameters"
+
+    # Check return annotation
+    expected_return_tags = 'Optional[List[str]]'
+    actual_return_tags = ast.unparse(tags_func_node.returns)
+    assert actual_return_tags == expected_return_tags, f"Mismatch in process_tags return type"
+
+    # Check docstring
+    docstring_tags = ast.get_docstring(tags_func_node)
+    assert docstring_tags == "Takes and returns an array of text", "Docstring mismatch for process_tags"
+
+    # Check body for execute, fetchone, and return row[0]
+    execute_call_tags = None
+    sql_query_tags = None
+    fetchone_call_tags = None
+    return_logic_tags = False
+    execute_params_tags = []
+    for node in ast.walk(tags_func_node):
+        if isinstance(node, ast.Await) and isinstance(node.value, ast.Call):
+            call = node.value
+            if isinstance(call.func, ast.Attribute) and call.func.attr == 'execute':
+                execute_call_tags = call
+                if len(call.args) > 0 and isinstance(call.args[0], ast.Constant):
+                    sql_query_tags = call.args[0].value
+                if len(call.args) > 1 and isinstance(call.args[1], ast.List):
+                    execute_params_tags = [elt.id for elt in call.args[1].elts if isinstance(elt, ast.Name)]
+            elif isinstance(call.func, ast.Attribute) and call.func.attr == 'fetchone':
+                fetchone_call_tags = call
+        elif isinstance(node, ast.Return):
+            if isinstance(node.value, ast.Subscript) and \
+               isinstance(node.value.value, ast.Name) and node.value.value.id == 'row' and \
+               isinstance(node.value.slice, ast.Constant) and node.value.slice.value == 0:
+                return_logic_tags = True
+
+    assert execute_call_tags is not None, "execute call not found in process_tags"
+    assert sql_query_tags == "SELECT * FROM process_tags(%s)", f"SQL query mismatch"
+    assert execute_params_tags == ['tags'], f"Execute parameters mismatch for process_tags"
+    assert fetchone_call_tags is not None, "fetchone call not found in process_tags"
+    assert return_logic_tags, "'return row[0]' logic not found in process_tags"
 
 
 def test_no_params_function_generation(tmp_path):
     """Test generating a function that takes no parameters."""
     functions_sql_path = FIXTURES_DIR / "no_params_function.sql"
-    expected_output_path = EXPECTED_DIR / "no_params_function_api.py"
+    # expected_output_path = EXPECTED_DIR / "no_params_function_api.py" # No longer needed
     actual_output_path = tmp_path / "no_params_function_api.py"
 
     # Run the generator tool
     run_cli_tool(functions_sql_path, actual_output_path)
 
-    # Compare the generated file with the expected file
+    # --- AST Based Assertions ---
     assert actual_output_path.is_file(), "Generated file was not created."
-
-    expected_content = expected_output_path.read_text()
     actual_content = actual_output_path.read_text()
+    tree = ast.parse(actual_content)
 
-    assert actual_content == expected_content, (
-        f"Generated file content does not match expected content.\n"
-        f"Expected ({expected_output_path}):\n{expected_content}\n"
-        f"Actual ({actual_output_path}):\n{actual_content}"
-    )
+    # 1. Check Imports (datetime, Optional)
+    found_typing_optional = False
+    found_datetime = False
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            if node.module == 'typing' and any(alias.name == 'Optional' for alias in node.names):
+                 found_typing_optional = True
+            elif node.module == 'datetime' and any(alias.name == 'datetime' for alias in node.names):
+                 found_datetime = True
+    assert found_typing_optional, "Missing Optional import from typing"
+    assert found_datetime, "Missing datetime import from datetime"
+
+    # 2. Check get_current_db_time Function
+    func_node = None
+    for node in ast.walk(tree):
+        if isinstance(node, ast.AsyncFunctionDef) and node.name == 'get_current_db_time':
+            func_node = node
+            break
+    assert func_node is not None, "Async function 'get_current_db_time' not found"
+
+    # Check parameters (should only be conn)
+    expected_params = {'conn': 'AsyncConnection'}
+    actual_params = {arg.arg: ast.unparse(arg.annotation) for arg in func_node.args.args}
+    assert actual_params == expected_params, f"Parameter mismatch. Expected {expected_params}, Got {actual_params}"
+
+    # Check return annotation
+    expected_return = 'Optional[datetime]'
+    actual_return = ast.unparse(func_node.returns)
+    assert actual_return == expected_return, f"Return type mismatch. Expected {expected_return}, Got {actual_return}"
+
+    # Check docstring
+    docstring = ast.get_docstring(func_node)
+    assert docstring == "Returns the current database time", "Docstring content mismatch"
+
+    # Check body for execute, fetchone, and return row[0]
+    execute_call = None
+    sql_query = None
+    fetchone_call = None
+    return_logic = False
+    for node in ast.walk(func_node):
+        if isinstance(node, ast.Await) and isinstance(node.value, ast.Call):
+            call = node.value
+            if isinstance(call.func, ast.Attribute) and call.func.attr == 'execute':
+                execute_call = call
+                if len(call.args) > 0 and isinstance(call.args[0], ast.Constant):
+                    sql_query = call.args[0].value
+                # Check execute params is empty list
+                assert len(call.args) == 2 and isinstance(call.args[1], ast.List) and not call.args[1].elts, "Execute parameters mismatch (should be empty)"
+            elif isinstance(call.func, ast.Attribute) and call.func.attr == 'fetchone':
+                fetchone_call = call
+        elif isinstance(node, ast.Return):
+            if isinstance(node.value, ast.Subscript) and \
+               isinstance(node.value.value, ast.Name) and node.value.value.id == 'row' and \
+               isinstance(node.value.slice, ast.Constant) and node.value.slice.value == 0:
+                return_logic = True
+
+    assert execute_call is not None, "execute call not found"
+    assert sql_query == "SELECT * FROM get_current_db_time()", f"SQL query mismatch. Found '{sql_query}'"
+    assert fetchone_call is not None, "fetchone call not found"
+    assert return_logic, "'return row[0]' logic not found"
 
 
 def test_multi_params_function_generation(tmp_path):
@@ -810,8 +1476,9 @@ def test_param_comments_function_generation(tmp_path):
                  execute_call = call
                  if len(call.args) > 1 and isinstance(call.args[1], ast.List):
                      execute_params = [elt.id for elt in call.args[1].elts if isinstance(elt, ast.Name)]
-        elif isinstance(node, ast.Return) and isinstance(node.value, ast.Constant) and node.value.value is None:
-             return_none = node
+        elif isinstance(node, ast.Return):
+             if isinstance(node.value, ast.Constant) and node.value.value is None:
+                 return_none = node
              
     assert execute_call is not None, "Execute call not found"
     expected_execute_params = ['id', 'name', 'active', 'age']
@@ -824,49 +1491,152 @@ def test_param_comments_function_generation(tmp_path):
 
 
 def test_table_col_comments_generation(tmp_path):
-    """Test generating function definition with comments on table columns."""
+    """Test generating dataclass and function signature when table has column comments."""
+    # Note: This test currently verifies the generator processes the SQL,
+    # but does NOT verify that column comments are included in the Python output,
+    # as that feature might not be implemented.
     functions_sql_path = FIXTURES_DIR / "table_col_comments.sql"
-    expected_output_path = EXPECTED_DIR / "table_col_comments_api.py"
+    # expected_output_path = EXPECTED_DIR / "table_col_comments_api.py" # No longer needed
     actual_output_path = tmp_path / "table_col_comments_api.py"
 
     # Run the generator tool
     result = run_cli_tool(functions_sql_path, actual_output_path)
     assert result.returncode == 0, f"CLI failed: {result.stderr}"
 
-    # Read expected and actual content
+    # --- AST Based Assertions ---
     assert actual_output_path.is_file(), "Generated file was not created."
     actual_content = actual_output_path.read_text()
-    # Remove debug prints
-    # print(f"--- START content of {actual_output_path} ---")
-    # print(actual_content)
-    # print(f"--- END content of {actual_output_path} ---")
-    # expected_content = expected_output_path.read_text()
+    tree = ast.parse(actual_content)
 
-    # --- AST Based Assertions ---
-    # AST comparison is inexplicably failing for node.name comparison.
-    # Fall back to checking for the function definition string directly.
-    assert "async def get_table_with_col_comments(" in actual_content, \
-           "Function definition string not found in generated code."
+    # 1. Check Imports (dataclass, datetime, List, Optional, UUID)
+    found_typing_imports = set()
+    found_dataclass = False
+    found_uuid = False
+    found_datetime = False
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            if node.module == 'typing':
+                for alias in node.names:
+                    found_typing_imports.add(alias.name)
+            elif node.module == 'dataclasses' and any(alias.name == 'dataclass' for alias in node.names):
+                 found_dataclass = True
+            elif node.module == 'uuid' and any(alias.name == 'UUID' for alias in node.names):
+                 found_uuid = True
+            elif node.module == 'datetime' and any(alias.name == 'datetime' for alias in node.names):
+                 found_datetime = True # Assuming timestamptz maps to datetime
+    assert {'List', 'Optional'}.issubset(found_typing_imports), "Missing required typing imports"
+    assert found_dataclass, "Missing dataclass import"
+    assert found_uuid, "Missing UUID import"
+    assert found_datetime, "Missing datetime import"
 
-    # tree = ast.parse(actual_content)
-    # # Use list comprehension for direct check
-    # found_match = False # Use a flag
-    # # print("--- Walking AST for AsyncFunctionDef ---") # Remove debug print
-    # expected_name = 'get_table_with_comments' # Define expected name
-    # for node in ast.walk(tree):
-    #     if isinstance(node, ast.AsyncFunctionDef):
-    #         # Print representations for detailed comparison
-    #         # print(f"Comparing node.name: {node.name!r} with expected: {expected_name!r}") # Remove debug print
-    #         # Force comparison between str types
-    #         name_matches = (str(node.name) == str(expected_name))
-    #         # print(f"Found AsyncFunc: name={node.name!r}, match?={name_matches}") # Remove debug print
-    #         if name_matches:
-    #             found_match = True
-    #             break
-    # # print("--- Finished walking AST ---") # Remove debug print
-    # assert found_match, "Async function 'get_table_with_comments' match not found"
+    # 2. Check TableWithColComment Dataclass
+    dataclass_node = None
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ClassDef) and node.name == 'TableWithColComment':
+            dataclass_node = node
+            break
+    assert dataclass_node is not None, "Dataclass 'TableWithColComment' not found"
+    assert any(isinstance(d, ast.Name) and d.id == 'dataclass' for d in dataclass_node.decorator_list), "Class is not decorated with @dataclass"
+    
+    expected_fields = {
+        'id': 'UUID', # NOT NULL in SQL
+        'name': 'str', # NOT NULL in SQL
+        'industry': 'Optional[str]', # NULLable in SQL
+        'size': 'Optional[str]', # NULLable in SQL
+        'notes': 'Optional[str]', # NULLable in SQL
+        'created_at': 'datetime' # NOT NULL w/ DEFAULT in SQL -> maps to non-optional datetime
+    }
+    actual_fields = {}
+    field_docstrings = {}
+    for stmt in dataclass_node.body:
+         if isinstance(stmt, ast.AnnAssign):
+             field_name = stmt.target.id
+             actual_fields[field_name] = ast.unparse(stmt.annotation)
+             # Check for associated docstring comment (feature check)
+             # Current generator does not seem to add field docstrings from column comments
+             # If it did, we would extract it here, e.g., using ast.get_docstring(stmt)
+             # field_docstrings[field_name] = ast.get_docstring(stmt)
+             
+    assert actual_fields == expected_fields, "TableWithColComment dataclass fields mismatch"
+    # assert field_docstrings['id'] == 'The primary key', "Docstring for id field missing/incorrect" # Example assertion if implemented
+    # assert field_docstrings['name'] == 'The name, mandatory', "Docstring for name field missing/incorrect" # Example assertion if implemented
+    
+    # Check class docstring (feature check)
+    # Current generator doesn't add class docstring from table comments or column comments
+    class_docstring = ast.get_docstring(dataclass_node)
+    assert class_docstring is None, "Dataclass should not have a docstring generated from column comments (currently)"
 
-    # Other original assertions for docstring/dataclass would go here if they existed before
+    # 3. Check get_table_with_col_comments Function
+    func_node = None
+    for node in ast.walk(tree):
+        if isinstance(node, ast.AsyncFunctionDef) and node.name == 'get_table_with_col_comments':
+            func_node = node
+            break
+    assert func_node is not None, "Async function 'get_table_with_col_comments' not found"
+
+    # Check parameters
+    expected_params = {'conn': 'AsyncConnection'}
+    actual_params = {arg.arg: ast.unparse(arg.annotation) for arg in func_node.args.args}
+    assert actual_params == expected_params, f"Parameter mismatch"
+
+    # Check return annotation
+    expected_return = 'List[TableWithColComment]'
+    actual_return = ast.unparse(func_node.returns)
+    assert actual_return == expected_return, f"Return type mismatch"
+
+    # Check docstring
+    docstring = ast.get_docstring(func_node)
+    assert docstring == "Function using the table (needed for test structure)", "Docstring content mismatch"
+
+    # Check body for execute, fetchall, and list comprehension with try/except
+    execute_call = None
+    sql_query = None
+    fetchall_call = None
+    list_comp_call = None # The call TableWithColComment(*r)
+    try_except_node = None
+    for node in ast.walk(func_node):
+        if isinstance(node, ast.Await) and isinstance(node.value, ast.Call):
+            call = node.value
+            if isinstance(call.func, ast.Attribute) and call.func.attr == 'execute':
+                execute_call = call
+                if len(call.args) > 0 and isinstance(call.args[0], ast.Constant):
+                    sql_query = call.args[0].value
+                assert len(call.args) == 2 and isinstance(call.args[1], ast.List) and not call.args[1].elts, "Params should be empty list"
+            elif isinstance(call.func, ast.Attribute) and call.func.attr == 'fetchall':
+                fetchall_call = call
+        elif isinstance(node, ast.Try):
+            try_except_node = node
+            for try_node in ast.walk(node):
+                if isinstance(try_node, ast.ListComp):
+                     if (
+                         isinstance(try_node.elt, ast.Call) and \
+                         isinstance(try_node.elt.func, ast.Name) and try_node.elt.func.id == 'TableWithColComment' and \
+                         len(try_node.elt.args) == 1 and isinstance(try_node.elt.args[0], ast.Starred) and \
+                         isinstance(try_node.elt.args[0].value, ast.Name) and try_node.elt.args[0].value.id == 'r'
+                     ):
+                         comp = try_node.generators[0]
+                         if (
+                             isinstance(comp.target, ast.Name) and comp.target.id == 'r' and \
+                             isinstance(comp.iter, ast.Name) and comp.iter.id == 'rows'
+                         ):
+                             list_comp_call = try_node.elt
+                             break
+            assert len(node.handlers) == 1
+            handler = node.handlers[0]
+            assert isinstance(handler.type, ast.Name) and handler.type.id == 'TypeError'
+            raises_type_error = False
+            for except_node in ast.walk(handler):
+                if isinstance(except_node, ast.Raise) and isinstance(except_node.exc, ast.Call) and \
+                   isinstance(except_node.exc.func, ast.Name) and except_node.exc.func.id == 'TypeError':
+                   raises_type_error = True
+                   break
+            assert raises_type_error
+
+    assert execute_call is not None, "execute call not found"
+    assert sql_query == "SELECT * FROM get_table_with_col_comments()", f"SQL query mismatch"
+    assert fetchall_call is not None, "fetchall call not found"
+    assert try_except_node is not None, "Try/except block not found"
+    assert list_comp_call is not None, "List comprehension '[TableWithColComment(*r) for r in rows]' not found or structure wrong"
 
 
 # --- Test Case for RETURNS TABLE comments (This one is passing) ---
@@ -924,25 +1694,178 @@ def test_returns_table_non_setof_generates_list_and_fetchall(tmp_path):
 def test_custom_type_return_generation(tmp_path):
     """Test generation for functions returning custom composite types."""
     functions_sql_path = FIXTURES_DIR / "custom_type_return.sql"
-    expected_output_path = EXPECTED_DIR / "custom_type_return_api.py"
+    # expected_output_path = EXPECTED_DIR / "custom_type_return_api.py" # No longer needed
     actual_output_path = tmp_path / "custom_type_return_api.py"
 
     # Run the generator tool (no separate schema needed, type is inline)
     result = run_cli_tool(functions_sql_path, actual_output_path, verbose=True)
     assert result.returncode == 0, f"CLI failed: {result.stderr}"
 
-    # Compare the generated file with the expected file
+    # --- AST Based Assertions ---
     assert actual_output_path.is_file(), "Generated file was not created."
-
-    expected_content = expected_output_path.read_text()
     actual_content = actual_output_path.read_text()
+    tree = ast.parse(actual_content)
 
-    # Perform basic comparison for now. More detailed AST checks could be added if needed.
-    assert actual_content == expected_content, (
-        f"Generated file content does not match expected content.\n"
-        f"Expected ({expected_output_path}): \n{expected_content}\n"
-        f"Actual ({actual_output_path}): \n{actual_content}"
-    )
+    # 1. Check Imports (dataclass, List, Optional, UUID)
+    found_typing_imports = set()
+    found_dataclass = False
+    found_uuid = False
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            if node.module == 'typing':
+                for alias in node.names:
+                    found_typing_imports.add(alias.name)
+            elif node.module == 'dataclasses' and any(alias.name == 'dataclass' for alias in node.names):
+                 found_dataclass = True
+            elif node.module == 'uuid' and any(alias.name == 'UUID' for alias in node.names):
+                 found_uuid = True
+    assert {'List', 'Optional'}.issubset(found_typing_imports), "Missing required typing imports"
+    assert found_dataclass, "Missing dataclass import"
+    assert found_uuid, "Missing UUID import"
+
+    # 2. Check UserIdentity Dataclass
+    dataclass_node = None
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ClassDef) and node.name == 'UserIdentity':
+            dataclass_node = node
+            break
+    assert dataclass_node is not None, "Dataclass 'UserIdentity' not found"
+    assert any(isinstance(d, ast.Name) and d.id == 'dataclass' for d in dataclass_node.decorator_list), "Class is not decorated with @dataclass"
+    
+    expected_fields = {
+        'user_id': 'Optional[UUID]',
+        'clerk_id': 'Optional[str]',
+        'is_active': 'Optional[bool]'
+    }
+    actual_fields = {stmt.target.id: ast.unparse(stmt.annotation) 
+                     for stmt in dataclass_node.body if isinstance(stmt, ast.AnnAssign)}
+    assert actual_fields == expected_fields, "UserIdentity dataclass fields mismatch"
+
+    # 3. Check get_user_identity_by_clerk_id Function
+    single_func_node = None
+    for node in ast.walk(tree):
+        if isinstance(node, ast.AsyncFunctionDef) and node.name == 'get_user_identity_by_clerk_id':
+            single_func_node = node
+            break
+    assert single_func_node is not None, "Async function 'get_user_identity_by_clerk_id' not found"
+
+    # Check parameters
+    expected_params_single = {'conn': 'AsyncConnection', 'clerk_id': 'str'}
+    actual_params_single = {arg.arg: ast.unparse(arg.annotation) for arg in single_func_node.args.args}
+    assert actual_params_single == expected_params_single, f"Parameter mismatch for single func"
+
+    # Check return annotation
+    expected_return_single = 'Optional[UserIdentity]'
+    actual_return_single = ast.unparse(single_func_node.returns)
+    assert actual_return_single == expected_return_single, f"Return type mismatch for single func"
+
+    # Check docstring
+    docstring_single = ast.get_docstring(single_func_node)
+    assert docstring_single and "Function returning the custom composite type" in docstring_single, "Docstring mismatch for single func"
+
+    # Check body for execute, fetchone, try/except, and UserIdentity(*row) call
+    execute_call_single = None
+    sql_query_single = None
+    fetchone_call_single = None
+    dataclass_call_single = None
+    try_except_node_single = None
+    execute_params_single = []
+    for node in ast.walk(single_func_node):
+        if isinstance(node, ast.Await) and isinstance(node.value, ast.Call):
+            call = node.value
+            if isinstance(call.func, ast.Attribute) and call.func.attr == 'execute':
+                execute_call_single = call
+                if len(call.args) > 0 and isinstance(call.args[0], ast.Constant):
+                    sql_query_single = call.args[0].value
+                if len(call.args) > 1 and isinstance(call.args[1], ast.List):
+                    execute_params_single = [elt.id for elt in call.args[1].elts if isinstance(elt, ast.Name)]
+            elif isinstance(call.func, ast.Attribute) and call.func.attr == 'fetchone':
+                fetchone_call_single = call
+        elif isinstance(node, ast.Try):
+            try_except_node_single = node
+            # Check for UserIdentity(*row) inside try
+            for try_node in ast.walk(node):
+                if isinstance(try_node, ast.Call) and isinstance(try_node.func, ast.Name) and try_node.func.id == 'UserIdentity':
+                    if len(try_node.args) == 1 and isinstance(try_node.args[0], ast.Starred) and \
+                       isinstance(try_node.args[0].value, ast.Name) and try_node.args[0].value.id == 'row':
+                       dataclass_call_single = try_node
+                       break
+            # Check except handler
+            assert len(node.handlers) == 1 and isinstance(node.handlers[0].type, ast.Name) and node.handlers[0].type.id == 'TypeError', "Single func Try/Except structure mismatch"
+
+    assert execute_call_single is not None, "execute call not found in single func"
+    assert sql_query_single == "SELECT * FROM get_user_identity_by_clerk_id(%s)", f"SQL query mismatch"
+    assert execute_params_single == ['clerk_id'], f"Execute parameters mismatch"
+    assert fetchone_call_single is not None, "fetchone call not found in single func"
+    assert try_except_node_single is not None, "Try/except block not found in single func"
+    assert dataclass_call_single is not None, "UserIdentity(*row) call not found in single func try block"
+
+    # 4. Check get_all_active_identities Function
+    setof_func_node = None
+    for node in ast.walk(tree):
+        if isinstance(node, ast.AsyncFunctionDef) and node.name == 'get_all_active_identities':
+            setof_func_node = node
+            break
+    assert setof_func_node is not None, "Async function 'get_all_active_identities' not found"
+
+    # Check parameters
+    expected_params_setof = {'conn': 'AsyncConnection'}
+    actual_params_setof = {arg.arg: ast.unparse(arg.annotation) for arg in setof_func_node.args.args}
+    assert actual_params_setof == expected_params_setof, f"Parameter mismatch for setof func"
+
+    # Check return annotation
+    expected_return_setof = 'List[UserIdentity]'
+    actual_return_setof = ast.unparse(setof_func_node.returns)
+    assert actual_return_setof == expected_return_setof, f"Return type mismatch for setof func"
+
+    # Check docstring
+    docstring_setof = ast.get_docstring(setof_func_node)
+    assert docstring_setof == "Function returning SETOF the custom composite type", "Docstring mismatch for setof func"
+
+    # Check body for execute, fetchall, try/except, and list comprehension
+    execute_call_setof = None
+    sql_query_setof = None
+    fetchall_call_setof = None
+    list_comp_call_setof = None
+    try_except_node_setof = None
+    for node in ast.walk(setof_func_node):
+        if isinstance(node, ast.Await) and isinstance(node.value, ast.Call):
+            call = node.value
+            if isinstance(call.func, ast.Attribute) and call.func.attr == 'execute':
+                execute_call_setof = call
+                if len(call.args) > 0 and isinstance(call.args[0], ast.Constant):
+                    sql_query_setof = call.args[0].value
+                assert len(call.args) == 2 and isinstance(call.args[1], ast.List) and not call.args[1].elts, "Params should be empty list"
+            elif isinstance(call.func, ast.Attribute) and call.func.attr == 'fetchall':
+                fetchall_call_setof = call
+        elif isinstance(node, ast.Try):
+            try_except_node_setof = node
+            # Find the list comprehension inside the try block
+            for try_node in ast.walk(node):
+                if isinstance(try_node, ast.ListComp):
+                     if (
+                         isinstance(try_node.elt, ast.Call) and \
+                         isinstance(try_node.elt.func, ast.Name) and try_node.elt.func.id == 'UserIdentity' and \
+                         len(try_node.elt.args) == 1 and isinstance(try_node.elt.args[0], ast.Starred) and \
+                         isinstance(try_node.elt.args[0].value, ast.Name) and try_node.elt.args[0].value.id == 'r'
+                     ):
+                         comp = try_node.generators[0]
+                         if (
+                             isinstance(comp.target, ast.Name) and comp.target.id == 'r' and \
+                             isinstance(comp.iter, ast.Name) and comp.iter.id == 'rows'
+                         ):
+                             list_comp_call_setof = try_node.elt
+                             break
+            # Check except handler
+            assert len(node.handlers) == 1 and isinstance(node.handlers[0].type, ast.Name) and node.handlers[0].type.id == 'TypeError', "Setof func Try/Except structure mismatch"
+
+    assert execute_call_setof is not None, "execute call not found in setof func"
+    assert sql_query_setof == "SELECT * FROM get_all_active_identities()", f"SQL query mismatch"
+    assert fetchall_call_setof is not None, "fetchall call not found in setof func"
+    assert list_comp_call_setof is not None, "List comprehension '[UserIdentity(*r) for r in rows]' not found in setof func try block"
+
+    # Old comparison removed
+    # assert actual_content == expected_content, (...)
 
 # ===== END: Additional Test Cases =====
 
