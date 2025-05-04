@@ -141,6 +141,22 @@ async def db_conn():
     except psycopg.OperationalError as e:
         pytest.fail(f"Failed to connect to database at {DSN}: {e}")
 
+@pytest_asyncio.fixture(scope="function")
+async def db_conn_dict_row():
+    """Provides an async psycopg connection with DictRow row factory."""
+    try:
+        # Connect using the same DSN, but specify row_factory
+        async with await psycopg.AsyncConnection.connect(
+            DSN,
+            row_factory=psycopg.rows.dict_row, # Use dict_row factory
+            autocommit=True
+        ) as aconn:
+            print(f"\nDB dict_row connection established ({id(aconn)})\n")
+            yield aconn
+            print(f"\nDB dict_row connection closed ({id(aconn)})\n")
+    except psycopg.OperationalError as e:
+        pytest.fail(f"Failed to connect to database (dict_row) at {DSN}: {e}")
+
 
 # --- Test Data Setup ---
 
@@ -381,4 +397,6 @@ async def test_get_all_names_and_moods_setof_record(db_conn, generated_api_modul
     # assert ("Apple", "happy") in records
     # assert ("Banana", "ok") in records
     # assert ("inactive Chair", "sad") in records
-    pytest.fail("Need to inspect generated code for SETOF anonymous RECORD handling.") 
+    pytest.fail("Need to inspect generated code for SETOF anonymous RECORD handling.")
+
+# End of file marker if necessary 
