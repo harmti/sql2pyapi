@@ -120,7 +120,7 @@ def _generate_function_body(func: ParsedFunction, final_dataclass_name: Optional
         body_lines.append("# Extract .value from enum parameters")
         for p in func.params:
             if not p.python_type.startswith(('Optional[', 'List[')) and not p.python_type in ('str', 'int', 'float', 'bool', 'UUID', 'datetime', 'date', 'Decimal', 'Any', 'dict', 'Dict[str, Any]'):
-                body_lines.append(f"    {p.python_name}_value = {p.python_name}.value if {p.python_name} is not None else None")
+                body_lines.append(f"{p.python_name}_value = {p.python_name}.value if {p.python_name} is not None else None")
         
         # Modify the python_args_list to use the *_value variables for enum parameters
         enum_args_list = []

@@ -111,16 +111,6 @@ def generated_api_module():
         with open(generated_file_abs_path, 'r') as f:
             generated_code = f.read()
 
-        # Manually fix the known indentation error
-        # This is a workaround for the generator bug
-        problematic_line = "        mood_value = mood.value if mood is not None else None"
-        corrected_line = "    mood_value = mood.value if mood is not None else None"
-        if problematic_line in generated_code:
-            print("Applying manual indentation fix...")
-            generated_code = generated_code.replace(problematic_line, corrected_line)
-        else:
-            print("Warning: Expected indentation error not found, proceeding without manual fix.")
-
         # Dynamically create and execute the corrected module code
         module_name = GENERATED_API_PATH.stem
         generated_module = types.ModuleType(module_name)
