@@ -64,8 +64,9 @@ class SQLParser:
             None: Updates self.enum_types with discovered ENUM types
         """
         # Use the imported parse_enum_types function
-        self.enum_types = parse_enum_types(sql_content, self.enum_types)
-    
+        parsed_enums = parse_enum_types(sql_content) # Parse from the current content
+        self.enum_types.update(parsed_enums)         # Update the parser's state
+
     def _map_sql_to_python_type(self, sql_type: str, is_optional: bool = False, context: str = None) -> Tuple[str, Set[str]]:
         """
         Maps a SQL type to its corresponding Python type and required imports.

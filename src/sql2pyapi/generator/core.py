@@ -78,6 +78,8 @@ def generate_python_code(
 
     # --- First pass: Determine return types and required imports, potentially create ad-hoc types ---
     for func in functions:
+        # Attach enum_types to each function for downstream use
+        func.enum_types = parsed_enum_types or {}
         # Get the return type hint, dataclass name, and imports from the function
         # This uses the information already determined by the parser
         return_type_hint, determined_dataclass_name, type_imports = _determine_return_type(func, current_custom_types)

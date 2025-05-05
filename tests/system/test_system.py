@@ -399,4 +399,40 @@ async def test_get_all_names_and_moods_setof_record(db_conn, generated_api_modul
     # assert ("inactive Chair", "sad") in records
     pytest.fail("Need to inspect generated code for SETOF anonymous RECORD handling.")
 
+@pytest.mark.asyncio
+async def test_filter_items_by_optional_mood_with_value(db_conn, generated_api_module):
+    """Test filtering items with an optional enum parameter when a value is provided."""
+    # Use 'happy' mood to filter
+    items = await generated_api_module.filter_items_by_optional_mood(db_conn, mood=generated_api_module.Mood.HAPPY)
+    
+    # Should only get the 'Apple' item which has 'happy' mood
+    assert len(items) == 1
+    assert items[0].name == 'Apple'
+    assert items[0].current_mood == generated_api_module.Mood.HAPPY
+
+@pytest.mark.asyncio
+async def test_filter_items_by_optional_mood_with_none(db_conn, generated_api_module):
+    """Test filtering items with an optional enum parameter when None is provided."""
+    # Pass None to get all items
+    items = await generated_api_module.filter_items_by_optional_mood(db_conn, mood=None)
+    
+    # Should get all items (3 from setup)
+    assert len(items) == 3
+    
+    # Verify we got all the different moods
+    moods = [item.current_mood for item in items]
+    assert generated_api_module.Mood.HAPPY in moods
+    assert generated_api_module.Mood.OK in moods
+    assert generated_api_module.Mood.SAD in moods
+
+@pytest.mark.asyncio
+async def test_get_default_mood_enum_return(db_conn, generated_api_module):
+    """Test function that returns an enum value."""
+    # Get the default mood
+    mood = await generated_api_module.get_default_mood(db_conn)
+    
+    # Should be 'happy' as defined in the function
+    assert mood == generated_api_module.Mood.HAPPY
+    assert isinstance(mood, generated_api_module.Mood)
+
 # End of file marker if necessary 

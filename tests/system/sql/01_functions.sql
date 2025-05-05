@@ -97,4 +97,20 @@ CREATE FUNCTION get_all_names_and_moods()
 RETURNS SETOF RECORD
 AS $$
     SELECT name, current_mood FROM items ORDER BY id;
-$$ LANGUAGE SQL STABLE; 
+$$ LANGUAGE SQL STABLE;
+
+-- Function with an optional enum parameter (to test Optional[Enum] handling)
+CREATE FUNCTION filter_items_by_optional_mood(p_mood mood DEFAULT NULL)
+RETURNS SETOF items
+AS $$
+    SELECT * FROM items WHERE (p_mood IS NULL OR current_mood = p_mood) ORDER BY id;
+$$ LANGUAGE SQL STABLE;
+
+-- Function returning an enum value
+CREATE FUNCTION get_default_mood()
+RETURNS mood
+AS $$
+BEGIN
+    RETURN 'happy'::mood;
+END;
+$$ LANGUAGE plpgsql STABLE;

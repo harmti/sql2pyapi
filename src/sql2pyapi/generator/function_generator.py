@@ -96,36 +96,42 @@ def _generate_function_body(func: ParsedFunction, final_dataclass_name: Optional
         sql_query = f"SELECT {func.sql_name}({sql_args_placeholders});"
         
         # Use proper indentation and string formatting for the SQL query
-        body_lines.append(f'    async with conn.cursor() as cur:')
-        body_lines.append(f'        await cur.execute("SELECT * FROM {func.sql_name}({sql_args_placeholders})", {python_args_list})')
-        body_lines.append(f'        row = await cur.fetchone()')
-        body_lines.append(f'        if row is None:')
-        body_lines.append(f'            return None')
-        body_lines.append(f'        return {func.return_type}(row[0])')
+        body_lines.append("async with conn.cursor() as cur:")
+        body_lines.append("    await cur.execute(\"SELECT * FROM {0}({1})\")".format(func.sql_name, sql_args_placeholders) + ", {}".format(python_args_list))
+        body_lines.append("    row = await cur.fetchone()")
+        body_lines.append("    if row is None:")
+        body_lines.append("        return None")
+        body_lines.append("    return {0}(row[0])".format(func.return_type))
         return body_lines
         
-    # Check if there are any enum parameters by checking if 'Enum' is in required imports
-    # and if any parameter types match enum class names
-    is_enum_import = 'Enum' in func.required_imports
-    has_enum_params = False
-    
-    if is_enum_import:
-        # Check for parameters with types that could be enums
-        has_enum_params = any(not p.python_type.startswith(('Optional[', 'List[')) and 
-                              not p.python_type in ('str', 'int', 'float', 'bool', 'UUID', 'datetime', 'date', 'Decimal', 'Any', 'dict', 'Dict[str, Any]')
-                              for p in func.params)
-    
-    # If we have enum parameters, we need to extract the .value attribute
+    # Improved enum parameter detection using schema enum_types
+    # Only extract .value for parameters whose sql_type is in enum_types
+    enum_types = getattr(func, 'enum_types', {}) if hasattr(func, 'enum_types') else {}
+    # Fallback: try to get from global if not attached to func
+    if not enum_types and 'enum_types' in globals():
+        enum_types = globals()['enum_types']
+
+    def is_enum_param(param):
+        # param.sql_type may be schema-qualified; check both qualified and unqualified
+        sql_type = param.sql_type
+        if sql_type in enum_types:
+            return True
+        # Try unqualified
+        if '.' in sql_type and sql_type.split('.')[-1] in enum_types:
+            return True
+        return False
+
+    has_enum_params = any(is_enum_param(p) for p in func.params)
+
     if has_enum_params:
         body_lines.append("# Extract .value from enum parameters")
         for p in func.params:
-            if not p.python_type.startswith(('Optional[', 'List[')) and not p.python_type in ('str', 'int', 'float', 'bool', 'UUID', 'datetime', 'date', 'Decimal', 'Any', 'dict', 'Dict[str, Any]'):
+            if is_enum_param(p):
                 body_lines.append(f"{p.python_name}_value = {p.python_name}.value if {p.python_name} is not None else None")
-        
         # Modify the python_args_list to use the *_value variables for enum parameters
         enum_args_list = []
         for p in func.params:
-            if not p.python_type.startswith(('Optional[', 'List[')) and not p.python_type in ('str', 'int', 'float', 'bool', 'UUID', 'datetime', 'date', 'Decimal', 'Any', 'dict', 'Dict[str, Any]'):
+            if is_enum_param(p):
                 enum_args_list.append(f"{p.python_name}_value")
             else:
                 enum_args_list.append(p.python_name)
