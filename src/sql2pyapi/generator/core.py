@@ -107,16 +107,24 @@ def generate_python_code(
 
                 # Check if the *original* SQL type name exists in the parsed types
                 if original_sql_type_name and original_sql_type_name not in current_custom_types:
-                    # Schema is missing!
-                    error_message = f"Schema for type '{determined_dataclass_name}' (SQL: '{original_sql_type_name}', likely from function '{func.sql_name}') not found."
-                    if fail_on_missing_schema:
-                        raise MissingSchemaError(type_name=original_sql_type_name, function_name=func.sql_name)
+                    # NEW: Check if func.return_columns can provide the schema
+                    if func.return_columns and func.returns_sql_type_name == original_sql_type_name:
+                        logging.debug(
+                            f"Schema for '{original_sql_type_name}' not in parsed_composite_types. "
+                            f"Using func.return_columns for function '{func.sql_name}'."
+                        )
+                        current_custom_types[original_sql_type_name] = func.return_columns
+                        # Ensure dataclass import is added if we're creating a type this way
+                        current_imports.add(PYTHON_IMPORTS["dataclass"])
                     else:
-                        # Original behavior: Warn and create placeholder
-                        logging.warning(f"{error_message} Generating placeholder dataclass.")
-                        # Add entry with empty columns list to trigger placeholder generation
-                        # Use the *Python class name* as the key here, because the dataclass generation loop later expects it
-                        current_custom_types[determined_dataclass_name] = []
+                        # Schema is missing and not available from func.return_columns!
+                        error_message = f"Schema for type '{determined_dataclass_name}' (SQL: '{original_sql_type_name}', likely from function '{func.sql_name}') not found."
+                        if fail_on_missing_schema:
+                            raise MissingSchemaError(type_name=original_sql_type_name, function_name=func.sql_name)
+                        else:
+                            # Original behavior: Warn and create placeholder
+                            logging.warning(f"{error_message} Generating placeholder dataclass.")
+                            current_custom_types[determined_dataclass_name] = []
 
         # Update current_imports with requirements from function parameters
         # (Parser should have added base type imports like UUID, Decimal to func.required_imports)
