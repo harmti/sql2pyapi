@@ -27,5 +27,19 @@ def test_enum_and_string_param_code_generation():
     assert "role_value = role.value if role is not None else None" in python_code
     # Should NOT extract .value for the string param
     assert "status_value = status.value" not in python_code
-    # Should use status as-is in the argument list
-    assert "[role_value, status]" in python_code
+    
+    # Should use role_value for enum and status directly for string in _call_params_dict
+    # SQL names: p_role, p_status
+    # Python names: role, status
+    assert "_sql_named_args_parts.append(f'p_role := %(role)s')" in python_code
+    assert "_call_params_dict['role'] = role_value" in python_code
+
+    assert "_sql_named_args_parts.append(f'p_status := %(status)s')" in python_code
+    assert "_call_params_dict['status'] = status" in python_code
+
+    # Ensure old list format and _call_values appends are not present
+    assert "[role_value, status]" not in python_code 
+    assert "_call_values.append(role_value)" not in python_code
+    assert "_call_values.append(status)" not in python_code
+
+# Test for SETOF enum return type

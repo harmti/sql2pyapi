@@ -4,9 +4,9 @@ from typing import List, Tuple, Optional, Dict
 import textwrap
 
 # Local imports
-from ..sql_models import ParsedFunction, ReturnColumn, SQLParameter
+from ..sql_models import ParsedFunction, ReturnColumn, SQLParameter, SQLType
 from ..constants import *
-from .utils import _to_singular_camel_case
+from ..parser.utils import _to_singular_camel_case
 from .return_handlers import _determine_return_type
 
 
@@ -70,15 +70,14 @@ def _generate_docstring(func: ParsedFunction) -> str:
     return "\n".join(docstring_lines)
 
 
-def _generate_function_body(func: ParsedFunction, final_dataclass_name: Optional[str], sql_args_placeholders: str, python_args_list: str) -> List[str]:
+def _generate_function_body(func: ParsedFunction, final_dataclass_name: Optional[str], sorted_params: List[SQLParameter]) -> List[str]:
     """
     Generates the body of a Python async function based on the SQL function's return type.
     
     Args:
         func (ParsedFunction): The parsed SQL function definition
         final_dataclass_name (Optional[str]): The name of the dataclass for table returns
-        sql_args_placeholders (str): Placeholders for SQL query parameters
-        python_args_list (str): Python arguments list for the execute call
+        sorted_params (List[SQLParameter]): Sorted parameters for the function
         
     Returns:
         List[str]: Lines of code for the function body
@@ -89,60 +88,66 @@ def _generate_function_body(func: ParsedFunction, final_dataclass_name: Optional
         - Uses constants from constants.py for consistent code generation
     """
     body_lines = []
-    
-    # For ENUM type returns, use a simpler query format and fetchval
-    if func.returns_enum_type:
-        body_lines = []
-        sql_query = f"SELECT {func.sql_name}({sql_args_placeholders});"
-        
-        # Use proper indentation and string formatting for the SQL query
-        body_lines.append("async with conn.cursor() as cur:")
-        body_lines.append("    await cur.execute(\"SELECT * FROM {0}({1})\")".format(func.sql_name, sql_args_placeholders) + ", {}".format(python_args_list))
-        body_lines.append("    row = await cur.fetchone()")
-        body_lines.append("    if row is None:")
-        body_lines.append("        return None")
-        body_lines.append("    return {0}(row[0])".format(func.return_type))
-        return body_lines
-        
-    # Improved enum parameter detection using schema enum_types
-    # Only extract .value for parameters whose sql_type is in enum_types
-    enum_types = getattr(func, 'enum_types', {}) if hasattr(func, 'enum_types') else {}
-    # Fallback: try to get from global if not attached to func
-    if not enum_types and 'enum_types' in globals():
-        enum_types = globals()['enum_types']
+    param_preparation_lines = []
 
-    def is_enum_param(param):
-        # param.sql_type may be schema-qualified; check both qualified and unqualified
-        sql_type = param.sql_type
-        if sql_type in enum_types:
+    # --- Prepare arguments for SQL call (handles enums) ---
+    enum_types = getattr(func, 'enum_types', {}) if hasattr(func, 'enum_types') else {}
+    def is_enum_param(param_sql_type: str) -> bool:
+        if param_sql_type in enum_types:
             return True
-        # Try unqualified
-        if '.' in sql_type and sql_type.split('.')[-1] in enum_types:
+        if '.' in param_sql_type and param_sql_type.split('.')[-1] in enum_types:
             return True
         return False
 
-    has_enum_params = any(is_enum_param(p) for p in func.params)
+    has_any_enum_params = any(is_enum_param(p.sql_type) for p in sorted_params)
+    if has_any_enum_params:
+        param_preparation_lines.append("# Extract .value from enum parameters")
+        for p in sorted_params:
+            if is_enum_param(p.sql_type):
+                # Ensure None check for the enum object itself before accessing .value
+                param_preparation_lines.append(f"{p.python_name}_value = {p.python_name}.value if {p.python_name} is not None else None")
+    
+    body_lines.extend(param_preparation_lines)
 
-    if has_enum_params:
-        body_lines.append("# Extract .value from enum parameters")
-        for p in func.params:
-            if is_enum_param(p):
-                body_lines.append(f"{p.python_name}_value = {p.python_name}.value if {p.python_name} is not None else None")
-        # Modify the python_args_list to use the *_value variables for enum parameters
-        enum_args_list = []
-        for p in func.params:
-            if is_enum_param(p):
-                enum_args_list.append(f"{p.python_name}_value")
-            else:
-                enum_args_list.append(p.python_name)
-        python_args_list = "[" + ", ".join(enum_args_list) + "]"
+    # --- Dynamically build SQL named arguments and parameter dictionary ---
+    body_lines.append("_sql_named_args_parts = []")
+    body_lines.append("_call_params_dict = {}")
+    body_lines.append("") # Add a blank line for readability
+
+    for p in sorted_params:
+        param_key_for_dict = p.python_name
+        actual_value_var = f"{p.python_name}_value" if is_enum_param(p.sql_type) else p.python_name
+        
+        if p.is_optional:
+            body_lines.append(f"if {p.python_name} is not None: # User provided a value, or it's an explicit None for a DEFAULT NULL param")
+            body_lines.append(f"    _sql_named_args_parts.append(f'{p.name} := %({param_key_for_dict})s')")
+            body_lines.append(f"    _call_params_dict['{param_key_for_dict}'] = {actual_value_var}")
+            # If {p.python_name} is None:
+            #   - and p.has_sql_default (non-NULL DEFAULT): we omit it, SQL uses its default.
+            #   - and not p.has_sql_default (SQL DEFAULT is NULL): we *could* pass it explicitly if needed,
+            #     but omitting it also works for DEFAULT NULL. The current logic omits for simplicity.
+            #     If explicit NULL passing for DEFAULT NULL cases is desired when Python arg is None,
+            #     an `else` block here would be needed for `if {p.python_name} is not None:`.
+            #     For now, omitting is fine for both `DEFAULT <value>` and `DEFAULT NULL` when Python arg is None.
+        else: # Parameter is not optional, it must be included.
+            body_lines.append(f"_sql_named_args_parts.append(f'{p.name} := %({param_key_for_dict})s')")
+            body_lines.append(f"_call_params_dict['{param_key_for_dict}'] = {actual_value_var}")
+        body_lines.append("") # Add a blank line for readability after each param logic
+
+    body_lines.append("_sql_query_named_args = ', '.join(_sql_named_args_parts)")
+
+    # Determine the base SQL query structure using func.sql_name (which is schema-qualified)
+    # No change needed for query_template itself, just how arguments are formatted within it
+    query_template = f"SELECT * FROM {func.sql_name}({{_sql_query_named_args}})"
+
+    body_lines.append(f"_full_sql_query = f\"{query_template}\"")
+    body_lines.append("") # Blank line
     
-    # Common setup for all other function types
+    # --- Execute SQL query ---
     body_lines.append("async with conn.cursor() as cur:")
-    body_lines.append(
-        f'    await cur.execute("SELECT * FROM {func.sql_name}({sql_args_placeholders})", {python_args_list})'
-    )
+    body_lines.append("    await cur.execute(_full_sql_query, _call_params_dict)") # Use the dictionary
     
+    # --- Process results (largely existing logic) ---
     # For void returns, no need to fetch any results
     if func.return_type == 'None':
         body_lines.append("    # Function returns void, no results to fetch")
@@ -387,42 +392,68 @@ def _generate_function(func: ParsedFunction) -> str:
     # These were already determined by the parser and potentially refined by _determine_return_type
     return_type_hint, final_dataclass_name, _ = _determine_return_type(func, {})
 
-    sql_args_placeholders = ", ".join(["%s"] * len(func.params))
-    # Use sorted params for the execute call arguments list
-    python_args_list = "[" + ", ".join([p.python_name for p in sorted_params]) + "]"
+    # sql_args_placeholders and python_args_list are now generated dynamically in _generate_function_body
+    # So, we remove their old static generation here.
 
     # Generate the docstring
     docstring = _generate_docstring(func)
 
     # Generate the function body based on the return type
-    body_lines = _generate_function_body(func, final_dataclass_name, sql_args_placeholders, python_args_list)
+    # Pass sorted_params to _generate_function_body
+    body_lines = _generate_function_body(func, final_dataclass_name, sorted_params)
 
     indented_body = textwrap.indent("\n".join(body_lines), prefix="    ")
 
     # Ensure we use the correct class name in the return type hint for both
-    # schema-qualified and non-schema-qualified table names
-    if func.returns_table:
-        # Handle SETOF table returns
-        if func.returns_setof and func.setof_table_name:
-            # Convert the table name to a singular class name
-            singular_name = _to_singular_camel_case(func.setof_table_name)
-            return_type_hint = f"List[{singular_name}]"
-        # Handle single table returns
-        elif func.returns_sql_type_name:
-            # Convert the table name to a singular class name
-            singular_name = _to_singular_camel_case(func.returns_sql_type_name)
-            return_type_hint = f"Optional[{singular_name}]"
-        # Handle ad-hoc RETURNS TABLE
-        elif final_dataclass_name:
-            if func.returns_setof:
-                return_type_hint = f"List[{final_dataclass_name}]"
-            else:
-                return_type_hint = f"Optional[{final_dataclass_name}]"
+    # schema-qualified and non-schema-qualified table names.
+    # However, if the type was overridden to 'Any' (e.g., missing schema and allow_missing_schemas=True),
+    # then the return_type_hint from _determine_return_type should be preserved.
 
-    # --- Assemble the function ---
-    # Note: Docstring is now pre-formatted with indentation
+    # Check if _determine_return_type already set the hint to involve 'Any'
+    is_already_any_hint = return_type_hint == "Any" or \
+                          return_type_hint == "Optional[Any]" or \
+                          return_type_hint == "List[Any]"
+
+    if not is_already_any_hint: # Only proceed with this refinement if not already an 'Any' hint
+        if func.returns_table:
+            # Handle SETOF table returns
+            if func.returns_setof and func.setof_table_name:
+                # Convert the table name to a singular class name
+                singular_name = _to_singular_camel_case(func.setof_table_name)
+                return_type_hint = f"List[{singular_name}]"
+            # Handle single table returns
+            elif not func.returns_setof and func.returns_sql_type_name: # Added not func.returns_setof for clarity
+                # Convert the table name to a singular class name
+                singular_name = _to_singular_camel_case(func.returns_sql_type_name)
+                return_type_hint = f"Optional[{singular_name}]"
+            # Handle ad-hoc RETURNS TABLE
+            elif final_dataclass_name and not func.setof_table_name and not func.returns_sql_type_name: # Check it's not a named table already handled
+                if func.returns_setof:
+                    return_type_hint = f"List[{final_dataclass_name}]"
+                else:
+                    return_type_hint = f"Optional[{final_dataclass_name}]"
+
+    # Assemble the function string
+    sql_name_parts = func.sql_name.split('.')
+    python_func_name_base = sql_name_parts[-1]  # Get part after schema if present
+    
+    # Sanitize the base name to be a valid Python identifier
+    # Replace non-alphanumeric (excluding underscore) with underscore
+    sanitized_base_name = "".join(c if c.isalnum() or c == '_' else '_' for c in python_func_name_base)
+    
+    # Ensure it doesn't start with a digit (prefix with underscore if it does)
+    if sanitized_base_name and sanitized_base_name[0].isdigit():
+        python_func_name = "_" + sanitized_base_name
+    elif not sanitized_base_name: # Handle empty base name (e.g. from "schema.")
+        python_func_name = "_unnamed_function" # Or raise error
+    else:
+        python_func_name = sanitized_base_name
+    
+    func_signature = f"async def {python_func_name}({params_str_py}) -> {return_type_hint}:"
+    
+    # Combine signature, docstring, and body
     func_def = (
-        f"async def {func.python_name}({params_str_py}) -> {return_type_hint}:\n"
+        f"{func_signature}\n"
         f"{docstring}\n"
         f"{indented_body}\n"
     )

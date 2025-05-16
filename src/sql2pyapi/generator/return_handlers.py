@@ -5,7 +5,7 @@ from typing import List, Dict, Tuple, Optional
 # Local imports
 from ..sql_models import ParsedFunction, ReturnColumn, SQLParameter
 from ..constants import *
-from .utils import _to_singular_camel_case
+from ..parser.utils import _to_singular_camel_case
 
 
 def _determine_return_type(func: ParsedFunction, custom_types: Dict[str, List[ReturnColumn]]) -> Tuple[str, Optional[str], set]:

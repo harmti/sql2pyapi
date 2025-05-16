@@ -2,6 +2,7 @@
 
 import pytest
 from pathlib import Path
+import textwrap
 
 # Import the public API
 from sql2pyapi.parser import parse_sql
@@ -33,8 +34,26 @@ def test_optional_enum_code_generation():
     # The parameter is renamed from p_priority to priority in the generated code
     assert "priority_value = priority.value if priority is not None else None" in python_code
     
-    # Verify that the extracted value is used in the SQL query
-    assert "[priority_value]" in python_code
+    # Verify that the extracted value is used in the SQL query if provided
+    # If 'priority' is None, it's omitted, DB uses DEFAULT 'medium'
+    # If 'priority' is not None, it's included in _sql_named_args_parts and _call_params_dict
+    expected_conditional_assignment = textwrap.dedent(f"""
+    if priority is not None:
+        _sql_named_args_parts.append(f'p_priority := %(priority)s')
+        _call_params_dict['priority'] = priority_value
+    """).strip()
+    # Normalize whitespace for comparison if necessary, or check key components
+    # For simplicity, check for key lines within the generated code structure
+    assert "if priority is not None:" in python_code
+    # Check if the assignment lines are present within an if block related to 'priority'
+    # This is a simplified check; a full AST parse would be more robust for structure.
+    assert "_sql_named_args_parts.append(f'p_priority := %(priority)s')" in python_code
+    assert "_call_params_dict['priority'] = priority_value" in python_code
+
+    # Ensure old logic is not present
+    assert "if priority is None:" not in python_code # Old check for DEFAULT keyword
+    assert "_sql_parts.append('DEFAULT')" not in python_code
+    assert "_call_values.append(priority_value)" not in python_code
 
 def test_direct_enum_and_optional_enum_parameters():
     """Test that both direct enum and Optional enum parameters extract .value."""
@@ -60,4 +79,27 @@ def test_direct_enum_and_optional_enum_parameters():
     assert "optional_status_value = optional_status.value if optional_status is not None else None" in python_code
     
     # Verify that both extracted values are used in the SQL query
-    assert "[status_value, optional_status_value]" in python_code
+    # status (non-optional, SQL name p_status) should be directly assigned
+    assert "_sql_named_args_parts.append(f'p_status := %(status)s')" in python_code
+    assert "_call_params_dict['status'] = status_value" in python_code
+
+    # optional_status (optional, SQL name p_optional_status, DEFAULT NULL)
+    # If 'optional_status' (Python var) is None, it's omitted.
+    # If 'optional_status' is not None, it's included.
+    expected_optional_assignment = textwrap.dedent(f"""
+    if optional_status is not None:
+        _sql_named_args_parts.append(f'p_optional_status := %(optional_status)s')
+        _call_params_dict['optional_status'] = optional_status_value
+    """).strip()
+    assert "if optional_status is not None:" in python_code
+    assert "_sql_named_args_parts.append(f'p_optional_status := %(optional_status)s')" in python_code
+    assert "_call_params_dict['optional_status'] = optional_status_value" in python_code
+
+    # Ensure old logic for DEFAULT NULL (explicitly passing None) is not present
+    assert "if optional_status is None:" not in python_code # Old check
+    assert "_sql_parts.append('%s')" not in python_code # Part of old logic
+    # This specific check might be too broad if _sql_parts is used elsewhere, 
+    # but in the context of how optional_status was handled, it should be gone.
+    # A more targeted removal would be to check it wasn't in the old 'if optional_status is None:' block.
+    assert "_call_values.append(None)" not in python_code # Part of old logic
+    assert "_call_values.append(optional_status_value)" not in python_code # Old append style

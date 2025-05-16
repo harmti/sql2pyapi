@@ -21,7 +21,6 @@ SYSTEM_TEST_DIR = Path("tests/system")
 SQL_DIR = SYSTEM_TEST_DIR / "sql"
 SCHEMA_FILE = SQL_DIR / "00_schema.sql"
 FUNCTIONS_FILE = SQL_DIR / "01_functions.sql"
-DOCKER_COMPOSE_FILE = SYSTEM_TEST_DIR / "docker-compose.yml"
 GENERATED_API_FILENAME = "generated_db_api.py"
 GENERATED_API_PATH = SYSTEM_TEST_DIR / GENERATED_API_FILENAME # Generate inside tests/system
 
@@ -35,49 +34,7 @@ DSN = f"postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
 
 # --- Fixtures ---
 
-@pytest.fixture(scope="session", autouse=True)
-def manage_db_container():
-    """Starts and stops the PostgreSQL test container using Docker Compose."""
-    compose_file_path_relative_to_cwd = DOCKER_COMPOSE_FILE.name # Just the filename 'docker-compose.yml'
-    print(f"\nManaging DB container using {compose_file_path_relative_to_cwd} from {SYSTEM_TEST_DIR}...")
-    # Run compose commands from the directory containing the compose file
-    cwd = PROJECT_ROOT / SYSTEM_TEST_DIR
-
-    compose_cmd_base = ["docker", "compose", "-f", compose_file_path_relative_to_cwd]
-
-    try:
-        # Ensure clean slate
-        print("Running docker compose down...")
-        subprocess.run(
-            compose_cmd_base + ["down", "--volumes", "--remove-orphans"],
-            check=False, capture_output=True, text=True, cwd=cwd
-        )
-        # Start the container
-        print("Running docker compose up...")
-        up_result = subprocess.run(
-            compose_cmd_base + ["up", "-d", "--wait"], # --wait uses the healthcheck
-            check=True, capture_output=True, text=True, cwd=cwd
-        )
-        print("Docker Compose Up Output:", up_result.stdout)
-        if up_result.returncode != 0:
-             print("Docker Compose Up Error:", up_result.stderr)
-             raise RuntimeError(f"Docker compose up failed: {up_result.stderr}")
-
-        print("PostgreSQL container started and reported healthy.")
-        yield # Tests run here
-    finally:
-        print("\nStopping PostgreSQL container...")
-        down_result = subprocess.run(
-            compose_cmd_base + ["down", "--volumes", "--remove-orphans"],
-            check=False, capture_output=True, text=True, cwd=cwd
-        )
-        print("Docker Compose Down Output:", down_result.stdout)
-        # REMOVED: Clean up generated file logic moved or disabled for debugging
-        # generated_file_abs_path = PROJECT_ROOT / GENERATED_API_PATH
-        # if generated_file_abs_path.exists():
-        #     print(f"Removing generated file: {generated_file_abs_path}")
-        #     os.remove(generated_file_abs_path)
-
+# The manage_db_container fixture has been moved to tests/system/conftest.py
 
 @pytest.fixture(scope="session")
 def generated_api_module():

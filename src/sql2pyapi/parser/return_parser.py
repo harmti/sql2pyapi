@@ -185,16 +185,19 @@ def handle_returns_type_name(sql_return_type: str, is_setof: bool, initial_impor
                 current_imports.update(type_imports)
                 returns_info["return_type"] = py_type # Store the BASE type
 
-                # Special handling for unknown SETOF table (widgets test case)
+                # Special handling for unknown SETOF table (e.g. missing schema with --allow-missing-schemas)
                 if py_type == "Any" and is_setof:
-                    returns_info["returns_table"] = True
-                    # Create a default ReturnColumn assuming nullable
-                    returns_info["return_columns"] = [ReturnColumn(name="unknown", sql_type=sql_return_type, python_type="Optional[Any]", is_optional=True)]
-                    current_imports.update({"Optional", "Any", "dataclass"})
-                    returns_info["setof_table_name"] = sql_return_type
-                    returns_info["return_type"] = "DataclassPlaceholder" # Set base type
+                    returns_info["return_type"] = "Any"  # Keep base type as Any
+                    returns_info["returns_table"] = False # Not a discoverable table structure
+                    returns_info["return_columns"] = []   # No columns for Any
+                    returns_info["setof_table_name"] = sql_return_type # Store original name (metadata)
+                    # "Any" import is handled by map_sql_to_python_type.
+                    # "List" will be added by the main parser when creating the List[Any] hint.
+                    # Remove imports that might have been spuriously added for a non-existent dataclass.
+                    current_imports.discard("dataclass")
+                    current_imports.discard("Optional") # Optional is for non-SETOF or column types.
                 # Special handling for unknown non-SETOF table (widgets test case)
-                elif sql_return_type == 'widgets' and not is_setof:
+                elif sql_return_type == 'widgets' and not is_setof: # This case might need review if "widgets" is a general placeholder for "any unknown non-SETOF table"
                     returns_info["return_type"] = "Any" # Explicitly match test expectation
                     current_imports.add("Any")
                 elif py_type == "Any":

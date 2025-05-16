@@ -65,8 +65,24 @@ def test_enum_parameter_value_extraction():
     assert "# Extract .value from enum parameters" in python_code
     assert "role_value = role.value if role is not None else None" in python_code
     
-    # Check that we're passing role_value instead of role to the database function
-    assert "[company_id, user_id, role_value]" in python_code
+    # Check that _call_params_dict is populated correctly
+    # All parameters are non-optional here.
+    # SQL names: p_company_id, p_user_id, p_role
+    # Python names: company_id, user_id, role
+    assert "_sql_named_args_parts.append(f'p_company_id := %(company_id)s')" in python_code
+    assert "_call_params_dict['company_id'] = company_id" in python_code
+
+    assert "_sql_named_args_parts.append(f'p_user_id := %(user_id)s')" in python_code
+    assert "_call_params_dict['user_id'] = user_id" in python_code
+
+    assert "_sql_named_args_parts.append(f'p_role := %(role)s')" in python_code
+    assert "_call_params_dict['role'] = role_value" in python_code # Uses role_value for enums
+    
+    # Ensure the old style direct list or _call_values appends are not present
+    assert "[company_id, user_id, role_value]" not in python_code
+    assert "_call_values.append(company_id)" not in python_code
+    assert "_call_values.append(user_id)" not in python_code
+    assert "_call_values.append(role_value)" not in python_code
 
 
 def test_enum_return_value_conversion():

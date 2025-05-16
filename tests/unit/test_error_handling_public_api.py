@@ -37,9 +37,10 @@ def test_missing_table_in_returns_setof():
     assert func.returns_setof
     assert func.setof_table_name == "missing_table"
     
-    # The parser handles this by creating a List of a class with the table name
-    assert "List[MissingTable]" == func.return_type
+    # The parser now correctly makes this List[Any] when table schema is missing and flag allows
+    assert func.return_type == "List[Any]"
     assert "List" in func.required_imports
+    assert "Any" in func.required_imports
 
 
 def test_invalid_sql_syntax():

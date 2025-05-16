@@ -6,6 +6,7 @@ Tests the fix for the bug where enums were being overwritten.
 
 import pytest
 from typing import Dict, List, Set, Optional
+import textwrap
 
 # Import the public API
 from sql2pyapi.parser import parse_sql
@@ -88,7 +89,7 @@ def test_enum_defined_in_schema_used_in_func():
     assert list_func.returns_setof is True
     assert list_func.returns_table is True
     assert list_func.setof_table_name == 'company_invitations'
-    assert list_func.return_type == 'List[CompanyInvitations]'
+    assert list_func.return_type == 'List[CompanyInvitation]'
     assert 'List' in list_func.required_imports
     assert 'dataclass' in list_func.required_imports
 
@@ -106,7 +107,7 @@ def test_enum_defined_in_schema_used_in_func():
     # 6. Verify generated Dataclass
     assert "from dataclasses import dataclass" in python_code
     assert "@dataclass" in python_code
-    assert "class CompanyInvitations:" in python_code
+    assert "class CompanyInvitation:" in python_code
     # Check a non-enum field
     assert "email: str" in python_code # Non-null text field
     # Check the enum field (NOT NULL in table, so not Optional in dataclass)
@@ -116,10 +117,33 @@ def test_enum_defined_in_schema_used_in_func():
     expected_signature = (
         "async def list_company_invitations(conn: AsyncConnection, " 
         "company_id: UUID, " 
-        "status: Optional[InvitationStatus] = None) -> List[CompanyInvitations]:"
+        "status: Optional[InvitationStatus] = None) -> List[CompanyInvitation]:"
     )
     assert expected_signature in python_code
 
     # 8. Verify enum parameter is used correctly in function body
     assert "status_value = status.value if status is not None else None" in python_code
-    assert "params = [company_id, status_value]" in python_code 
+    
+    # Verify assignments to _call_params_dict for each parameter
+    # company_id (SQL p_company_id, required, non-enum)
+    assert "_sql_named_args_parts.append(f'p_company_id := %(company_id)s')" in python_code
+    assert "_call_params_dict['company_id'] = company_id" in python_code
+
+    # status (SQL p_status, optional enum, DEFAULT NULL)
+    # This should be inside an 'if status is not None:' block
+    expected_status_handling = textwrap.dedent("""
+    if status is not None:
+        _sql_named_args_parts.append(f'p_status := %(status)s')
+        _call_params_dict['status'] = status_value
+    """).strip()
+    # Simple string checks for the key components
+    assert "if status is not None:" in python_code
+    assert "_sql_named_args_parts.append(f'p_status := %(status)s')" in python_code
+    assert "_call_params_dict['status'] = status_value" in python_code
+
+    # Ensure old logic for DEFAULT NULL or direct _call_values appends are not present
+    assert "if status is None:" not in python_code # Old conditional check
+    assert "_call_values.append(None)" not in python_code
+    assert "_call_values.append(status_value)" not in python_code
+    assert "_call_values.append(company_id)" not in python_code
+    assert "_sql_parts.append('DEFAULT')" not in python_code 

@@ -16,7 +16,7 @@ from .enum_parser import parse_enum_types
 from .composite_parser import parse_create_type
 from .table_parser import parse_create_table
 from .column_parser import parse_column_definitions
-from .utils import sanitize_for_class_name, generate_dataclass_name
+from .utils import sanitize_for_class_name, generate_dataclass_name, _to_singular_camel_case
 
 # No duplicate imports needed
 
@@ -44,13 +44,14 @@ class SQLParser:
     to extract function definitions and their metadata.
     """
 
-    def __init__(self):
+    def __init__(self, fail_on_missing_schema: bool = False):
         self.table_schemas: Dict[str, List[ReturnColumn]] = {}
         self.table_schema_imports: Dict[str, set] = {}
         self.composite_types: Dict[str, List[ReturnColumn]] = {}
         self.composite_type_imports: Dict[str, set] = {}
         self.enum_types: Dict[str, List[str]] = {}
         self.unnamed_param_count = 0
+        self.fail_on_missing_schema: bool = fail_on_missing_schema
 
 
     def _parse_enum_types(self, sql_content: str) -> None:
@@ -316,13 +317,13 @@ class SQLParser:
                                 # Check if it's a table reference
                                 elif return_info["returns_sql_type_name"] in self.table_schemas:
                                     # For SETOF table returns, use the singular form of the table name
-                                    # This is important for schema-qualified table names
                                     table_name = return_info["returns_sql_type_name"]
-                                    # Use sanitize_for_class_name to handle schema-qualified names
-                                    class_name = sanitize_for_class_name(table_name)
+                                    # Use _to_singular_camel_case for singularization
+                                    class_name = _to_singular_camel_case(table_name)
                                     final_py_type = f"List[{class_name}]"
                                     current_imports.add("List")
                                     current_imports.add("dataclass")
+                                    dataclass_name = class_name # Ensure dataclass_name is set
                                 # Check if it's a composite type
                                 elif return_info["returns_sql_type_name"] in self.composite_types:
                                     final_py_type = f"List[{generate_dataclass_name(sql_name, is_return=True)}]"
@@ -339,9 +340,11 @@ class SQLParser:
                                 if return_info.get("setof_table_name"):
                                     # Use the original SQL table name (could be schema-qualified)
                                     table_name = return_info["setof_table_name"]
-                                    # Sanitize for class name - handles schema qualification
-                                    class_name = sanitize_for_class_name(table_name)
+                                    # Use _to_singular_camel_case for singularization
+                                    class_name = _to_singular_camel_case(table_name)
                                     dataclass_name = class_name  # Store for later use
+                                    current_imports.add("List")
+                                    if class_name == "Any": current_imports.add("Any")
                                 elif return_info.get("returns_table") and return_info.get("return_columns"):
                                     # Generate a name based on function name for ad-hoc table returns
                                     class_name = generate_dataclass_name(sql_name, is_return=True)
@@ -368,22 +371,36 @@ class SQLParser:
                                     current_imports.add("Enum")
                                 # Check if it's a table reference
                                 elif return_info["returns_sql_type_name"] in self.table_schemas:
-                                    final_py_type = f"Optional[{generate_dataclass_name(sql_name, is_return=True)}]"
+                                    # For single table returns, use singular form as dataclass name
+                                    table_name = return_info["returns_sql_type_name"]
+                                    class_name = _to_singular_camel_case(table_name) # CHANGED for consistency
+                                    final_py_type = f"Optional[{class_name}]"
                                     current_imports.add("Optional")
                                     current_imports.add("dataclass")
+                                    dataclass_name = class_name # Ensure dataclass_name is set
                                 # Check if it's a composite type
                                 elif return_info["returns_sql_type_name"] in self.composite_types:
                                     final_py_type = f"Optional[{generate_dataclass_name(sql_name, is_return=True)}]"
                                     current_imports.add("Optional")
                                     current_imports.add("dataclass")
-                                # For functions returning a table, use the function name + Result
-                                type_name = return_info["returns_sql_type_name"]
-                                if sql_name in ['get_user_by_email', 'get_order_details'] or (type_name.lower() in ['users', 'public.users', 'orders', 'public.orders']):
-                                    class_name = generate_dataclass_name(sql_name, is_return=True)
-                                else:
-                                    # Sanitize for class name - handles schema qualification
-                                    class_name = sanitize_for_class_name(type_name)
-                                dataclass_name = class_name  # Store for later use
+                                    # For functions returning a table, use the function name + Result
+                                    type_name = return_info["returns_sql_type_name"]
+                                    # This part was problematic, let's simplify. If it's a known table, use its singular name.
+                                    if type_name in self.table_schemas:
+                                        class_name = _to_singular_camel_case(type_name) # CHANGED
+                                    # else, it might be a custom type not in table_schemas, or an ad-hoc name is needed
+                                    # The existing logic for generate_dataclass_name(sql_name, is_return=True) or sanitize_for_class_name might apply
+                                    # For now, only changing known table references. The original logic was:
+                                    # if sql_name in ['get_user_by_email', 'get_order_details'] or (type_name.lower() in ['users', 'public.users', 'orders', 'public.orders']):
+                                    #     class_name = generate_dataclass_name(sql_name, is_return=True)
+                                    # else:
+                                    #     class_name = sanitize_for_class_name(type_name)
+                                    else:
+                                         # Fallback to sanitize_for_class_name or generate_dataclass_name for non-SETOF named types not directly in table_schemas
+                                         # This part needs careful review, but the immediate goal is SETOF table singularization
+                                         # Using sanitize_for_class_name for now if not a known table_schema. Original plan was for SETOF.
+                                         class_name = sanitize_for_class_name(type_name)
+                                    dataclass_name = class_name  # Store for later use
                             elif return_info.get("return_columns"):
                                 # Generate a name based on function name for ad-hoc table returns
                                 class_name = generate_dataclass_name(sql_name, is_return=True)
@@ -467,13 +484,17 @@ class SQLParser:
                     if table_name in self.table_schema_imports:
                          imports_to_return[table_name] = self.table_schema_imports[table_name]
                 elif table_name not in self.table_schemas and table_name not in composite_types_to_return:
-                     logging.warning(f"Function '{func.sql_name}' returns SETOF '{table_name}', but no schema found for this table/type.")
+                     # Check if we should fail or just warn
+                     if self.fail_on_missing_schema:
+                         raise ValueError(f"Function '{func.sql_name}' returns SETOF '{table_name}', but no schema found for this table/type. 'fail_on_missing_schema' is True.")
+                     else:
+                         logging.warning(f"Function '{func.sql_name}' returns SETOF '{table_name}', but no schema found for this table/type. 'fail_on_missing_schema' is False.")
 
 
         # Return the list of functions, the combined imports, and the composite types (now including SETOF table types)
         return functions, imports_to_return, composite_types_to_return
 
-def parse_sql(sql_content: str, schema_content: Optional[str] = None) -> Tuple[List[ParsedFunction], Dict[str, set], Dict[str, List[ReturnColumn]], Dict[str, List[str]]]:
+def parse_sql(sql_content: str, schema_content: Optional[str] = None, fail_on_missing_schema: bool = False) -> Tuple[List[ParsedFunction], Dict[str, set], Dict[str, List[ReturnColumn]], Dict[str, List[str]]]:
     """
     Parse SQL content to extract functions, their parameters, return types, and comments.
     This is the main public API function for the sql2pyapi parser.
@@ -481,11 +502,14 @@ def parse_sql(sql_content: str, schema_content: Optional[str] = None) -> Tuple[L
     Args:
         sql_content: SQL content to parse
         schema_content: Optional separate schema content (for CREATE TABLE statements)
+        fail_on_missing_schema: If True, an error will be raised if a function returns SETOF <table_name>
+                                and the schema for <table_name> cannot be found. If False, a warning
+                                will be logged, and the return type may default to Any.
         
     Returns:
         Tuple of (list of ParsedFunction, imports dict, composite types dict, enum types dict)
     """
-    parser = SQLParser()
+    parser = SQLParser(fail_on_missing_schema=fail_on_missing_schema)
     
     # Parse enum types from both SQL and schema content
     parser._parse_enum_types(sql_content)

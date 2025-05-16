@@ -21,7 +21,9 @@ PARAM_REGEX = re.compile(
     ([a-zA-Z0-9_]+)             # Parameter name (Group 2)
     \s+                         # Whitespace after name
     (.*?)                       # Parameter type (Group 3) - Non-greedy
-    (?:\s+(DEFAULT\s+.*)|$)    # Optional Default clause or end of string (Group 4 for DEFAULT part)
+    # Optional Default clause (Group 4 is "DEFAULT", Group 5 is the value) or end of string
+    (?:\s+(DEFAULT)\s+(.+?))?   # DEFAULT (Group 4) and its value (Group 5)
+    \s*$                        # Trailing whitespace and end of string
     """,
     re.IGNORECASE | re.VERBOSE,
 )
@@ -52,9 +54,20 @@ def parse_single_param_definition(param_def: str, context: str,
 
     sql_name = match.group(2).strip()
     sql_type = match.group(3).strip()
-    remainder = match.group(4)
-    remainder = remainder.strip() if remainder else ""
-    is_optional = remainder.lower().startswith("default")
+    
+    default_keyword = match.group(4) # "DEFAULT" or None
+    default_value_str = match.group(5) # The actual default value string or None
+
+    is_optional = bool(default_keyword)
+    has_sql_default = False
+
+    if default_keyword and default_value_str:
+        normalized_default_value = default_value_str.strip().lower()
+        # Check if it's a non-NULL SQL default
+        if normalized_default_value != 'null':
+            has_sql_default = True
+    # Note: is_optional remains True for any DEFAULT, including DEFAULT NULL.
+    # has_sql_default is True only for DEFAULT <non-NULL value>.
 
     # Generate Pythonic name
     python_name = sql_name
@@ -78,6 +91,7 @@ def parse_single_param_definition(param_def: str, context: str,
         sql_type=sql_type,
         python_type=py_type,
         is_optional=is_optional,
+        has_sql_default=has_sql_default,
     )
     return param, imports
 

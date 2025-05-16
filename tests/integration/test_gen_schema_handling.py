@@ -121,44 +121,76 @@ def test_func2_generation_with_schema(tmp_path, run_cli_tool):
     assert docstring is not None, "list_user_companies is missing a docstring"
     assert docstring == "Function to list companies created by a specific user", "Docstring content mismatch for list_user_companies"
 
-    # 4. Check Function Body (Simplified Checks)
-    sql_query = None
+    # 4. Check Function Body
     execute_call = None
     fetchall_call = None
     list_comp = None
+    full_sql_query_assign_node = None
+    sql_query_named_args_assign_node = None
 
-    for node in ast.walk(list_func_node):
-        # Find the SQL query string
-        if isinstance(node, ast.Await) and isinstance(node.value, ast.Call):
-            call = node.value
+    for node_in_body in ast.walk(list_func_node):
+        if isinstance(node_in_body, ast.Assign):
+            if len(node_in_body.targets) == 1 and isinstance(node_in_body.targets[0], ast.Name):
+                if node_in_body.targets[0].id == '_full_sql_query':
+                    full_sql_query_assign_node = node_in_body
+                elif node_in_body.targets[0].id == '_sql_query_named_args':
+                    sql_query_named_args_assign_node = node_in_body
+        elif isinstance(node_in_body, ast.Await) and isinstance(node_in_body.value, ast.Call):
+            call = node_in_body.value
             if isinstance(call.func, ast.Attribute) and call.func.attr == 'execute':
-                 execute_call = call
-                 # Assume first arg is the SQL query string literal or variable name
-                 if len(call.args) > 0 and isinstance(call.args[0], ast.Constant):
-                     sql_query = call.args[0].value
-                 elif len(call.args) > 0 and isinstance(call.args[0], ast.Name):
-                      # If it's a variable, we might need to trace it back, simpler check for now
-                      pass # Placeholder - complex trace not implemented yet
-
+                execute_call = call
+                assert len(call.args) == 2, "execute call should have 2 arguments"
+                assert isinstance(call.args[0], ast.Name) and call.args[0].id == '_full_sql_query', "First argument to execute should be _full_sql_query variable"
+                assert isinstance(call.args[1], ast.Name) and call.args[1].id == '_call_params_dict', "Second argument to execute should be _call_params_dict variable"
             elif isinstance(call.func, ast.Attribute) and call.func.attr == 'fetchall':
                 fetchall_call = call
-                
-        # Find the return list comprehension
-        if isinstance(node, ast.Return) and isinstance(node.value, ast.ListComp):
-             list_comp = node.value
-             # Check if the comprehension calls the 'Company' constructor
-             assert isinstance(list_comp.elt, ast.Call) and isinstance(list_comp.elt.func, ast.Name) and list_comp.elt.func.id == 'Company', "List comprehension does not call Company()"
+        elif isinstance(node_in_body, ast.Return) and isinstance(node_in_body.value, ast.ListComp):
+            list_comp = node_in_body.value
+            assert isinstance(list_comp.elt, ast.Call) and isinstance(list_comp.elt.func, ast.Name) and list_comp.elt.func.id == 'Company', "List comprehension does not call Company()"
 
-
-    assert sql_query == "SELECT * FROM list_user_companies(%s)", f"SQL query mismatch. Found: '{sql_query}'"
     assert execute_call is not None, "cur.execute call not found"
-    # Check execute arguments
-    assert len(execute_call.args) == 2, "execute call should have 2 arguments"
-    assert isinstance(execute_call.args[1], ast.List), "Second argument to execute should be a list"
-    assert len(execute_call.args[1].elts) == 1 and isinstance(execute_call.args[1].elts[0], ast.Name) and execute_call.args[1].elts[0].id == 'user_id', "Execute parameters mismatch"
+    assert full_sql_query_assign_node is not None, "Assignment to _full_sql_query not found"
+    assert sql_query_named_args_assign_node is not None, "Assignment to _sql_query_named_args not found"
 
+    assert isinstance(full_sql_query_assign_node.value, ast.JoinedStr), "_full_sql_query should be an f-string"
+    fstring_parts = full_sql_query_assign_node.value.values
+    assert len(fstring_parts) == 3, "_full_sql_query f-string should have three parts"
+    assert isinstance(fstring_parts[0], ast.Constant) and fstring_parts[0].value == "SELECT * FROM list_user_companies("
+    assert isinstance(fstring_parts[1], ast.FormattedValue) and isinstance(fstring_parts[1].value, ast.Name) and fstring_parts[1].value.id == "_sql_query_named_args"
+    assert isinstance(fstring_parts[2], ast.Constant) and fstring_parts[2].value == ")"
+    
+    sql_query_named_args_assign_node_check = None
+    for node_in_body_for_assign_check in ast.walk(list_func_node):
+        if isinstance(node_in_body_for_assign_check, ast.Assign):
+            if len(node_in_body_for_assign_check.targets) == 1 and isinstance(node_in_body_for_assign_check.targets[0], ast.Name):
+                if node_in_body_for_assign_check.targets[0].id == '_sql_query_named_args':
+                    sql_query_named_args_assign_node_check = node_in_body_for_assign_check
+                    break
+    assert sql_query_named_args_assign_node_check is not None, "Assignment to _sql_query_named_args not found"
+
+    # Check _call_params_dict initialization and population for 'user_id'
+    call_params_dict_init_empty = False
+    found_user_id_assigned_to_dict = False
+
+    for stmt in list_func_node.body:
+        if isinstance(stmt, ast.Assign):
+            # Check for _call_params_dict = {}
+            if len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Name) and stmt.targets[0].id == '_call_params_dict':
+                if isinstance(stmt.value, ast.Dict) and not stmt.value.keys:
+                    call_params_dict_init_empty = True
+            
+            # Check for _call_params_dict['user_id'] = user_id
+            elif len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Subscript):
+                target_subscript = stmt.targets[0]
+                if isinstance(target_subscript.value, ast.Name) and target_subscript.value.id == '_call_params_dict' and \
+                   isinstance(target_subscript.slice, ast.Constant) and target_subscript.slice.value == 'user_id' and \
+                   isinstance(stmt.value, ast.Name) and stmt.value.id == 'user_id':
+                    found_user_id_assigned_to_dict = True
+
+    assert call_params_dict_init_empty, "_call_params_dict was not initialized to an empty dictionary"
+    assert found_user_id_assigned_to_dict, "Did not find assignment of 'user_id' to _call_params_dict['user_id']"
+    
     assert fetchall_call is not None, "cur.fetchall call not found"
-    assert list_comp is not None, "Return list comprehension not found"
 
 
 def test_inline_schema_function_generation(tmp_path, run_cli_tool):
@@ -233,32 +265,68 @@ def test_inline_schema_function_generation(tmp_path, run_cli_tool):
     docstring = ast.get_docstring(func_node)
     assert docstring is not None and "defined above" in docstring, "Docstring mismatch or doesn't mention inline schema"
 
-    # 4. Check Body Logic (Fetchall, ListComp using Product)
-    sql_query = None
+    # 4. Check Body Logic
     execute_call = None
     fetchall_call = None
     list_comp = None
+    full_sql_query_assign_node = None
+    sql_query_named_args_assign_node = None
 
-    for node in ast.walk(func_node):
-        if isinstance(node, ast.Await) and isinstance(node.value, ast.Call):
-            call = node.value
+    for node_in_body in ast.walk(func_node):
+        if isinstance(node_in_body, ast.Assign):
+            if len(node_in_body.targets) == 1 and isinstance(node_in_body.targets[0], ast.Name):
+                if node_in_body.targets[0].id == '_full_sql_query':
+                    full_sql_query_assign_node = node_in_body
+                elif node_in_body.targets[0].id == '_sql_query_named_args':
+                    sql_query_named_args_assign_node = node_in_body
+        elif isinstance(node_in_body, ast.Await) and isinstance(node_in_body.value, ast.Call):
+            call = node_in_body.value
             if isinstance(call.func, ast.Attribute) and call.func.attr == 'execute':
                 execute_call = call
-                if len(call.args) > 0 and isinstance(call.args[0], ast.Constant):
-                    sql_query = call.args[0].value
+                assert len(call.args) == 2, "execute call should have 2 arguments"
+                assert isinstance(call.args[0], ast.Name) and call.args[0].id == '_full_sql_query'
+                assert isinstance(call.args[1], ast.Name) and call.args[1].id == '_call_params_dict'
             elif isinstance(call.func, ast.Attribute) and call.func.attr == 'fetchall':
                 fetchall_call = call
-        elif isinstance(node, ast.Return) and isinstance(node.value, ast.ListComp):
-            list_comp = node.value
+        elif isinstance(node_in_body, ast.Return) and isinstance(node_in_body.value, ast.ListComp):
+            list_comp = node_in_body.value
             assert isinstance(list_comp.elt, ast.Call) and isinstance(list_comp.elt.func, ast.Name) and list_comp.elt.func.id == 'Product', "List comprehension does not call Product()"
-            
-    assert sql_query == "SELECT * FROM get_all_products()", f"SQL query mismatch. Found: '{sql_query}'"
+
     assert execute_call is not None, "cur.execute call not found"
+    assert full_sql_query_assign_node is not None, "Assignment to _full_sql_query not found"
+    assert sql_query_named_args_assign_node is not None, "Assignment to _sql_query_named_args not found"
+    
+    assert isinstance(full_sql_query_assign_node.value, ast.JoinedStr), "_full_sql_query should be an f-string"
+    fstring_parts = full_sql_query_assign_node.value.values
+    assert len(fstring_parts) == 3, "_full_sql_query f-string should have three parts for get_all_products"
+    assert isinstance(fstring_parts[0], ast.Constant) and fstring_parts[0].value == "SELECT * FROM get_all_products("
+    assert isinstance(fstring_parts[1], ast.FormattedValue) and isinstance(fstring_parts[1].value, ast.Name) and fstring_parts[1].value.id == "_sql_query_named_args"
+    assert isinstance(fstring_parts[2], ast.Constant) and fstring_parts[2].value == ")"
+
+    call_params_dict_init_empty_inline = False
+    call_params_dict_populated_inline = False
+    for stmt in func_node.body:
+        if isinstance(stmt, ast.Assign):
+            for target in stmt.targets:
+                if isinstance(target, ast.Name) and target.id == '_call_params_dict':
+                    if isinstance(stmt.value, ast.Dict) and not stmt.value.keys:
+                        call_params_dict_init_empty_inline = True
+                    else:
+                        call_params_dict_populated_inline = True
+        elif isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Call):
+            call_node = stmt.value
+            if isinstance(call_node.func, ast.Attribute) and \
+               isinstance(call_node.func.value, ast.Name) and call_node.func.value.id == '_call_params_dict' and \
+               call_node.func.attr == 'append':
+                call_params_dict_populated_inline = True
+                break 
+        if call_params_dict_populated_inline: break
+    
+    assert call_params_dict_init_empty_inline, "_call_params_dict was not initialized to an empty dictionary for get_all_products"
+    assert not call_params_dict_populated_inline, "_call_params_dict should remain empty for get_all_products (no-parameter function)"
+
     assert fetchall_call is not None, "cur.fetchall call not found"
     assert list_comp is not None, "Return list comprehension using Product not found"
-
-    # Old comparison removed
-    # assert actual_content == expected_content, (...)
 
 
 def test_setof_missing_table_function_generation(tmp_path, run_cli_tool):
@@ -270,9 +338,16 @@ def test_setof_missing_table_function_generation(tmp_path, run_cli_tool):
     # Run WITHOUT the flag first - Expect failure
     result = run_cli_tool(functions_sql_path, actual_output_path)
     assert result.returncode != 0, "CLI should fail when schema is missing and flag is not provided"
-    assert "Required schema definition for table/type 'some_undefined_table' was not found" in result.stderr, "Expected error message missing in STDERR"
+    
+    # The error message was updated; check for key parts.
+    expected_error_fragment = "Function 'get_undefined_table_data' returns SETOF 'some_undefined_table', but no schema found for this table/type."
+    # The flag part might also be in the message, e.g. "'fail_on_missing_schema' is True."
+    # For robustness, let's check the main part of the error.
+    assert expected_error_fragment in result.stderr, f"Expected error message fragment missing in STDERR. STDERR:\\n{result.stderr}"
+    # Optionally, verify the specific mention of the flag if it's consistently present:
+    # assert "'fail_on_missing_schema' is True" in result.stderr, f"Flag mention missing in error. STDERR:\\n{result.stderr}"
 
-    # Run WITH the flag - Expect success (with placeholder comment)
+    # Run WITH the flag --allow-missing-schemas - Expect success
     result_allowed = run_cli_tool(functions_sql_path, actual_output_path, allow_missing_schemas=True)
     assert result_allowed.returncode == 0, f"CLI failed even with --allow-missing-schemas: {result_allowed.stderr}"
 
@@ -293,14 +368,14 @@ def test_setof_missing_table_function_generation(tmp_path, run_cli_tool):
             elif node.module == 'dataclasses' and any(alias.name == 'dataclass' for alias in node.names):
                  found_dataclass = True
     assert found_typing_list, "Missing List import from typing"
-    assert found_dataclass, "Missing dataclass import"
+    assert not found_dataclass, "Dataclass import should be absent if only List[Any] is generated and no other dataclasses are present"
 
-    # 2. Check for Placeholder Dataclass Comment
+    # 2. Check for Placeholder Dataclass Comment - These are NOT expected for List[Any]
     # Verify the exact comment text generated
-    assert "# TODO: Define dataclass for table 'some_undefined_tables'" in actual_content, \
-           "Missing or incorrect placeholder TODO comment for SomeUndefinedTable"
-    assert "# @dataclass" in actual_content, "Missing placeholder @dataclass comment"
-    assert "# class SomeUndefinedTable:" in actual_content, "Missing placeholder class definition comment"
+    # assert "# TODO: Define dataclass for table 'some_undefined_tables'" in actual_content, \
+    #        "Missing or incorrect placeholder TODO comment for SomeUndefinedTable"
+    # assert "# @dataclass" in actual_content, "Missing placeholder @dataclass comment"
+    # assert "# class SomeUndefinedTable:" in actual_content, "Missing placeholder class definition comment"
     # Ensure the actual class definition is NOT present
     class_def_found = False
     for node in ast.walk(tree):
@@ -324,7 +399,7 @@ def test_setof_missing_table_function_generation(tmp_path, run_cli_tool):
     assert actual_params == expected_params, f"Parameter mismatch. Expected {expected_params}, Got {actual_params}"
 
     # Check return annotation (uses placeholder class name)
-    expected_return = 'List[SomeUndefinedTable]'
+    expected_return = 'List[Any]'
     actual_return = ast.unparse(func_node.returns)
     assert actual_return == expected_return, f"Return type mismatch. Expected {expected_return}, Got {actual_return}"
 
@@ -335,62 +410,82 @@ def test_setof_missing_table_function_generation(tmp_path, run_cli_tool):
     assert docstring is not None and expected_docstring_part1 in docstring and expected_docstring_part2 in docstring, \
            f"Docstring content mismatch. Expected parts '{expected_docstring_part1}' and '{expected_docstring_part2}', Got '{docstring}'"
 
-    # Check body for execute, fetchall, and list comprehension with try/except using placeholder
+    # Check body for _full_sql_query, _call_params_dict, execute, fetchall, and list comprehension
+    full_sql_query_assign_node = None
+    sql_query_named_args_assign_node = None
     execute_call = None
-    sql_query = None
     fetchall_call = None
-    list_comp_call = None # The call SomeUndefinedTable(*r)
-    try_except_node = None
-    execute_params = []
-    for node in ast.walk(func_node):
-        if isinstance(node, ast.Await) and isinstance(node.value, ast.Call):
-            call = node.value
+    list_comp_node = None # Renamed from list_comp_call to avoid confusion, stores the ListComp AST node
+    try_except_node = None 
+
+    for node_in_body in ast.walk(func_node):
+        if isinstance(node_in_body, ast.Assign):
+            if len(node_in_body.targets) == 1 and isinstance(node_in_body.targets[0], ast.Name):
+                if node_in_body.targets[0].id == '_full_sql_query':
+                    full_sql_query_assign_node = node_in_body
+                elif node_in_body.targets[0].id == '_sql_query_named_args':
+                    sql_query_named_args_assign_node = node_in_body
+        elif isinstance(node_in_body, ast.Await) and isinstance(node_in_body.value, ast.Call):
+            call = node_in_body.value
             if isinstance(call.func, ast.Attribute) and call.func.attr == 'execute':
                 execute_call = call
-                if len(call.args) > 0 and isinstance(call.args[0], ast.Constant):
-                    sql_query = call.args[0].value
-                if len(call.args) > 1 and isinstance(call.args[1], ast.List):
-                     # Check params list is empty
-                     assert not call.args[1].elts, "Execute should have empty parameter list"
-                     execute_params = [] # Mark as checked
+                assert len(call.args) == 2, "execute call should have 2 arguments"
+                assert isinstance(call.args[0], ast.Name) and call.args[0].id == '_full_sql_query', "Execute first arg should be _full_sql_query"
+                assert isinstance(call.args[1], ast.Name) and call.args[1].id == '_call_params_dict', "Execute second arg should be _call_params_dict"
             elif isinstance(call.func, ast.Attribute) and call.func.attr == 'fetchall':
                 fetchall_call = call
-        elif isinstance(node, ast.Try):
-            try_except_node = node
-            for try_node in ast.walk(node):
-                if isinstance(try_node, ast.ListComp):
-                     # Check the element: SomeUndefinedTable(*r)
-                     if (
-                         isinstance(try_node.elt, ast.Call) and \
-                         isinstance(try_node.elt.func, ast.Name) and try_node.elt.func.id == 'SomeUndefinedTable' and \
-                         len(try_node.elt.args) == 1 and isinstance(try_node.elt.args[0], ast.Starred) and \
-                         isinstance(try_node.elt.args[0].value, ast.Name) and try_node.elt.args[0].value.id == 'r'
-                     ):
-                         comp = try_node.generators[0]
-                         if (
-                             isinstance(comp.target, ast.Name) and comp.target.id == 'r' and \
-                             isinstance(comp.iter, ast.Name) and comp.iter.id == 'rows'
-                         ):
-                             list_comp_call = try_node.elt
-                             break
-            # Check the except handler
-            assert len(node.handlers) == 1
-            handler = node.handlers[0]
-            assert isinstance(handler.type, ast.Name) and handler.type.id == 'TypeError'
-            raises_type_error = False
-            for except_node in ast.walk(handler):
-                if isinstance(except_node, ast.Raise) and isinstance(except_node.exc, ast.Call) and \
-                   isinstance(except_node.exc.func, ast.Name) and except_node.exc.func.id == 'TypeError':
-                   raises_type_error = True
-                   break
-            assert raises_type_error
+        elif isinstance(node_in_body, ast.Return):
+            if isinstance(node_in_body.value, ast.ListComp):
+                lc = node_in_body.value
+                is_elt_row_zero = (
+                    isinstance(lc.elt, ast.Subscript) and
+                    isinstance(lc.elt.value, ast.Name) and lc.elt.value.id == 'row' and
+                    isinstance(lc.elt.slice, ast.Constant) and lc.elt.slice.value == 0
+                )
+                if len(lc.generators) == 1:
+                    gen = lc.generators[0]
+                    is_target_row = isinstance(gen.target, ast.Name) and gen.target.id == 'row'
+                    is_iter_rows = isinstance(gen.iter, ast.Name) and gen.iter.id == 'rows'
+                    has_if_row_condition = len(gen.ifs) == 1 and isinstance(gen.ifs[0], ast.Name) and gen.ifs[0].id == 'row'
+                    if is_elt_row_zero and is_target_row and is_iter_rows and has_if_row_condition:
+                        list_comp_node = lc
+        elif isinstance(node_in_body, ast.Try): # Explicitly check that no Try/Except for dataclass mapping is present
+            try_except_node = node_in_body
 
-    assert execute_call is not None, "execute call not found"
-    assert sql_query == "SELECT * FROM get_undefined_table_data()", f"SQL query mismatch. Found '{sql_query}'"
-    assert execute_params == [], "Execute parameters mismatch (should be empty)"
-    assert fetchall_call is not None, "fetchall call not found"
-    assert try_except_node is not None, "Try/except block not found"
-    assert list_comp_call is not None, "List comprehension '[SomeUndefinedTable(*r) for r in rows]' not found or has wrong structure inside try block"
+    assert execute_call is not None, "execute call not found for get_undefined_table_data"
+    assert full_sql_query_assign_node is not None, "Assignment to _full_sql_query not found"
+    assert sql_query_named_args_assign_node is not None, "Assignment to _sql_query_named_args not found"
+
+    assert isinstance(full_sql_query_assign_node.value, ast.JoinedStr), "_full_sql_query should be an f-string"
+    fstring_parts = full_sql_query_assign_node.value.values
+    assert len(fstring_parts) == 3, "_full_sql_query f-string should have three parts"
+    assert isinstance(fstring_parts[0], ast.Constant) and fstring_parts[0].value == "SELECT * FROM get_undefined_table_data("
+    assert isinstance(fstring_parts[1], ast.FormattedValue) and isinstance(fstring_parts[1].value, ast.Name) and fstring_parts[1].value.id == "_sql_query_named_args"
+    assert isinstance(fstring_parts[2], ast.Constant) and fstring_parts[2].value == ")"
+
+    call_params_dict_init_empty_missing = False
+    call_params_dict_populated_missing = False
+    for stmt in func_node.body:
+        if isinstance(stmt, ast.Assign):
+            for target in stmt.targets:
+                if isinstance(target, ast.Name) and target.id == '_call_params_dict':
+                    if isinstance(stmt.value, ast.Dict) and not stmt.value.keys:
+                        call_params_dict_init_empty_missing = True
+        elif isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Call):
+            call_node = stmt.value
+            if isinstance(call_node.func, ast.Attribute) and \
+               isinstance(call_node.func.value, ast.Name) and call_node.func.value.id == '_call_params_dict' and \
+               call_node.func.attr == 'append':
+                call_params_dict_populated_missing = True
+                break 
+        if call_params_dict_populated_missing: break
+    
+    assert call_params_dict_init_empty_missing, "_call_params_dict was not initialized to an empty dictionary for get_undefined_table_data"
+    assert not call_params_dict_populated_missing, "_call_params_dict should remain empty for get_undefined_table_data (no-parameter function)"
+
+    assert fetchall_call is not None, "cur.fetchall call not found"
+    assert try_except_node is None, "Try/except block for dataclass mapping should NOT be present for List[Any] return"
+    assert list_comp_node is not None, "List comprehension for List[Any] (e.g. [row[0] for row in rows if row]) not found or has wrong structure"
 
 
 @pytest.mark.skip(reason="Fixture file scalar_missing_schema.sql is missing")

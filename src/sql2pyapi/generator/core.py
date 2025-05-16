@@ -10,11 +10,12 @@ import logging
 # Local imports
 from ..sql_models import ParsedFunction, ReturnColumn, SQLParameter
 from ..constants import *
+from ..constants import PYTHON_IMPORTS
 from ..errors import MissingSchemaError # Added import
 from .function_generator import _generate_function
 from .enum_generator import _generate_enum_class
 from .dataclass_generator import _generate_dataclass
-from .utils import _to_singular_camel_case
+from ..parser.utils import _to_singular_camel_case
 from .return_handlers import _determine_return_type
 
 # ===== SECTION: CONSTANTS AND CONFIGURATION =====
@@ -82,8 +83,9 @@ def generate_python_code(
         func.enum_types = parsed_enum_types or {}
         # Get the return type hint, dataclass name, and imports from the function
         # This uses the information already determined by the parser
-        return_type_hint, determined_dataclass_name, type_imports = _determine_return_type(func, current_custom_types)
+        return_type_hint_from_handler, determined_dataclass_name, type_imports = _determine_return_type(func, current_custom_types)
         current_imports.update(type_imports) # Add imports specific to the return type
+        func.return_type_hint = return_type_hint_from_handler # Set the attribute on the ParsedFunction object
 
         # If we have a dataclass name, ensure its definition exists in current_custom_types
         if determined_dataclass_name:

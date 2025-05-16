@@ -86,7 +86,11 @@ def main(
 
     try:
         # Get functions, schema imports, composite types, AND enum types from parser
-        functions, table_schema_imports, composite_types, enum_types = parse_sql(sql_content, schema_content=schema_content)
+        functions, table_schema_imports, composite_types, enum_types = parse_sql(
+            sql_content, 
+            schema_content=schema_content,
+            fail_on_missing_schema=not allow_missing_schemas
+        )
 
         if not functions:
             logging.warning("No functions found or parsed successfully. Output file will reflect this.")

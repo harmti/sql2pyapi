@@ -1,5 +1,6 @@
 # ===== SECTION: IMPORTS =====
 import re
+import inflection
 
 # ===== SECTION: FUNCTIONS =====
 
@@ -63,3 +64,43 @@ def generate_dataclass_name(sql_func_name: str, is_return: bool = False) -> str:
         pascal_case += 'Result'
     
     return pascal_case
+
+
+def _to_singular_camel_case(name: str) -> str:
+    """
+    Converts snake_case plural table names to SingularCamelCase for dataclass names.
+    Handles schema-qualified names by removing the schema prefix.
+    
+    Args:
+        name (str): The table name, typically plural (e.g., 'user_accounts' or 'public.users')
+        
+    Returns:
+        str: A singular CamelCase name suitable for a dataclass (e.g., 'UserAccount')
+        
+    Examples:
+        >>> _to_singular_camel_case('users')
+        'User'
+        >>> _to_singular_camel_case('order_items')
+        'OrderItem'
+        >>> _to_singular_camel_case('public.companies')
+        'Company'
+    """
+    if not name:
+        return "ResultRow" # Default for empty names, consistent with generator/utils
+        
+    # Handle schema-qualified names (e.g., 'public.companies')
+    # Extract just the table name part
+    table_name_part = name.split('.')[-1]
+    
+    # Use inflection library for better singularization
+    singular_snake = inflection.singularize(table_name_part)
+    # Convert snake_case to CamelCase
+    camel_case_name = inflection.camelize(singular_snake)
+    
+    # Ensure the name starts with a letter, if not, prefix (optional, but good practice from sanitize_for_class_name)
+    if camel_case_name and not camel_case_name[0].isalpha():
+        camel_case_name = 'T_' + camel_case_name # Or some other suitable prefix
+    if not camel_case_name:
+        return "ResultRow" # Fallback if somehow empty after processing
+        
+    return camel_case_name

@@ -5,6 +5,7 @@ This module provides helper functions to simplify testing through the public API
 
 from typing import Dict, List, Optional, Set, Tuple, Any
 from sql2pyapi.parser import parse_sql
+from sql2pyapi import generate_python_code
 from sql2pyapi.sql_models import ParsedFunction, SQLParameter, ReturnColumn
 
 
@@ -132,3 +133,85 @@ def parse_test_sql(sql_content: str, schema_content: Optional[str] = None) -> Tu
         Tuple of (parsed_functions, table_imports, composite_types, enum_types)
     """
     return parse_sql(sql_content, schema_content)
+
+# --- Utilities for Integration Tests ---
+import psycopg # type: ignore
+from pathlib import Path
+import importlib.util
+import sys
+import os
+
+# Ensure TEST_DB_CONN_STRING is available or defined
+# It might be in a constants file or environment variable for a real setup.
+# For now, define it here if not found elsewhere, but ideally it should be shared.
+TEST_DB_CONN_STRING = os.environ.get(
+    "TEST_DB_CONN_STRING", 
+    "postgresql://testuser:testpass@localhost:5433/testdb" # Updated to match system test DSN
+)
+
+async def execute_sql_on_db(conn_str: str, sql_statements: List[str]):
+    """Execute a list of SQL statements on the database."""
+    async with await psycopg.AsyncConnection.connect(conn_str) as conn:
+        async with conn.cursor() as cur:
+            for stmt in sql_statements:
+                if stmt.strip(): # Avoid executing empty statements
+                    await cur.execute(stmt)
+        await conn.commit() # Commit changes
+
+async def load_generated_api_module(tmp_path: Path, module_name: str, python_code: str) -> Any:
+    """Dynamically loads a Python module from code string."""
+    api_file = tmp_path / f"{module_name}.py"
+    api_file.write_text(python_code)
+
+    spec = importlib.util.spec_from_file_location(module_name, api_file)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"Could not create module spec for {module_name} at {api_file}")
+    
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module # Add to sys.modules before execution
+    try:
+        spec.loader.exec_module(module)
+    except Exception as e:
+        print(f"Error executing generated module {module_name}:\n{python_code}")
+        raise e
+    return module
+
+async def setup_db_and_load_api(
+    tmp_path: Path, 
+    sql_function_content: str, 
+    sql_schema_content: Optional[str] = None, 
+    module_name: str = "temp_db_api",
+    db_conn_string: str = TEST_DB_CONN_STRING
+) -> Any:
+    """
+    Sets up the database with schema and functions, then generates and loads the Python API.
+
+    Args:
+        tmp_path: Pytest tmp_path fixture for temporary file storage.
+        sql_function_content: String containing SQL function definitions.
+        sql_schema_content: Optional string with SQL schema (tables, types).
+        module_name: Name for the generated Python module.
+        db_conn_string: Connection string for the test database.
+
+    Returns:
+        The dynamically loaded Python module.
+    """
+    # 1. Execute SQL to set up DB (schema first, then functions)
+    sql_to_execute = []
+    if sql_schema_content:
+        sql_to_execute.append(sql_schema_content)
+    sql_to_execute.append(sql_function_content)
+    await execute_sql_on_db(db_conn_string, sql_to_execute)
+
+    # 2. Parse SQL and generate Python code
+    functions, table_imports, composite_types, enum_types = parse_sql(
+        sql_content=sql_function_content, 
+        schema_content=sql_schema_content
+    )
+    python_code = generate_python_code(
+        functions, table_imports, composite_types, enum_types
+    )
+
+    # 3. Load the generated code as a module
+    loaded_module = await load_generated_api_module(tmp_path, module_name, python_code)
+    return loaded_module

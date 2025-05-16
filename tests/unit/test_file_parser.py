@@ -162,8 +162,8 @@ def test_parse_sql_with_complex_file_content(tmp_path):
     assert f1.python_name == 'get_simple_data'
     assert f1.sql_comment == "Function 1: Simple SELECT with basic params\nNo return type specified, should default? (Test this assumption?)\nActually, RETURNS void is expected if nothing else matches"
     assert len(f1.params) == 2
-    assert f1.params[0] == SQLParameter(name='p_id', python_name='id', sql_type='integer', python_type='int', is_optional=False)
-    assert f1.params[1] == SQLParameter(name='p_name', python_name='name', sql_type='text', python_type='Optional[str]', is_optional=True)
+    assert f1.params[0] == SQLParameter(name='p_id', python_name='id', sql_type='integer', python_type='int', is_optional=False, has_sql_default=False)
+    assert f1.params[1] == SQLParameter(name='p_name', python_name='name', sql_type='text', python_type='Optional[str]', is_optional=True, has_sql_default=True)
     assert f1.return_type == 'None' # Explicitly returns void
     assert not f1.returns_table
     assert not f1.returns_setof
@@ -179,7 +179,7 @@ def test_parse_sql_with_complex_file_content(tmp_path):
     assert f2.returns_table # Returns 'users' table
     assert not f2.returns_setof
     # Check return_type based on table schema (generator handles Optional[Dataclass])
-    assert f2.return_type == 'Optional[GetUserByEmailResult]' # Expect generated name
+    assert f2.return_type == 'Optional[User]' # Expect generated name from table 'users'
     assert len(f2.return_columns) == 3 # From users schema
     assert f2.return_columns[0].name == 'user_id' and f2.return_columns[0].python_type == 'UUID' and not f2.return_columns[0].is_optional
     assert f2.return_columns[1].name == 'email' and f2.return_columns[1].python_type == 'str' and not f2.return_columns[1].is_optional # UNIQUE NOT NULL
@@ -198,7 +198,7 @@ def test_parse_sql_with_complex_file_content(tmp_path):
     assert f3.returns_table # Returns SETOF 'products'
     assert f3.returns_setof
     assert f3.setof_table_name == 'products'
-    assert f3.return_type == 'List[Products]' # Expect generated name
+    assert f3.return_type == 'List[Product]' # Expect generated name, corrected to singular
     assert len(f3.return_columns) == 4 # From products schema
     assert f3.return_columns[0].name == 'product_id' and f3.return_columns[0].python_type == 'int' and not f3.return_columns[0].is_optional
     assert f3.return_columns[3].name == 'price' and f3.return_columns[3].python_type == 'Decimal' and not f3.return_columns[3].is_optional
@@ -288,7 +288,7 @@ def test_parse_sql_with_complex_file_content(tmp_path):
     assert f9.params[0] == SQLParameter(name='p_order_id', python_name='order_id', sql_type='bigint', python_type='int', is_optional=False)
     assert f9.returns_table # Returns 'public.orders' table
     assert not f9.returns_setof
-    assert f9.return_type == 'Optional[GetOrderDetailsResult]' # Expect generated name
+    assert f9.return_type == 'Optional[Order]' # Expect generated name from table (singularized)
     assert len(f9.return_columns) == 4 # From public.orders schema
     assert f9.return_columns[0].name == 'order_id' and not f9.return_columns[0].is_optional
     assert f9.return_columns[1].name == 'user_id' and f9.return_columns[1].is_optional # FK allows null
@@ -309,7 +309,7 @@ def test_parse_sql_with_complex_file_content(tmp_path):
     assert f10.returns_table # Returns SETOF 'public.orders'
     assert f10.returns_setof
     assert f10.setof_table_name == 'public.orders'
-    assert f10.return_type == 'List[Orders]' # Expect generated name based on table
+    assert f10.return_type == 'List[Order]' # Expect generated name based on table (singularized)
     assert len(f10.return_columns) == 4 # From public.orders schema
     assert 'dataclass' in f10.required_imports
     assert 'List' in f10.required_imports

@@ -1,6 +1,6 @@
 # ===== SECTION: IMPORTS =====
 from dataclasses import dataclass, field
-from typing import List, Dict, Optional, Tuple, Any, Set  # Added Any and Set
+from typing import List, Dict, Optional, Tuple, Any, Set, Union  # Added Union
 from uuid import UUID
 from datetime import datetime, date
 from decimal import Decimal
@@ -54,6 +54,20 @@ PYTHON_IMPORTS = {
 # Core data structures for representing SQL functions, parameters, and return types
 
 @dataclass
+class SQLType:
+    name: str  # Original SQL type name (e.g., 'TEXT', 'my_schema.my_type', 'users')
+    python_type: str  # Corresponding Python type (e.g., 'str', 'MyType', 'User')
+    is_array: bool = False
+    is_setof: bool = False  # If the type is part of a SETOF construct
+    is_table_type: bool = False # True if 'name' refers to a known table
+    is_composite_type: bool = False # True if 'name' refers to a known composite type (CREATE TYPE)
+    is_enum_type: bool = False # True if 'name' refers to a known ENUM type
+    columns: List['ReturnColumn'] = field(default_factory=list) # For composite types / tables; Forward reference for ReturnColumn
+    type_name_override: Optional[str] = None # e.g., to 'Any' if schema missing
+    array_dimensions: int = 0 # Number of array dimensions if is_array is True
+
+
+@dataclass
 class SQLParameter:
     """
     Represents a parameter in a SQL function.
@@ -64,12 +78,14 @@ class SQLParameter:
         sql_type (str): Original SQL type (e.g., 'uuid')
         python_type (str): Mapped Python type (e.g., 'UUID')
         is_optional (bool): Whether the parameter has a DEFAULT value in SQL
+        has_sql_default (bool): Whether the parameter has a SQL DEFAULT value
     """
     name: str
     python_name: str
     sql_type: str
     python_type: str
     is_optional: bool = False
+    has_sql_default: bool = False
 
 
 @dataclass
@@ -117,7 +133,7 @@ class ParsedFunction:
     sql_name: str
     python_name: str
     params: List[SQLParameter] = field(default_factory=list)
-    return_type: str = "None"
+    return_type: Union[SQLType, str] = "None"
     return_columns: List[ReturnColumn] = field(default_factory=list)
     return_type_hint: Optional[str] = None # Add placeholder for generator
     returns_table: bool = False
