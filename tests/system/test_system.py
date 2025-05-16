@@ -329,19 +329,23 @@ async def test_get_item_summaries_composite(db_conn, generated_api_module):
     assert summary_map["inactive Chair"] == Decimal("111.98") # Ensure NUMERIC precision handled
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(reason="Handling of anonymous RECORD returns needs verification in generated code.")
+@pytest.mark.xfail(reason="Function RETURNS RECORD, which requires an AS clause in the call, not yet fully supported by generator.") # Added xfail
 async def test_get_item_name_and_mood_record(db_conn, generated_api_module):
-    """Test function returning an anonymous RECORD."""
-    record = await generated_api_module.get_item_name_and_mood(db_conn, item_id=1)
-    # How is RECORD represented? Tuple? Generic object? NamedTuple?
-    # This assertion will likely need adjustment based on sql2pyapi output.
-    assert record is not None
-    # Example: Assuming it returns a tuple
-    # assert record == ("Apple", "happy")
-    # Example: Assuming a generated NamedTuple or object with attributes
-    # assert record.name == "Apple"
-    # assert record.mood == "happy"
-    pytest.fail("Need to inspect generated code for anonymous RECORD handling.")
+    """Test retrieving item name and mood as an anonymous RECORD."""
+    # Assumes first item is Apple (id=1) with mood 'happy'
+    record_result = await generated_api_module.get_item_name_and_mood(db_conn, item_id=1)
+    # The structure of record_result depends on how RECORD is handled.
+    # If it's a tuple: (name, mood_value)
+    # If it becomes a Pydantic model or dataclass, field access is needed.
+    # Based on current psycopg3 behavior for unnamed RECORD, it should be a tuple.
+    assert isinstance(record_result, tuple), "RECORD should return a tuple"
+    assert len(record_result) == 2, "Expected two fields in the tuple"
+    assert record_result[0] == "Apple"
+    # Assuming 'mood' is an enum and its .value is compared or it's directly the string
+    # If Mood enum is available in generated_api_module and used:
+    # assert record_result[1] == generated_api_module.Mood.HAPPY
+    # If it's just the string value directly from DB:
+    assert record_result[1] == "happy" 
 
 @pytest.mark.asyncio
 @pytest.mark.xfail(reason="Handling of SETOF anonymous RECORD returns needs verification.")
