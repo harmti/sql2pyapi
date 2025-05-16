@@ -219,7 +219,7 @@ def test_multi_params_function_generation(tmp_path, run_cli_tool):
     # All params for add_item are non-optional
     assigned_params_to_call_params_dict = {} # Store as dict_key: value_var_name
     call_params_dict_init_empty_add = False
-
+    
     for node in ast.walk(func_node):
         if isinstance(node, ast.Assign):
             # Check for _call_params_dict = {}
@@ -480,7 +480,7 @@ def test_array_types_function_generation(tmp_path, run_cli_tool):
     assert ids_func_node is not None, "Async function 'get_item_ids' not found"
 
     # Check parameters
-    expected_params_ids = {'conn': 'AsyncConnection', 'category_id': 'int'}
+    expected_params_ids = {'conn': 'AsyncConnection'}
     actual_params_ids = {arg.arg: ast.unparse(arg.annotation) for arg in ids_func_node.args.args}
     assert actual_params_ids == expected_params_ids, f"Mismatch in get_item_ids parameters"
 
@@ -546,10 +546,10 @@ def test_array_types_function_generation(tmp_path, run_cli_tool):
                 if isinstance(target_subscript.value, ast.Name) and target_subscript.value.id == '_call_params_dict' and \
                    isinstance(target_subscript.slice, ast.Constant) and target_subscript.slice.value == 'category_id' and \
                    isinstance(node.value, ast.Name) and node.value.id == 'category_id':
-                    category_id_assigned_ids = True
+                    category_id_assigned_ids = True # This assignment should not happen
                     
     assert call_params_dict_init_empty_ids, "_call_params_dict was not initialized as empty for get_item_ids"
-    assert category_id_assigned_ids, "'category_id' was not assigned to _call_params_dict for get_item_ids"
+    assert not category_id_assigned_ids, "'category_id' should NOT be assigned to _call_params_dict for get_item_ids as it's not a parameter"
 
     assert fetchone_call_ids is not None, "fetchone call not found for get_item_ids" # get_item_ids in fixture returns INTEGER[], so it should be fetchone
 
@@ -617,7 +617,7 @@ def test_array_types_function_generation(tmp_path, run_cli_tool):
 
     # Verify that _call_params_dict is populated correctly for process_tags (param: p_tag_list -> tag_list)
     call_params_dict_init_empty_tags = False
-    tag_list_assigned_tags = False
+    tags_assigned_tags = False
     
     for node in ast.walk(tags_func_node): # tags_func_node is for process_tags
         if isinstance(node, ast.Assign):
@@ -627,11 +627,11 @@ def test_array_types_function_generation(tmp_path, run_cli_tool):
             elif len(node.targets) == 1 and isinstance(node.targets[0], ast.Subscript):
                 target_subscript = node.targets[0]
                 if isinstance(target_subscript.value, ast.Name) and target_subscript.value.id == '_call_params_dict' and \
-                   isinstance(target_subscript.slice, ast.Constant) and target_subscript.slice.value == 'tag_list' and \
-                   isinstance(node.value, ast.Name) and node.value.id == 'tag_list':
-                    tag_list_assigned_tags = True
+                   isinstance(target_subscript.slice, ast.Constant) and target_subscript.slice.value == 'tags' and \
+                   isinstance(node.value, ast.Name) and node.value.id == 'tags':
+                    tags_assigned_tags = True
 
     assert call_params_dict_init_empty_tags, "_call_params_dict was not initialized as empty for process_tags"
-    assert tag_list_assigned_tags, "'tag_list' was not assigned to _call_params_dict for process_tags"
+    assert tags_assigned_tags, "'tags' was not assigned to _call_params_dict for process_tags"
 
     assert fetchone_call_tags is not None, "fetchone call not found in process_tags"

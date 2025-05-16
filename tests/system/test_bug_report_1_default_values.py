@@ -5,7 +5,7 @@ from typing import Optional, List
 from sql2pyapi import parse_sql, generate_python_code
 from sql2pyapi.sql_models import SQLParameter, ParsedFunction
 
-from tests.test_utils import ( # Reverted to absolute-like import from project root
+from tests.test_utils import ( # Reverted back to absolute-like import
     create_test_function,
     create_test_table,
     setup_db_and_load_api, 

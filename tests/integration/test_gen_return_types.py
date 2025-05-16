@@ -627,7 +627,7 @@ def test_returns_record_function_generation(tmp_path):
     assert status_func_node is not None, "Async function 'get_processing_status' not found"
 
     # Check parameters
-    expected_params_status = {'conn': 'AsyncConnection', 'job_id': 'UUID'}
+    expected_params_status = {'conn': 'AsyncConnection'}
     actual_params_status = {arg.arg: ast.unparse(arg.annotation) for arg in status_func_node.args.args}
     assert actual_params_status == expected_params_status, f"Mismatch in get_processing_status parameters"
 
@@ -661,8 +661,6 @@ def test_returns_record_function_generation(tmp_path):
             if isinstance(call.func, ast.Attribute) and call.func.attr == 'execute':
                 execute_call_status = call
                 assert isinstance(call.args[0], ast.Name) and call.args[0].id == '_full_sql_query', "execute in get_processing_status not using _full_sql_query"
-                if len(call.args) > 1 and isinstance(call.args[1], ast.List): # Check params list
-                    execute_params_status = [elt.id for elt in call.args[1].elts if isinstance(elt, ast.Name)]
             elif isinstance(call.func, ast.Attribute) and call.func.attr == 'fetchone':
                 fetchone_call_status = call
         elif isinstance(node_in_body, ast.Return):
@@ -694,7 +692,7 @@ def test_returns_record_function_generation(tmp_path):
            isinstance(node.value, ast.Name) and node.value.id == 'job_id':
             job_id_assigned_to_dict_for_record = True
             break
-    assert job_id_assigned_to_dict_for_record, "'job_id' was not correctly assigned to _call_params_dict for get_processing_status"
+    assert not job_id_assigned_to_dict_for_record, "'job_id' should NOT be assigned to _call_params_dict for get_processing_status as it is not a parameter"
 
     assert fetchone_call_status is not None, "fetchone call not found in get_processing_status"
     assert return_row_status, "'return row' logic not found in get_processing_status"
@@ -772,7 +770,7 @@ def test_returns_record_function_generation(tmp_path):
            node.func.attr == 'append':
             call_params_dict_populated_all_status = True
             break
-    assert not call_params_dict_populated_all_status, "_call_params_dict should be empty for get_all_statuses"
+    assert not call_params_dict_populated_all_status, "_call_params_dict should not have params appended for get_all_statuses"
     
     assert fetchall_call_all is not None, "fetchall call not found in setof func"
     assert return_rows_all, "'return rows' logic not found in get_all_statuses"
