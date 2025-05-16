@@ -64,4 +64,5 @@ asyncio_mode = "strict"
 testpaths = [
     "tests/unit",
     "tests/integration",
+    "tests/system",
 ]

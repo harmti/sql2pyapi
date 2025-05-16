@@ -220,6 +220,16 @@ sql2pyapi functions.sql generated_api.py --no-helpers
 * Run tests: `pytest`
 * Linting/Formatting: `ruff check .` and `ruff format .`
 
+### Testing
+
+The project includes unit, integration, and system tests. To run all tests, use the following command:
+
+```bash
+uv run pytest
+```
+
+This command will automatically discover and execute tests from `tests/unit`, `tests/integration`, and `tests/system` directories due to the configuration in `pyproject.toml`.
+
 ## Return Type Handling (`List` vs. `Optional`)
 
 `sql2pyapi` aims for a predictable mapping from SQL function return types to Python type hints. A key aspect is how it determines whether a Python function should return a `List[...]` or an `Optional[...]`.
