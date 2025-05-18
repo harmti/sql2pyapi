@@ -20,7 +20,7 @@ from ..comment_parser import COMMENT_REGEX
 TYPE_REGEX = re.compile(
     r"CREATE\s+TYPE\s+([a-zA-Z0-9_.]+)"  # 1: Type name
     r"\s+AS\s*\("  # AS (
-    r"(.*?)" # 2: Everything inside parenthesis (non-greedy)
+    r"([\s\S]*?)" # 2: Everything inside parenthesis (non-greedy, including newlines and all characters)
     r"\)"        # Closing parenthesis
     , re.IGNORECASE | re.DOTALL | re.MULTILINE
 )
@@ -49,27 +49,38 @@ def parse_create_type(sql_content: str,
     composite_types = existing_composite_types or {}
     composite_type_imports = existing_composite_type_imports or {}
     
-    # Use regex to find all CREATE TYPE statements
-    type_regex = TYPE_REGEX
     logging.debug(f"COMPOSITE_TYPES before parsing: {list(composite_types.keys())}")
-
-    for match in type_regex.finditer(sql_content):
-        logging.debug(f"TYPE_REGEX matched: {match.groups()}") # Log captured groups
+    
+    # Find all CREATE TYPE statements using a simpler regex pattern
+    create_type_pattern = re.compile(r"CREATE\s+TYPE\s+([a-zA-Z0-9_.]+)\s+AS\s*\(", re.IGNORECASE)
+    
+    for match in create_type_pattern.finditer(sql_content):
         type_name = match.group(1).strip()
-        field_defs_str = match.group(2).strip()
+        start_pos = match.end()  # Position right after the opening parenthesis
         
-        # Clean up the field definitions string
-        # Use the already imported COMMENT_REGEX from the parent package
-        field_defs_str_cleaned = COMMENT_REGEX.sub("", field_defs_str).strip()
-        field_defs_str_cleaned = "\n".join(line.strip() for line in field_defs_str_cleaned.splitlines() if line.strip())
-
-        logging.debug(f"  Processing CREATE TYPE: {type_name}") # Log type name
-        logging.debug(f"  Cleaned field defs:\n{field_defs_str_cleaned}") # Log cleaned fields
+        # Find the matching closing parenthesis using a parenthesis counter
+        paren_depth = 1
+        end_pos = start_pos
+        
+        for i in range(start_pos, len(sql_content)):
+            if sql_content[i] == '(':
+                paren_depth += 1
+            elif sql_content[i] == ')':
+                paren_depth -= 1
+                if paren_depth == 0:
+                    end_pos = i
+                    break
+        
+        # Extract the field definitions string including all comments
+        field_defs_str = sql_content[start_pos:end_pos].strip()
+        
+        logging.debug(f"  Processing CREATE TYPE: {type_name}")
+        logging.debug(f"  Original field defs with comments:\n{field_defs_str}")
         logging.info(f"Found CREATE TYPE for: {type_name}")
-
+        
         try:
             # Use parse_column_definitions to parse the fields inside the type
-            fields, required_imports = parse_column_definitions(field_defs_str_cleaned, 
+            fields, required_imports = parse_column_definitions(field_defs_str, 
                                                               context=f"type {type_name}",
                                                               enum_types=enum_types,
                                                               table_schemas=table_schemas)

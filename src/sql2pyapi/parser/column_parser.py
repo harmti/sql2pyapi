@@ -25,19 +25,62 @@ def clean_and_split_column_fragments(col_defs_str: str) -> List[str]:
     """Cleans comments and splits column definition string into fragments."""
     if not col_defs_str:
         return []
-
-    # 1. Split the ORIGINAL string by comma OR newline first
-    # Corrected regex: Split on comma or escaped newline
-    raw_fragments = re.split(r'[,\n]', col_defs_str)
+        
+    logging.debug(f"Original column definitions string:\n{col_defs_str}")
     
-    cleaned_fragments = []
-    # 2. Clean comments from each fragment individually
-    for fragment in raw_fragments:
-        cleaned_part = COMMENT_REGEX.sub("", fragment).strip()
-        if cleaned_part:
-            cleaned_fragments.append(cleaned_part)
+    # Split by lines first to handle each line separately
+    lines = col_defs_str.splitlines()
+    logging.debug(f"Split into {len(lines)} lines: {lines}")
+    
+    # Process each line to extract column definitions without comments
+    processed_lines = []
+    for i, line in enumerate(lines):
+        # Skip empty lines
+        if not line.strip():
+            continue
             
-    return cleaned_fragments
+        # Extract the column definition part before any comment
+        parts = line.split('--', 1)[0].strip()
+        if parts:
+            processed_lines.append(parts)
+            logging.debug(f"Line {i}: '{line}' -> '{parts}'")
+        else:
+            logging.debug(f"Line {i}: '{line}' -> EMPTY after comment removal")
+    
+    # Now split by commas, but only if they're not inside parentheses
+    fragments = []
+    
+    # First join all processed lines with commas
+    combined = ','.join(processed_lines)
+    logging.debug(f"Combined processed lines: '{combined}'")
+    
+    # Then parse character by character to handle parentheses correctly
+    current_fragment = ""
+    paren_depth = 0
+    
+    for char in combined:
+        if char == '(':
+            paren_depth += 1
+            current_fragment += char
+        elif char == ')':
+            paren_depth -= 1
+            current_fragment += char
+        elif char == ',' and paren_depth == 0:
+            # Only split on commas outside of parentheses
+            if current_fragment.strip():
+                fragments.append(current_fragment.strip())
+                logging.debug(f"Found fragment: '{current_fragment.strip()}'")
+            current_fragment = ""
+        else:
+            current_fragment += char
+    
+    # Don't forget the last fragment
+    if current_fragment.strip():
+        fragments.append(current_fragment.strip())
+        logging.debug(f"Added final fragment: '{current_fragment.strip()}'")
+    
+    logging.debug(f"Final fragments: {fragments}")
+    return fragments
 
 
 def parse_single_column_fragment(current_def: str, columns: List[ReturnColumn], required_imports: Set[str], 
@@ -69,7 +112,10 @@ def parse_single_column_fragment(current_def: str, columns: List[ReturnColumn], 
             last_col.is_optional = "not null" not in new_constraint_part and "primary key" not in new_constraint_part
             try:
                 col_context = f"column '{last_col.name}'" + (f" in {context}" if context else "")
-                py_type, imports = map_sql_to_python_type(merged_type, last_col.is_optional, col_context, enum_types, table_schemas)
+                # For composite types, don't make columns optional by default
+                is_composite_type = context and "type " in context
+                use_optional = last_col.is_optional and not is_composite_type
+                py_type, imports = map_sql_to_python_type(merged_type, use_optional, col_context, enum_types, table_schemas)
                 last_col.python_type = py_type # Update the existing column object
                 required_imports.update(imports) # Update the main import set
             except Exception as e:
@@ -127,6 +173,12 @@ def parse_single_column_fragment(current_def: str, columns: List[ReturnColumn], 
     # --- Determine optionality and map type --- 
     is_optional = "not null" not in constraint_part and "primary key" not in constraint_part
     
+    # Check if this is a column in a composite type definition
+    is_composite_type = context and "type " in context
+    
+    # For composite types, don't make columns optional by default (unless explicitly NULL)
+    use_optional = is_optional and not is_composite_type
+    
     # Special handling for ENUM types in table columns
     if sql_type_extracted in enum_types:
         # Convert enum_name to PascalCase for Python Enum class name
@@ -136,12 +188,12 @@ def parse_single_column_fragment(current_def: str, columns: List[ReturnColumn], 
     else:
         try:
             col_context = f"column '{col_name}'" + (f" in {context}" if context else "")
-            py_type, imports = map_sql_to_python_type(sql_type_extracted, is_optional, col_context, enum_types, table_schemas)
+            py_type, imports = map_sql_to_python_type(sql_type_extracted, use_optional, col_context, enum_types, table_schemas)
             required_imports.update(imports) # Update main import set
         except Exception as e:
             logging.warning(str(e))
-            py_type = "Any" if not is_optional else "Optional[Any]"
-            required_imports.update({"Any", "Optional"} if is_optional else {"Any"})
+            py_type = "Any" if not use_optional else "Optional[Any]"
+            required_imports.update({"Any", "Optional"} if use_optional else {"Any"})
 
     # --- Create and return column --- 
     return ReturnColumn(name=col_name, sql_type=sql_type_extracted, python_type=py_type, is_optional=is_optional)
