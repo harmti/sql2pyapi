@@ -230,40 +230,40 @@ async def test_search_items(db_conn, generated_api_module):
     assert len(results_an) == 1
     assert results_an[0].item_name == "Banana"
 
-# @pytest.mark.asyncio
-# async def test_add_related_item(db_conn, generated_api_module):
-#     """Test adding a related item and checking the returned UUID."""
-#     # TODO: Enable this test once sql2pyapi can parse PL/pgSQL functions like add_related_item
-#     item_id = 1 # Apple
-#     notes = "Related note for apple"
-#     config = {"setting": "value", "enabled": True}
-#     specific_uuid = uuid.uuid4()
-#
-#     # Call with specific UUID
-#     returned_uuid = await generated_api_module.add_related_item(
-#         db_conn,
-#         item_id=item_id,
-#         notes=notes,
-#         config=config, # Pass dict directly, assuming json conversion
-#         uuid=specific_uuid
-#     )
-#     assert returned_uuid == specific_uuid
-#
-#     # Verify in DB
-#     async with db_conn.cursor() as cur:
-#         await cur.execute("SELECT item_id, notes, config FROM related_items WHERE uuid_key = %s", (specific_uuid,))
-#         row = await cur.fetchone()
-#         assert row is not None
-#         assert row[0] == item_id
-#         assert row[1] == notes
-#         assert row[2] == config # Check if JSON comes back correctly
-#
-#     # Call with default UUID
-#     returned_uuid_default = await generated_api_module.add_related_item(
-#         db_conn, item_id=2, notes="Another note" # config defaults to {}
-#     )
-#     assert isinstance(returned_uuid_default, uuid.UUID)
-#     assert returned_uuid_default != specific_uuid
+@pytest.mark.asyncio
+async def test_add_related_item(db_conn, generated_api_module):
+    """Test adding a related item and checking the returned UUID."""
+    # This test verifies that PL/pgSQL functions with DECLARE blocks and RETURNING clauses work
+    item_id = 1 # Apple
+    notes = "Related note for apple"
+    config = {"setting": "value", "enabled": True}
+    specific_uuid = uuid.uuid4()
+
+    # Call with specific UUID
+    returned_uuid = await generated_api_module.add_related_item(
+        db_conn,
+        item_id=item_id,
+        notes=notes,
+        config=config, # Pass dict directly, assuming json conversion
+        uuid=specific_uuid
+    )
+    assert returned_uuid == specific_uuid
+
+    # Verify in DB
+    async with db_conn.cursor() as cur:
+        await cur.execute("SELECT item_id, notes, config FROM related_items WHERE uuid_key = %s", (specific_uuid,))
+        row = await cur.fetchone()
+        assert row is not None
+        assert row[0] == item_id
+        assert row[1] == notes
+        assert row[2] == config # Check if JSON comes back correctly
+
+    # Call with default UUID
+    returned_uuid_default = await generated_api_module.add_related_item(
+        db_conn, item_id=2, notes="Another note" # config defaults to {}
+    )
+    assert isinstance(returned_uuid_default, uuid.UUID)
+    assert returned_uuid_default != specific_uuid
 
 @pytest.mark.asyncio
 async def test_update_item_timestamp(db_conn, generated_api_module):

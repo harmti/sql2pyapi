@@ -27,11 +27,10 @@ FUNCTION_REGEX = re.compile(
     r"""
     CREATE(?:\s+OR\s+REPLACE)?\s+FUNCTION\s+
     (?P<func_name>[a-zA-Z0-9_.]+)              # Function name (Group 'func_name')
-    \s*\( (?P<params>[^)]*) \) \s*              # Use s* after params
-    RETURNS \s+                                # RETURNS keyword
-    (?P<return_def>.*?)                      # Non-greedy return definition (DOTALL allows newlines)
-    # Positive Lookahead for LANGUAGE or AS $$
-    (?=\s+(?:LANGUAGE|AS\s*\$\$))          
+    \s*\(\s*(?P<params>.*?)\s*\)\s*            # Parameters with flexible whitespace
+    \s+RETURNS\s+                              # RETURNS keyword
+    (?P<return_def>.*?)                        # Return definition (non-greedy)
+    (?=\s+(?:AS|LANGUAGE))                    # Positive lookahead for AS or LANGUAGE
     """,
     re.IGNORECASE | re.DOTALL | re.VERBOSE,
 )
@@ -241,6 +240,23 @@ class SQLParser:
         match_list = list(matches)
         match_count = len(match_list)
         logging.debug(f"FUNCTION_REGEX found {match_count} potential matches.")
+        
+        # Log all function names found by regex for debugging
+        for m in match_list:
+            func_name = m.groupdict().get('func_name', 'UNKNOWN').strip()
+            logging.debug(f"FUNCTION_REGEX matched: {func_name}")
+            
+        # Extract all function names from the SQL content for comparison
+        func_pattern = re.compile(r"CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+([a-zA-Z0-9_.]+)", re.IGNORECASE)
+        all_funcs = func_pattern.findall(sql_no_comments)
+        logging.debug(f"All functions in SQL: {', '.join(all_funcs)}")
+        
+        # Check for missing functions
+        matched_funcs = [m.groupdict().get('func_name', '').strip() for m in match_list]
+        missing_funcs = [f for f in all_funcs if f not in matched_funcs]
+        if missing_funcs:
+            logging.warning(f"Functions not matched by FUNCTION_REGEX: {', '.join(missing_funcs)}")
+            # This indicates a problem with our regex pattern
 
         functions = []
         lines = sql_content.splitlines()

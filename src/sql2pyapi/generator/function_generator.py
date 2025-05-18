@@ -90,7 +90,7 @@ def _generate_function_body(func: ParsedFunction, final_dataclass_name: Optional
     body_lines = []
     param_preparation_lines = []
 
-    # --- Prepare arguments for SQL call (handles enums) ---
+    # --- Prepare arguments for SQL call (handles enums and special types) ---
     enum_types = getattr(func, 'enum_types', {}) if hasattr(func, 'enum_types') else {}
     def is_enum_param(param_sql_type: str) -> bool:
         if param_sql_type in enum_types:
@@ -98,14 +98,30 @@ def _generate_function_body(func: ParsedFunction, final_dataclass_name: Optional
         if '.' in param_sql_type and param_sql_type.split('.')[-1] in enum_types:
             return True
         return False
+        
+    def is_json_param(param_sql_type: str) -> bool:
+        return param_sql_type.lower() in ('json', 'jsonb')
 
+    # Check if we need special parameter handling
     has_any_enum_params = any(is_enum_param(p.sql_type) for p in sorted_params)
+    has_any_json_params = any(is_json_param(p.sql_type) for p in sorted_params)
+    
+    # Only add parameter preparation code if needed
     if has_any_enum_params:
         param_preparation_lines.append("# Extract .value from enum parameters")
         for p in sorted_params:
             if is_enum_param(p.sql_type):
                 # Ensure None check for the enum object itself before accessing .value
                 param_preparation_lines.append(f"{p.python_name}_value = {p.python_name}.value if {p.python_name} is not None else None")
+    
+    # Handle JSON parameters separately to avoid breaking existing tests
+    if has_any_json_params:
+        param_preparation_lines.append("# Handle JSON parameters")
+        param_preparation_lines.append("import json")
+        for p in sorted_params:
+            if is_json_param(p.sql_type):
+                # Convert Python dict to JSON string for JSON parameters
+                param_preparation_lines.append(f"{p.python_name}_json = json.dumps({p.python_name}) if {p.python_name} is not None else None")
     
     body_lines.extend(param_preparation_lines)
 
@@ -116,7 +132,15 @@ def _generate_function_body(func: ParsedFunction, final_dataclass_name: Optional
 
     for p in sorted_params:
         param_key_for_dict = p.python_name
-        actual_value_var = f"{p.python_name}_value" if is_enum_param(p.sql_type) else p.python_name
+        
+        # Determine the actual value variable to use based on parameter type
+        if is_enum_param(p.sql_type):
+            actual_value_var = f"{p.python_name}_value"
+        elif is_json_param(p.sql_type) and has_any_json_params:  # Only use _json suffix if we have JSON params
+            # For JSON parameters, we use the JSON-converted value but keep the original parameter name
+            actual_value_var = f"{p.python_name}_json"
+        else:
+            actual_value_var = p.python_name
         
         if p.is_optional:
             body_lines.append(f"if {p.python_name} is not None: # User provided a value, or it's an explicit None for a DEFAULT NULL param")
