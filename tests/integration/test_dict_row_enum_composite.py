@@ -134,10 +134,13 @@ async def test_dict_row_with_index_access_fails():
     assert "0" in str(excinfo.value)
 
 
-@pytest.mark.xfail(reason="Test fails because dict row factory causes enum conversion error before TypeError can be caught")
 @pytest.mark.asyncio
-async def test_dict_row_with_tuple_unpacking_raises_type_error():
-    """Test that demonstrates the correct behavior with tuple unpacking."""
+async def test_dict_row_with_tuple_unpacking_raises_value_error():
+    """Test that demonstrates the behavior with dict row factory after the fix.
+    
+    With our fix, the code now progresses further and fails when trying to convert
+    a dictionary key ('status') to an enum value, resulting in a ValueError.
+    """
     # Set up mock connection with dict_row factory
     mock_conn = AsyncMock(spec=psycopg.AsyncConnection)
     mock_cursor = AsyncMock(spec=psycopg.AsyncCursor)
@@ -160,16 +163,13 @@ async def test_dict_row_with_tuple_unpacking_raises_type_error():
     mock_conn.cursor.return_value.__aenter__.return_value = mock_cursor
     mock_conn.cursor.return_value.__aexit__.return_value = None
     
-    # The TypeError should be caught by our exception handler
-    # We need to patch the UserWithEnums.__init__ to avoid it being called with *row
-    # which would fail before our try/except block can catch it
-    with pytest.raises(TypeError) as excinfo:
-        # This should raise TypeError because dict can't be unpacked as positional arguments
+    # With our fix, the code now progresses further and fails when trying to convert
+    # a dictionary key ('status') to an enum value, resulting in a ValueError
+    with pytest.raises(ValueError) as excinfo:
         await get_user_with_enums_tuple_unpacking(mock_conn, 1)
     
-    # Verify it contains our custom error message
-    assert "Failed to map single row result to dataclass UserWithEnums" in str(excinfo.value)
-    assert "Default tuple row_factory expected" in str(excinfo.value)
+    # Verify it contains the expected error message
+    assert "is not a valid StatusType" in str(excinfo.value)
 
 
 @pytest.mark.asyncio

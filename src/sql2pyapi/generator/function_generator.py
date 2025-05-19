@@ -257,13 +257,35 @@ def _generate_setof_return_body(func: ParsedFunction, final_dataclass_name: Opti
                     field_assignments.append(f"{col.name}=row[{i}]")
             field_assignments_str = ",\n                ".join(field_assignments)
             
-            body_lines.append(f"        return {singular_class_name}(\n                {field_assignments_str}\n            )")
+            body_lines.append(f"        try:")
+            body_lines.append(f"            # First try with tuple unpacking to handle both tuple and dict row factories")
+            body_lines.append(f"            instance = {singular_class_name}(*row)")
+            
+            # Convert string values to enum objects after creating the instance
+            for i, col in enumerate(func.return_columns):
+                if not col.python_type.startswith(('Optional[', 'List[')) and not col.python_type in ('str', 'int', 'float', 'bool', 'UUID', 'datetime', 'date', 'Decimal', 'Any', 'dict', 'Dict[str, Any]'):
+                    body_lines.append(f"            if instance.{col.name} is not None:")
+                    body_lines.append(f"                instance.{col.name} = {col.python_type}(instance.{col.name})")
+            
+            body_lines.append(f"            return instance")
+            body_lines.append(f"        except (TypeError, KeyError) as e:")
+            body_lines.append(f"            # Fallback to explicit construction if tuple unpacking fails")
+            body_lines.append(f"            try:")
+            body_lines.append(f"                return {singular_class_name}(\n                    {field_assignments_str}\n                )")
+            body_lines.append(f"            except Exception as inner_e:")
+            body_lines.append(f"                # Re-raise the original error if the fallback also fails")
+            body_lines.append(f"                raise TypeError(f\"Failed to map row to {singular_class_name}. Original error: {{e}}, Fallback error: {{inner_e}}\") from e")
+            
             body_lines.append(f"")
+            
+            # Main try block for the function
             body_lines.append(f"    try:")
             body_lines.append(f"        return [create_{singular_class_name.lower()}(row) for row in rows]")
         else:
+            # No enum columns case - just use tuple unpacking directly
             body_lines.append(f"    try:")
             body_lines.append(f"        return [{singular_class_name}(*r) for r in rows]")
+
             
         body_lines.append(f"    except TypeError as e:")
         body_lines.append(f"        # Tuple unpacking failed. This often happens if the DB connection")
@@ -342,7 +364,8 @@ def _generate_single_row_return_body(func: ParsedFunction, final_dataclass_name:
             field_assignments_str = ",\n                ".join(field_assignments)
             
             body_lines.append(f"    try:")
-            body_lines.append(f"        instance = {singular_class_name}(\n                {field_assignments_str}\n            )")
+            body_lines.append(f"        # First try with tuple unpacking to handle both tuple and dict row factories")
+            body_lines.append(f"        instance = {singular_class_name}(*row)")
             body_lines.append(f"        # Check for 'empty' composite rows (all values are None) returned as a single tuple")
             body_lines.append(f"        # Note: This check might be DB-driver specific for NULL composites")
             body_lines.append(f"        if all(v is None for v in row):")
@@ -356,6 +379,22 @@ def _generate_single_row_return_body(func: ParsedFunction, final_dataclass_name:
                     body_lines.append(f"            instance.{col.name} = {col.python_type}(instance.{col.name})")
             
             body_lines.append(f"        return instance") # Return the single instance, not a list
+            
+            body_lines.append(f"    except (TypeError, KeyError) as e:")
+            body_lines.append(f"        # If tuple unpacking fails, try explicit construction")
+            body_lines.append(f"        try:")
+            body_lines.append(f"            instance = {singular_class_name}(\n                {field_assignments_str}\n            )")
+            
+            # Convert string values to enum objects after creating the instance
+            for i, col in enumerate(func.return_columns):
+                if not col.python_type.startswith(('Optional[', 'List[')) and not col.python_type in ('str', 'int', 'float', 'bool', 'UUID', 'datetime', 'date', 'Decimal', 'Any', 'dict', 'Dict[str, Any]'):
+                    body_lines.append(f"            if instance.{col.name} is not None:")
+                    body_lines.append(f"                instance.{col.name} = {col.python_type}(instance.{col.name})")
+            
+            body_lines.append(f"            return instance")
+            body_lines.append(f"        except Exception as inner_e:")
+            body_lines.append(f"            # Re-raise the original error if the fallback also fails")
+            body_lines.append(f"            raise TypeError(f\"Failed to map row to {singular_class_name}. Original error: {{e}}, Fallback error: {{inner_e}}\") from e")
         else:
             body_lines.append(f"    try:")
             body_lines.append(f"        instance = {singular_class_name}(*row)")
