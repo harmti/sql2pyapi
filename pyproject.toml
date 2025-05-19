@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "sql2pyapi"
-version = "0.1.0"
+version = "2.0.0"
 description = "Generate Python API wrappers for SQL functions"
 authors = [
     { name = "Timo Harmonen", email = "timo.harmonen@iki.fi" },
