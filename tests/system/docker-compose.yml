@@ -11,10 +11,11 @@ services:
     ports:
       - "5433:5432" # Expose on host port 5433
     volumes:
-      # Mount the SQL scripts relative to this docker-compose file
-      - ./sql:/docker-entrypoint-initdb.d
+      # Mount the combined files with numeric prefixes to ensure correct execution order
+      - ./sql/dist/combined_schema.sql:/docker-entrypoint-initdb.d/01_combined_schema.sql
+      - ./sql/dist/combined_functions.sql:/docker-entrypoint-initdb.d/02_combined_functions.sql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U testuser -d testdb"]
       interval: 5s
       timeout: 5s
-      retries: 5 
+      retries: 5

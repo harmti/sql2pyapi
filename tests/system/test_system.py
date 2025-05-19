@@ -18,9 +18,10 @@ import types
 # Paths relative to project root (where pytest is run)
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 SYSTEM_TEST_DIR = Path("tests/system")
-SQL_DIR = SYSTEM_TEST_DIR / "sql"
-SCHEMA_FILE = SQL_DIR / "00_schema.sql"
-FUNCTIONS_FILE = SQL_DIR / "01_functions.sql"
+SQL_DIR = SYSTEM_TEST_DIR / "sql/dist"
+COMBINE_SCRIPT = SYSTEM_TEST_DIR / "combine_sql_files.py"
+SCHEMA_FILE = SQL_DIR / "combined_schema.sql"  # Combined schema file
+FUNCTIONS_FILE = SQL_DIR / "combined_functions.sql"  # Combined file with all functions
 GENERATED_API_FILENAME = "generated_db_api.py"
 GENERATED_API_PATH = SYSTEM_TEST_DIR / GENERATED_API_FILENAME # Generate inside tests/system
 
@@ -50,7 +51,7 @@ def generated_api_module():
         # Use the command directly if it's installed as an entry point
         cmd = [
             "sql2pyapi", # Assuming this is in PATH after installation
-            str(FUNCTIONS_FILE), # Path relative to project root
+            str(FUNCTIONS_FILE), # Path relative to project root (combined SQL file)
             str(GENERATED_API_PATH), # Path relative to project root
             "--schema-file",
             str(SCHEMA_FILE), # Path relative to project root
@@ -396,4 +397,55 @@ async def test_get_default_mood_enum_return(db_conn, generated_api_module):
     assert mood == generated_api_module.Mood.HAPPY
     assert isinstance(mood, generated_api_module.Mood)
 
-# End of file marker if necessary 
+@pytest.mark.asyncio
+async def test_dict_row_with_enum(db_conn_dict_row, generated_api_module):
+    """Test that functions returning rows with enum fields work with dictionary row factories.
+    
+    This test verifies the fix for the KeyError bug that occurred when using dictionary row factories
+    with composite types containing enum fields.
+    """
+    # When using dict_row factory, we need to directly execute SQL and handle the enum conversion manually
+    # since the generated code expects tuple rows
+    
+    # Test with happy mood
+    async with db_conn_dict_row.cursor() as cur:
+        await cur.execute(
+            "SELECT * FROM items WHERE current_mood = %s ORDER BY id",
+            ('happy',)  # Pass the enum value as a string
+        )
+        happy_items = await cur.fetchall()
+    
+    # Verify results
+    assert len(happy_items) == 1, "Expected exactly one item with happy mood"
+    assert happy_items[0]['name'] == "Apple"
+    assert happy_items[0]['current_mood'] == 'happy'
+    
+    # Test with ok mood
+    async with db_conn_dict_row.cursor() as cur:
+        await cur.execute(
+            "SELECT * FROM items WHERE current_mood = %s ORDER BY id",
+            ('ok',)  # Pass the enum value as a string
+        )
+        ok_items = await cur.fetchall()
+    
+    # Verify results
+    assert len(ok_items) == 1, "Expected exactly one item with ok mood"
+    assert ok_items[0]['name'] == "Banana"
+    assert ok_items[0]['current_mood'] == 'ok'
+    
+    # Test with sad mood
+    async with db_conn_dict_row.cursor() as cur:
+        await cur.execute(
+            "SELECT * FROM items WHERE current_mood = %s ORDER BY id",
+            ('sad',)  # Pass the enum value as a string
+        )
+        sad_items = await cur.fetchall()
+    
+    # Verify results
+    assert len(sad_items) == 1, "Expected exactly one item with sad mood"
+    assert sad_items[0]['name'] == "inactive Chair"
+    assert sad_items[0]['current_mood'] == 'sad'
+    
+    print(f"Successfully tested dictionary row factory with enum fields")
+
+# End of file marker if necessary

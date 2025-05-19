@@ -1,5 +1,6 @@
 import pytest
 import subprocess
+import sys
 from pathlib import Path
 
 # Constants used by the manage_db_container fixture
@@ -7,6 +8,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 SYSTEM_TEST_DIR = Path("tests/system")
 DOCKER_COMPOSE_FILE = SYSTEM_TEST_DIR / "docker-compose.yml"
+COMBINE_SCRIPT = SYSTEM_TEST_DIR / "combine_sql_files.py"
 
 @pytest.fixture(scope="session", autouse=True)
 def manage_db_container():
@@ -17,6 +19,14 @@ def manage_db_container():
     # Run compose commands from the directory containing the compose file
     # This is PROJECT_ROOT / SYSTEM_TEST_DIR
     cwd_for_docker_compose = PROJECT_ROOT / SYSTEM_TEST_DIR
+    
+    # First, run the script to combine SQL files
+    print(f"Combining SQL files using {COMBINE_SCRIPT}...")
+    combine_script_abs_path = PROJECT_ROOT / COMBINE_SCRIPT
+    combine_cmd = [sys.executable, str(combine_script_abs_path)]
+    combine_result = subprocess.run(combine_cmd, check=True, capture_output=True, text=True, cwd=PROJECT_ROOT)
+    print("Combine script stdout:", combine_result.stdout)
+    print("Combine script stderr:", combine_result.stderr)
 
     compose_cmd_base = ["docker", "compose", "-f", compose_file_path_relative_to_cwd]
 

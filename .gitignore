@@ -75,3 +75,4 @@ Thumbs.db
 
 # Generated system test file
 tests/system/generated_db_api.py
+tests/system/sql/dist/
