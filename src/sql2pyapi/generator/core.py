@@ -208,9 +208,25 @@ def generate_python_code(
 
     # --- Second pass: Generate functions ---
     # Restore the function generation loop
+    processed_function_names = set()
     for func in functions:
         logging.info(f"Attempting to generate function: {func.sql_name}") # DEBUG LOG
         generated_functions.append(_generate_function(func))
+        # Collect function names for __all__ list
+        processed_function_names.add(func.python_name)
+
+    # --- Generate __all__ list ---
+    def _generate_all_list(enum_names: set, dataclass_names: set, function_names: set) -> str:
+        """Generate __all__ list for the module."""
+        all_exports = sorted(list(enum_names | dataclass_names | function_names))
+        if not all_exports:
+            return ""
+        
+        # Format as a Python list with proper indentation
+        exports_str = ",\n    ".join(f"'{name}'" for name in all_exports)
+        return f"__all__ = [\n    {exports_str},\n]"
+    
+    all_list_section = _generate_all_list(processed_enum_names, processed_dataclass_names, processed_function_names)
 
     # --- Add imports needed for helper functions ---
     # Ensure TypeVar and Sequence are imported if helpers are generated
@@ -327,6 +343,10 @@ def generate_python_code(
         # Keep only the correct logic using the pre-calculated import_statements:
         final_imports = sorted(list(import_statements))
         final_parts.append("\n".join(final_imports))
+    
+    # Add __all__ list after imports
+    if all_list_section:
+        final_parts.append(all_list_section)
     
     # Add code body (enums, dataclasses, and functions)
     if code_body:
