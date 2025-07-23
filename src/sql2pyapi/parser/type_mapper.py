@@ -52,7 +52,21 @@ def map_sql_to_python_type(sql_type: str, is_optional: bool = False, context: st
     
     # --- Initial Check: Table Schema Reference --- 
     if sql_type in table_schemas or (not '.' in sql_type and sql_type.split('.')[-1] in table_schemas):
-         return "Any", {"Any"}
+        # Import the conversion function
+        from .utils import _to_singular_camel_case
+        
+        # Convert table name to dataclass name
+        dataclass_name = _to_singular_camel_case(sql_type)
+        
+        # Add Optional wrapper if explicitly requested
+        if is_optional:
+            py_type = f"Optional[{dataclass_name}]"
+            imports = {'Optional'}
+        else:
+            py_type = dataclass_name
+            imports = set()
+            
+        return py_type, imports
     
     # --- Normalization and Array Handling --- 
     sql_type_normal = sql_type.lower().strip()
