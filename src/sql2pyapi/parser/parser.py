@@ -273,7 +273,8 @@ class SQLParser:
 
             try:
                 sql_name = match_dict['func_name'].strip()
-                python_name = sql_name
+                # Strip schema qualification for python_name to create valid Python identifiers
+                python_name = sql_name.split('.')[-1] if '.' in sql_name else sql_name
                 
                 # --- Find the accurate start line in the ORIGINAL content ---
                 original_start_byte = -1
