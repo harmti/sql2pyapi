@@ -17,6 +17,7 @@ from .enum_generator import _generate_enum_class
 from .dataclass_generator import _generate_dataclass
 from ..parser.utils import _to_singular_camel_case
 from .return_handlers import _determine_return_type
+from .dependency_resolver import resolve_dataclass_order
 
 # ===== SECTION: CONSTANTS AND CONFIGURATION =====
 # REMOVED local definition of PYTHON_IMPORTS
@@ -163,9 +164,15 @@ def generate_python_code(
     # --- Generate Dataclasses section --- 
     dataclasses_section_list = []
     processed_dataclass_names = set()
+    
+    # Use dependency resolver to get the correct order
+    # Note: table_schema_imports contains imports, not schemas
+    # The dependency resolver will handle collecting referenced types
+    sorted_custom_types = resolve_dataclass_order(current_custom_types)
+    
     # Now add the generated dataclasses to the output in the correct order
-    # Iterate through the custom types collected (from CREATE TYPE and ad-hoc RETURNS TABLE)
-    for type_name, columns in current_custom_types.items():
+    # Iterate through the custom types in dependency-sorted order
+    for type_name, columns in sorted_custom_types:
          # Determine the final class name (handle potential internal names for ad-hoc)
          if type_name.endswith("Result"):
               class_name = type_name # Use the name directly (e.g., GetUserDataResult)

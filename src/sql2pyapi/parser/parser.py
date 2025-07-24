@@ -507,6 +507,33 @@ class SQLParser:
                          logging.warning(f"Function '{func.sql_name}' returns SETOF '{table_name}', but no schema found for this table/type. 'fail_on_missing_schema' is False.")
 
 
+        # Recursively add table types that are referenced by composite types
+        # This ensures that if a composite type has a field of a table type,
+        # that table type will be included in the output
+        processed = set()
+        to_process = list(composite_types_to_return.keys())
+        
+        while to_process:
+            current_type = to_process.pop()
+            if current_type in processed:
+                continue
+            processed.add(current_type)
+            
+            # Check columns of this type for table references
+            if current_type in composite_types_to_return:
+                columns = composite_types_to_return[current_type]
+                for column in columns:
+                    # Check if the SQL type is a table reference
+                    sql_type = column.sql_type
+                    if sql_type in self.table_schemas and sql_type not in composite_types_to_return:
+                        logging.debug(f"Adding referenced table type '{sql_type}' to composite types for dataclass generation.")
+                        composite_types_to_return[sql_type] = self.table_schemas[sql_type]
+                        # Also ensure its imports are included
+                        if sql_type in self.table_schema_imports:
+                            imports_to_return[sql_type] = self.table_schema_imports[sql_type]
+                        # Add to processing queue to check its dependencies
+                        to_process.append(sql_type)
+        
         # Return the list of functions, the combined imports, and the composite types (now including SETOF table types)
         return functions, imports_to_return, composite_types_to_return
 
