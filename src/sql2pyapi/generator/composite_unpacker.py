@@ -1,7 +1,81 @@
 """Helper module for handling nested composite type unpacking in generated code."""
 
+import re
 from typing import List, Dict
 from ..sql_models import ReturnColumn
+
+
+def generate_composite_string_parser() -> List[str]:
+    """
+    Generates a helper function to parse PostgreSQL composite type string representations.
+    
+    Returns:
+        List of code lines for the parser function
+    """
+    return [
+        "def _parse_composite_string(composite_str: str) -> tuple:",
+        "    \"\"\"Parse a PostgreSQL composite type string representation into a tuple.\"\"\"",
+        "    if not composite_str or not composite_str.startswith('(') or not composite_str.endswith(')'):",
+        "        raise ValueError(f'Invalid composite string format: {composite_str}')",
+        "    ",
+        "    # Remove outer parentheses",
+        "    content = composite_str[1:-1]",
+        "    if not content:",
+        "        return ()",
+        "    ",
+        "    # Split by comma, but respect nested structures and quoted strings",
+        "    fields = []",
+        "    current_field = ''",
+        "    paren_depth = 0",
+        "    in_quotes = False",
+        "    escape_next = False",
+        "    ",
+        "    for char in content:",
+        "        if escape_next:",
+        "            current_field += char",
+        "            escape_next = False",
+        "        elif char == '\\\\' and in_quotes:",
+        "            current_field += char",
+        "            escape_next = True",
+        "        elif char == '\"':",
+        "            current_field += char",
+        "            in_quotes = not in_quotes",
+        "        elif not in_quotes:",
+        "            if char == '(':",
+        "                paren_depth += 1",
+        "                current_field += char",
+        "            elif char == ')':",
+        "                paren_depth -= 1",
+        "                current_field += char",
+        "            elif char == ',' and paren_depth == 0:",
+        "                fields.append(current_field.strip())",
+        "                current_field = ''",
+        "            else:",
+        "                current_field += char",
+        "        else:",
+        "            current_field += char",
+        "    ",
+        "    # Add the last field",
+        "    if current_field:",
+        "        fields.append(current_field.strip())",
+        "    ",
+        "    # Convert fields to proper Python types",
+        "    parsed_fields = []",
+        "    for field in fields:",
+        "        field = field.strip()",
+        "        if not field or field.lower() in ('null', ''):",
+        "            parsed_fields.append(None)",
+        "        elif field.startswith('\"') and field.endswith('\"'):",
+        "            # Quoted string - remove quotes and handle escapes",
+        "            parsed_fields.append(field[1:-1].replace('\\\\\"', '\"').replace('\\\\\\\\', '\\\\'))",
+        "        else:",
+        "            # Unquoted value - keep as string for now",
+        "            # The dataclass constructor will handle type conversion",
+        "            parsed_fields.append(field)",
+        "    ",
+        "    return tuple(parsed_fields)",
+        "",
+    ]
 
 
 def detect_nested_composites(columns: List[ReturnColumn], 
@@ -82,8 +156,15 @@ def generate_composite_unpacking_code(class_name: str,
             f"{indent}return instance"
         ]
     
-    # Generate code for nested composite unpacking
+    # Generate the composite string parser function inline
     lines = []
+    lines.append(f"{indent}# Helper function to parse composite string representations")
+    parser_lines = generate_composite_string_parser()
+    for parser_line in parser_lines:
+        lines.append(f"{indent}{parser_line}")
+    lines.append("")
+    
+    # Generate code for nested composite unpacking
     lines.append(f"{indent}# Handle nested composite types")
     lines.append(f"{indent}field_values = []")
     lines.append(f"{indent}for i, value in enumerate(row):")
@@ -109,8 +190,15 @@ def generate_composite_unpacking_code(class_name: str,
         lines.append(f"{indent}        elif isinstance(value, tuple):")
         lines.append(f"{indent}            # Recursively create nested dataclass")
         lines.append(f"{indent}            field_values.append({python_class_name}(*value))")
+        lines.append(f"{indent}        elif isinstance(value, str) and value.startswith('(') and value.endswith(')'):")
+        lines.append(f"{indent}            # Parse composite string representation")
+        lines.append(f"{indent}            try:")
+        lines.append(f"{indent}                parsed_tuple = _parse_composite_string(value)")
+        lines.append(f"{indent}                field_values.append({python_class_name}(*parsed_tuple))")
+        lines.append(f"{indent}            except (ValueError, TypeError) as e:")
+        lines.append(f"{indent}                raise ValueError(f'Failed to parse nested composite type {{{python_class_name}}} from string: {{value!r}}. Error: {{e}}')")
         lines.append(f"{indent}        else:")
-        lines.append(f"{indent}            # Already a dataclass instance")
+        lines.append(f"{indent}            # Already a dataclass instance or other value")
         lines.append(f"{indent}            field_values.append(value)")
     
     lines.append(f"{indent}    else:")
