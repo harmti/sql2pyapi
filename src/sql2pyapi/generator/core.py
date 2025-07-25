@@ -218,7 +218,7 @@ def generate_python_code(
     processed_function_names = set()
     for func in functions:
         logging.info(f"Attempting to generate function: {func.sql_name}") # DEBUG LOG
-        generated_functions.append(_generate_function(func))
+        generated_functions.append(_generate_function(func, current_custom_types))
         # Collect function names for __all__ list
         processed_function_names.add(func.python_name)
 

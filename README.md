@@ -168,6 +168,7 @@ We recommend using `uv` for managing dependencies:
 - **Dataclass Generation** for table returns
 - **Async Functions** using psycopg3
 - **Support for Complex Returns** (scalar, SETOF, TABLE, RECORD)
+- **Composite Types** with automatic nested dataclass handling
 - **Docstring Generation** from SQL comments
 - **Pythonic Parameter Names** (removes prefixes like p_)
 

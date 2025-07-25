@@ -4,10 +4,11 @@ from typing import List, Tuple, Optional, Dict
 import textwrap
 
 # Local imports
-from ..sql_models import ParsedFunction, ReturnColumn, SQLParameter, SQLType
+from ..sql_models import ParsedFunction, ReturnColumn, SQLParameter
 from ..constants import *
 from ..parser.utils import _to_singular_camel_case
 from .return_handlers import _determine_return_type
+from .composite_unpacker import needs_nested_unpacking, generate_composite_unpacking_code
 
 
 def _generate_parameter_list(func_params: List[SQLParameter]) -> Tuple[List[SQLParameter], str]:
@@ -70,7 +71,7 @@ def _generate_docstring(func: ParsedFunction) -> str:
     return "\n".join(docstring_lines)
 
 
-def _generate_function_body(func: ParsedFunction, final_dataclass_name: Optional[str], sorted_params: List[SQLParameter]) -> List[str]:
+def _generate_function_body(func: ParsedFunction, final_dataclass_name: Optional[str], sorted_params: List[SQLParameter], composite_types: Dict[str, List[ReturnColumn]]) -> List[str]:
     """
     Generates the body of a Python async function based on the SQL function's return type.
     
@@ -78,6 +79,7 @@ def _generate_function_body(func: ParsedFunction, final_dataclass_name: Optional
         func (ParsedFunction): The parsed SQL function definition
         final_dataclass_name (Optional[str]): The name of the dataclass for table returns
         sorted_params (List[SQLParameter]): Sorted parameters for the function
+        composite_types (Dict[str, List[ReturnColumn]]): Dictionary of all known composite types
         
     Returns:
         List[str]: Lines of code for the function body
@@ -189,21 +191,22 @@ def _generate_function_body(func: ParsedFunction, final_dataclass_name: Optional
     # Handle different return types
     if func.returns_setof:
         # Handle SETOF returns (multiple rows)
-        body_lines.extend(_generate_setof_return_body(func, final_dataclass_name))
+        body_lines.extend(_generate_setof_return_body(func, final_dataclass_name, composite_types))
     else:
         # Handle single row returns (scalar, record, or single table row)
-        body_lines.extend(_generate_single_row_return_body(func, final_dataclass_name))
+        body_lines.extend(_generate_single_row_return_body(func, final_dataclass_name, composite_types))
         
     return body_lines
 
 
-def _generate_setof_return_body(func: ParsedFunction, final_dataclass_name: Optional[str]) -> List[str]:
+def _generate_setof_return_body(func: ParsedFunction, final_dataclass_name: Optional[str], composite_types: Dict[str, List[ReturnColumn]]) -> List[str]:
     """
     Generates code for handling SETOF returns (multiple rows).
     
     Args:
         func (ParsedFunction): The parsed SQL function definition
         final_dataclass_name (Optional[str]): The name of the dataclass for table returns
+        composite_types (Dict[str, List[ReturnColumn]]): Dictionary of all known composite types
         
     Returns:
         List[str]: Lines of code for handling SETOF returns
@@ -240,61 +243,61 @@ def _generate_setof_return_body(func: ParsedFunction, final_dataclass_name: Opti
         if is_enum_import:
             # Check for columns with types that could be enums
             has_enum_columns = any(not col.python_type.startswith(('Optional[', 'List[')) and 
-                                  not col.python_type in ('str', 'int', 'float', 'bool', 'UUID', 'datetime', 'date', 'Decimal', 'Any', 'dict', 'Dict[str, Any]')
+                                  col.python_type not in ('str', 'int', 'float', 'bool', 'UUID', 'datetime', 'date', 'Decimal', 'Any', 'dict', 'Dict[str, Any]')
                                   for col in func.return_columns)
         
         if has_enum_columns:
             # Generate an inner helper function to efficiently convert enum values during object creation
-            body_lines.append(f"    # Inner helper function for efficient conversion")
+            body_lines.append("    # Inner helper function for efficient conversion")
             body_lines.append(f"    def create_{singular_class_name.lower()}(row):")
             
             # Generate field assignments with ENUM conversions
             field_assignments = []
             for i, col in enumerate(func.return_columns):
-                if not col.python_type.startswith(('Optional[', 'List[')) and not col.python_type in ('str', 'int', 'float', 'bool', 'UUID', 'datetime', 'date', 'Decimal', 'Any', 'dict', 'Dict[str, Any]'):
+                if not col.python_type.startswith(('Optional[', 'List[')) and col.python_type not in ('str', 'int', 'float', 'bool', 'UUID', 'datetime', 'date', 'Decimal', 'Any', 'dict', 'Dict[str, Any]'):
                     field_assignments.append(f"{col.name}={col.python_type}(row[{i}]) if row[{i}] is not None else None")
                 else:
                     field_assignments.append(f"{col.name}=row[{i}]")
             field_assignments_str = ",\n                ".join(field_assignments)
             
-            body_lines.append(f"        try:")
-            body_lines.append(f"            # First try with tuple unpacking to handle both tuple and dict row factories")
+            body_lines.append("        try:")
+            body_lines.append("            # First try with tuple unpacking to handle both tuple and dict row factories")
             body_lines.append(f"            instance = {singular_class_name}(*row)")
             
             # Convert string values to enum objects after creating the instance
             for i, col in enumerate(func.return_columns):
-                if not col.python_type.startswith(('Optional[', 'List[')) and not col.python_type in ('str', 'int', 'float', 'bool', 'UUID', 'datetime', 'date', 'Decimal', 'Any', 'dict', 'Dict[str, Any]'):
+                if not col.python_type.startswith(('Optional[', 'List[')) and col.python_type not in ('str', 'int', 'float', 'bool', 'UUID', 'datetime', 'date', 'Decimal', 'Any', 'dict', 'Dict[str, Any]'):
                     body_lines.append(f"            if instance.{col.name} is not None:")
                     body_lines.append(f"                instance.{col.name} = {col.python_type}(instance.{col.name})")
             
-            body_lines.append(f"            return instance")
-            body_lines.append(f"        except (TypeError, KeyError) as e:")
-            body_lines.append(f"            # Fallback to explicit construction if tuple unpacking fails")
-            body_lines.append(f"            try:")
+            body_lines.append("            return instance")
+            body_lines.append("        except (TypeError, KeyError) as e:")
+            body_lines.append("            # Fallback to explicit construction if tuple unpacking fails")
+            body_lines.append("            try:")
             body_lines.append(f"                return {singular_class_name}(\n                    {field_assignments_str}\n                )")
-            body_lines.append(f"            except Exception as inner_e:")
-            body_lines.append(f"                # Re-raise the original error if the fallback also fails")
+            body_lines.append("            except Exception as inner_e:")
+            body_lines.append("                # Re-raise the original error if the fallback also fails")
             body_lines.append(f"                raise TypeError(f\"Failed to map row to {singular_class_name}. Original error: {{e}}, Fallback error: {{inner_e}}\") from e")
             
-            body_lines.append(f"")
+            body_lines.append("")
             
             # Main try block for the function
-            body_lines.append(f"    try:")
+            body_lines.append("    try:")
             body_lines.append(f"        return [create_{singular_class_name.lower()}(row) for row in rows]")
         else:
             # No enum columns case - just use tuple unpacking directly
-            body_lines.append(f"    try:")
+            body_lines.append("    try:")
             body_lines.append(f"        return [{singular_class_name}(*r) for r in rows]")
 
             
-        body_lines.append(f"    except TypeError as e:")
-        body_lines.append(f"        # Tuple unpacking failed. This often happens if the DB connection")
-        body_lines.append(f"        # is configured with a dict-like row factory (e.g., DictRow).")
-        body_lines.append(f"        # This generated code expects the default tuple row factory.")
-        body_lines.append(f"        raise TypeError(")
+        body_lines.append("    except TypeError as e:")
+        body_lines.append("        # Tuple unpacking failed. This often happens if the DB connection")
+        body_lines.append("        # is configured with a dict-like row factory (e.g., DictRow).")
+        body_lines.append("        # This generated code expects the default tuple row factory.")
+        body_lines.append("        raise TypeError(")
         body_lines.append(f"            f\"Failed to map SETOF results to dataclass list for {singular_class_name}. \"")
-        body_lines.append(f"            f\"Check DB connection: Default tuple row_factory expected. Error: {{e}}\"")
-        body_lines.append(f"        )")
+        body_lines.append("            f\"Check DB connection: Default tuple row_factory expected. Error: {e}\"")
+        body_lines.append("        )")
 
     elif func.returns_record:
         # SETOF RECORD -> List[Tuple]
@@ -309,13 +312,14 @@ def _generate_setof_return_body(func: ParsedFunction, final_dataclass_name: Opti
     return body_lines
 
 
-def _generate_single_row_return_body(func: ParsedFunction, final_dataclass_name: Optional[str]) -> List[str]:
+def _generate_single_row_return_body(func: ParsedFunction, final_dataclass_name: Optional[str], composite_types: Dict[str, List[ReturnColumn]]) -> List[str]:
     """
     Generates code for handling single-row returns (scalar, record, or table).
 
     Args:
         func (ParsedFunction): The parsed SQL function definition
         final_dataclass_name (Optional[str]): The name of the dataclass for table returns
+        composite_types (Dict[str, List[ReturnColumn]]): Dictionary of all known composite types
 
     Returns:
         List[str]: Lines of code for handling single-row returns
@@ -325,7 +329,7 @@ def _generate_single_row_return_body(func: ParsedFunction, final_dataclass_name:
     body_lines.append("    if row is None:")
     # If returns_table is true BUT returns_setof is false, the hint is Optional[Dataclass],
     # so we should return None here, not [].
-    body_lines.append(f"        return None") 
+    body_lines.append("        return None") 
 
     # Handle ENUM type returns
     if func.returns_enum_type:
@@ -343,75 +347,96 @@ def _generate_single_row_return_body(func: ParsedFunction, final_dataclass_name:
         body_lines.append(f"    # Ensure dataclass '{singular_class_name}' is defined above.")
         body_lines.append(f"    # Expecting simple tuple return for composite type {singular_class_name}")
         
-        # Check if any columns are ENUM types by checking if 'Enum' is in required imports
-        is_enum_import = 'Enum' in func.required_imports
-        has_enum_columns = False
-        
-        if is_enum_import:
-            # Check for columns with types that could be enums
-            has_enum_columns = any(not col.python_type.startswith(('Optional[', 'List[')) and 
-                                  not col.python_type in ('str', 'int', 'float', 'bool', 'UUID', 'datetime', 'date', 'Decimal', 'Any', 'dict', 'Dict[str, Any]')
-                                  for col in func.return_columns)
-        
-        if has_enum_columns:
-            # Generate field assignments with ENUM conversions
-            field_assignments = []
-            for i, col in enumerate(func.return_columns):
-                if not col.python_type.startswith(('Optional[', 'List[')) and not col.python_type in ('str', 'int', 'float', 'bool', 'UUID', 'datetime', 'date', 'Decimal', 'Any', 'dict', 'Dict[str, Any]'):
-                    field_assignments.append(f"{col.name}=row[{i}]")
-                else:
-                    field_assignments.append(f"{col.name}=row[{i}]")
-            field_assignments_str = ",\n                ".join(field_assignments)
-            
-            body_lines.append(f"    try:")
-            body_lines.append(f"        # First try with tuple unpacking to handle both tuple and dict row factories")
-            body_lines.append(f"        instance = {singular_class_name}(*row)")
-            body_lines.append(f"        # Check for 'empty' composite rows (all values are None) returned as a single tuple")
-            body_lines.append(f"        # Note: This check might be DB-driver specific for NULL composites")
-            body_lines.append(f"        if all(v is None for v in row):")
-            # Return None if the single row represents a NULL composite (consistency with Optional hint)
-            body_lines.append(f"             return None") 
-            
-            # Convert string values to enum objects after creating the instance
-            for i, col in enumerate(func.return_columns):
-                if not col.python_type.startswith(('Optional[', 'List[')) and not col.python_type in ('str', 'int', 'float', 'bool', 'UUID', 'datetime', 'date', 'Decimal', 'Any', 'dict', 'Dict[str, Any]'):
-                    body_lines.append(f"        if instance.{col.name} is not None:")
-                    body_lines.append(f"            instance.{col.name} = {col.python_type}(instance.{col.name})")
-            
-            body_lines.append(f"        return instance") # Return the single instance, not a list
-            
-            body_lines.append(f"    except (TypeError, KeyError) as e:")
-            body_lines.append(f"        # If tuple unpacking fails, try explicit construction")
-            body_lines.append(f"        try:")
-            body_lines.append(f"            instance = {singular_class_name}(\n                {field_assignments_str}\n            )")
-            
-            # Convert string values to enum objects after creating the instance
-            for i, col in enumerate(func.return_columns):
-                if not col.python_type.startswith(('Optional[', 'List[')) and not col.python_type in ('str', 'int', 'float', 'bool', 'UUID', 'datetime', 'date', 'Decimal', 'Any', 'dict', 'Dict[str, Any]'):
-                    body_lines.append(f"            if instance.{col.name} is not None:")
-                    body_lines.append(f"                instance.{col.name} = {col.python_type}(instance.{col.name})")
-            
-            body_lines.append(f"            return instance")
-            body_lines.append(f"        except Exception as inner_e:")
-            body_lines.append(f"            # Re-raise the original error if the fallback also fails")
-            body_lines.append(f"            raise TypeError(f\"Failed to map row to {singular_class_name}. Original error: {{e}}, Fallback error: {{inner_e}}\") from e")
+        # Check if we need special handling for nested composites
+        if func.return_columns and needs_nested_unpacking(func.return_columns, composite_types):
+            # Use the nested composite unpacking helper
+            body_lines.append("    try:")
+            unpacking_lines = generate_composite_unpacking_code(
+                singular_class_name, 
+                func.return_columns, 
+                composite_types,
+                indent="        "
+            )
+            body_lines.extend(unpacking_lines)
+            body_lines.append("    except TypeError as e:")
+            body_lines.append("        # Tuple unpacking failed. This often happens if the DB connection")
+            body_lines.append("        # is configured with a dict-like row factory (e.g., DictRow).")
+            body_lines.append("        # This generated code expects the default tuple row factory.")
+            body_lines.append("        raise TypeError(")
+            body_lines.append(f"            f\"Failed to map single row result to dataclass {singular_class_name}. \"")
+            body_lines.append("            f\"Check DB connection: Default tuple row_factory expected. Row: {row!r}. Error: {e}\"")
+            body_lines.append("        )")
         else:
-            body_lines.append(f"    try:")
-            body_lines.append(f"        instance = {singular_class_name}(*row)")
-            body_lines.append(f"        # Check for 'empty' composite rows (all values are None) returned as a single tuple")
-            body_lines.append(f"        # Note: This check might be DB-driver specific for NULL composites")
-            body_lines.append(f"        if all(v is None for v in row):")
-            # Return None if the single row represents a NULL composite (consistency with Optional hint)
-            body_lines.append(f"             return None") 
-            body_lines.append(f"        return instance") # Return the single instance, not a list
-        body_lines.append(f"    except TypeError as e:")
-        body_lines.append(f"        # Tuple unpacking failed. This often happens if the DB connection")
-        body_lines.append(f"        # is configured with a dict-like row factory (e.g., DictRow).")
-        body_lines.append(f"        # This generated code expects the default tuple row factory.")
-        body_lines.append(f"        raise TypeError(")
-        body_lines.append(f"            f\"Failed to map single row result to dataclass {singular_class_name}. \"")
-        body_lines.append(f"            f\"Check DB connection: Default tuple row_factory expected. Row: {{row!r}}. Error: {{e}}\"")
-        body_lines.append(f"        )")
+            # Original logic for non-nested composites
+            # Check if any columns are ENUM types by checking if 'Enum' is in required imports
+            is_enum_import = 'Enum' in func.required_imports
+            has_enum_columns = False
+            
+            if is_enum_import:
+                # Check for columns with types that could be enums
+                has_enum_columns = any(not col.python_type.startswith(('Optional[', 'List[')) and 
+                                      col.python_type not in ('str', 'int', 'float', 'bool', 'UUID', 'datetime', 'date', 'Decimal', 'Any', 'dict', 'Dict[str, Any]')
+                                      for col in func.return_columns)
+            
+            if has_enum_columns:
+                # Generate field assignments with ENUM conversions
+                field_assignments = []
+                for i, col in enumerate(func.return_columns):
+                    if not col.python_type.startswith(('Optional[', 'List[')) and col.python_type not in ('str', 'int', 'float', 'bool', 'UUID', 'datetime', 'date', 'Decimal', 'Any', 'dict', 'Dict[str, Any]'):
+                        field_assignments.append(f"{col.name}=row[{i}]")
+                    else:
+                        field_assignments.append(f"{col.name}=row[{i}]")
+                field_assignments_str = ",\n                    ".join(field_assignments)
+                
+                body_lines.append("    try:")
+                body_lines.append("        # First try with tuple unpacking to handle both tuple and dict row factories")
+                body_lines.append(f"        instance = {singular_class_name}(*row)")
+                body_lines.append("        # Check for 'empty' composite rows (all values are None) returned as a single tuple")
+                body_lines.append("        # Note: This check might be DB-driver specific for NULL composites")
+                body_lines.append("        if all(v is None for v in row):")
+                # Return None if the single row represents a NULL composite (consistency with Optional hint)
+                body_lines.append("             return None") 
+                
+                # Convert string values to enum objects after creating the instance
+                for i, col in enumerate(func.return_columns):
+                    if not col.python_type.startswith(('Optional[', 'List[')) and col.python_type not in ('str', 'int', 'float', 'bool', 'UUID', 'datetime', 'date', 'Decimal', 'Any', 'dict', 'Dict[str, Any]'):
+                        body_lines.append(f"        if instance.{col.name} is not None:")
+                        body_lines.append(f"            instance.{col.name} = {col.python_type}(instance.{col.name})")
+                
+                body_lines.append("        return instance") # Return the single instance, not a list
+                
+                body_lines.append("    except (TypeError, KeyError) as e:")
+                body_lines.append("        # If tuple unpacking fails, try explicit construction")
+                body_lines.append("        try:")
+                body_lines.append(f"            instance = {singular_class_name}(\n                    {field_assignments_str}\n                )")
+                
+                # Convert string values to enum objects after creating the instance
+                for i, col in enumerate(func.return_columns):
+                    if not col.python_type.startswith(('Optional[', 'List[')) and col.python_type not in ('str', 'int', 'float', 'bool', 'UUID', 'datetime', 'date', 'Decimal', 'Any', 'dict', 'Dict[str, Any]'):
+                        body_lines.append(f"            if instance.{col.name} is not None:")
+                        body_lines.append(f"                instance.{col.name} = {col.python_type}(instance.{col.name})")
+                
+                body_lines.append("            return instance")
+                body_lines.append("        except Exception as inner_e:")
+                body_lines.append("            # Re-raise the original error if the fallback also fails")
+                body_lines.append(f"            raise TypeError(f\"Failed to map row to {singular_class_name}. Original error: {{e}}, Fallback error: {{inner_e}}\") from e")
+            else:
+                body_lines.append("    try:")
+                body_lines.append(f"        instance = {singular_class_name}(*row)")
+                body_lines.append("        # Check for 'empty' composite rows (all values are None) returned as a single tuple")
+                body_lines.append("        # Note: This check might be DB-driver specific for NULL composites")
+                body_lines.append("        if all(v is None for v in row):")
+                # Return None if the single row represents a NULL composite (consistency with Optional hint)
+                body_lines.append("             return None") 
+                body_lines.append("        return instance") # Return the single instance, not a list
+                body_lines.append("    except TypeError as e:")
+                body_lines.append("        # Tuple unpacking failed. This often happens if the DB connection")
+                body_lines.append("        # is configured with a dict-like row factory (e.g., DictRow).")
+                body_lines.append("        # This generated code expects the default tuple row factory.")
+                body_lines.append("        raise TypeError(")
+                body_lines.append(f"            f\"Failed to map single row result to dataclass {singular_class_name}. \"")
+                body_lines.append("            f\"Check DB connection: Default tuple row_factory expected. Row: {row!r}. Error: {e}\"")
+                body_lines.append("        )")
 
     elif func.returns_record:
         # RECORD -> Optional[Tuple] (Hint determined previously)
@@ -427,7 +452,7 @@ def _generate_single_row_return_body(func: ParsedFunction, final_dataclass_name:
 
 
 
-def _generate_function(func: ParsedFunction) -> str:
+def _generate_function(func: ParsedFunction, composite_types: Dict[str, List[ReturnColumn]] = None) -> str:
     """
     Generates a Python async function string from a parsed SQL function definition.
     
@@ -437,6 +462,7 @@ def _generate_function(func: ParsedFunction) -> str:
     
     Args:
         func (ParsedFunction): The parsed SQL function definition
+        composite_types (Dict[str, List[ReturnColumn]], optional): Dictionary of all known composite types
     
     Returns:
         str: Python code for the async function as a string
@@ -462,8 +488,8 @@ def _generate_function(func: ParsedFunction) -> str:
     docstring = _generate_docstring(func)
 
     # Generate the function body based on the return type
-    # Pass sorted_params to _generate_function_body
-    body_lines = _generate_function_body(func, final_dataclass_name, sorted_params)
+    # Pass sorted_params and composite_types to _generate_function_body
+    body_lines = _generate_function_body(func, final_dataclass_name, sorted_params, composite_types or {})
 
     indented_body = textwrap.indent("\n".join(body_lines), prefix="    ")
 
