@@ -118,12 +118,23 @@ def _generate_function_body(func: ParsedFunction, final_dataclass_name: Optional
     
     # Handle JSON parameters separately to avoid breaking existing tests
     if has_any_json_params:
-        param_preparation_lines.append("# Handle JSON parameters")
+        param_preparation_lines.append("# Handle JSON parameters with custom encoder for UUID support")
         param_preparation_lines.append("import json")
+        param_preparation_lines.append("from uuid import UUID")
+        param_preparation_lines.append("from datetime import datetime")
+        param_preparation_lines.append("")
+        param_preparation_lines.append("class DatabaseJSONEncoder(json.JSONEncoder):")
+        param_preparation_lines.append("    def default(self, obj):")
+        param_preparation_lines.append("        if isinstance(obj, UUID):")
+        param_preparation_lines.append("            return str(obj)")
+        param_preparation_lines.append("        elif isinstance(obj, datetime):")
+        param_preparation_lines.append("            return obj.isoformat()")
+        param_preparation_lines.append("        return super().default(obj)")
+        param_preparation_lines.append("")
         for p in sorted_params:
             if is_json_param(p.sql_type):
-                # Convert Python dict to JSON string for JSON parameters
-                param_preparation_lines.append(f"{p.python_name}_json = json.dumps({p.python_name}) if {p.python_name} is not None else None")
+                # Convert Python dict to JSON string for JSON parameters using custom encoder
+                param_preparation_lines.append(f"{p.python_name}_json = json.dumps({p.python_name}, cls=DatabaseJSONEncoder) if {p.python_name} is not None else None")
     
     body_lines.extend(param_preparation_lines)
 
