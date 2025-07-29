@@ -161,6 +161,14 @@ def generate_python_code(
     
     enum_classes_section = "\n\n".join(enum_classes_section_list)
     
+    # --- Collect RECORD dataclasses from functions ---
+    # Add RECORD dataclasses to custom_types so they get generated
+    for func in functions:
+        if func.returns_record and hasattr(func, 'dataclass_name') and func.dataclass_name and func.return_columns:
+            # Add RECORD dataclass to current_custom_types for generation
+            current_custom_types[func.dataclass_name] = func.return_columns
+            logging.debug(f"Added RECORD dataclass '{func.dataclass_name}' to generation queue")
+    
     # --- Generate Dataclasses section --- 
     dataclasses_section_list = []
     processed_dataclass_names = set()
@@ -218,6 +226,11 @@ def generate_python_code(
     processed_function_names = set()
     for func in functions:
         logging.info(f"Attempting to generate function: {func.sql_name}") # DEBUG LOG
+        
+        # Debug: print RECORD function details
+        # if func.sql_name == "get_item_name_and_mood":
+        #     logging.warning(f"DEBUG: RECORD function {func.sql_name}: returns_record={func.returns_record}, return_columns={func.return_columns}, dataclass_name={getattr(func, 'dataclass_name', 'N/A')}")
+        
         generated_functions.append(_generate_function(func, current_custom_types))
         # Collect function names for __all__ list
         processed_function_names.add(func.python_name)

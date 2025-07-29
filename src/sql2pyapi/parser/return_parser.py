@@ -91,6 +91,10 @@ def handle_returns_type_name(sql_return_type: str, is_setof: bool, initial_impor
     """
     logging.debug(f"Handling return type name for {function_name}: type='{sql_return_type}', setof={is_setof}") # Add log
     
+    # Debug: print what we're checking
+    # if function_name == "get_all_names_and_moods":
+    #     logging.warning(f"DEBUG: get_all_names_and_moods - sql_return_type='{sql_return_type}', is_setof={is_setof}")
+    
     # Initialize with default values
     table_schemas = table_schemas or {}
     table_schema_imports = table_schema_imports or {}

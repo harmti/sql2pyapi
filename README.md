@@ -96,7 +96,7 @@ sql2pyapi <input_sql_file> <output_python_file> [options]
 
 **Default Behavior (Schema Handling):**
 
-By default, `sql2pyapi` requires schema definitions (`CREATE TABLE` or `CREATE TYPE`) for any tables or composite types returned by your SQL functions (unless they are simple scalar types or anonymous `RECORD`s). If a required schema definition is missing from the input SQL or the provided `--schema-file`, the tool will **fail with an error**, preventing the generation of potentially broken code.
+By default, `sql2pyapi` requires schema definitions (`CREATE TABLE` or `CREATE TYPE`) for any tables or composite types returned by your SQL functions (unless they are simple scalar types or anonymous `RECORD`s). For `RECORD` functions, column types are automatically inferred from table schemas. If a required schema definition is missing from the input SQL or the provided `--schema-file`, the tool will **fail with an error**, preventing the generation of potentially broken code.
 
 If you understand the risks and want the tool to proceed despite missing schemas (logging warnings and generating placeholders instead), use the `--allow-missing-schemas` flag.
 
@@ -168,6 +168,7 @@ We recommend using `uv` for managing dependencies:
 - **Dataclass Generation** for table returns
 - **Async Functions** using psycopg3
 - **Support for Complex Returns** (scalar, SETOF, TABLE, RECORD)
+- **RECORD Support** with automatic AS clause generation and type-safe dataclasses
 - **Composite Types** with automatic nested dataclass handling
 - **Docstring Generation** from SQL comments
 - **Pythonic Parameter Names** (removes prefixes like p_)
@@ -213,6 +214,7 @@ sql2pyapi functions.sql generated_api.py --no-helpers
 ## Limitations and Future Work
 
 * **Complex SQL:** Does not handle very complex SQL syntax within function bodies
+* **RECORD Functions:** Only parses simple SQL functions; complex PL/pgSQL functions with DECLARE/BEGIN/END fall back to tuple returns
 * **Error Handling:** Generated code assumes successful execution
 * **Dependencies:** Relies on psycopg3 and inflection
 * **Custom Types:** Less common PostgreSQL types might map to Any
@@ -256,4 +258,22 @@ The **sole determinant** for using `List` versus `Optional` as the *outer* wrapp
 
 | SQL Function Signature                  | Generated Python Return Hint | Notes                                      |
 | :-------------------------------------- | :--------------------------- | :----------------------------------------- |
-| `RETURNS integer`                       | `Optional[int]`              | Returns `
+| `RETURNS integer`                       | `Optional[int]`              | Returns `None` if no row found             |
+| `RETURNS SETOF integer`                 | `List[int]`                  | Returns `[]` if no rows                    |
+| `RETURNS users`                         | `Optional[User]`             | `User` is generated dataclass              |
+| `RETURNS SETOF users`                   | `List[User]`                 | Returns `[]` if no rows                    |
+| `RETURNS user_identity` (custom type)   | `Optional[UserIdentity]`     | `UserIdentity` is generated dataclass     |
+| `RETURNS SETOF user_identity`           | `List[UserIdentity]`         | Returns `[]` if no rows                    |
+| `RETURNS TABLE(id int, name text)`      | `List[FunctionNameResult]`   | `RETURNS TABLE` implies potentially > 1 row |
+| `RETURNS RECORD`                        | `Optional[FunctionNameRecord]` | Type-safe dataclass with AS clause     |
+| `RETURNS SETOF RECORD`                  | `List[Tuple]`                | Flexible tuples with AS clause           |
+| `RETURNS VOID`                          | `None`                       | No return value                           |
+
+**SQL Conventions for API Design:**
+
+Understanding this behavior allows you to design your SQL functions to produce the desired Python API:
+
+*   **If your function logically returns a collection of items (even if sometimes zero or one), use `SETOF` in your SQL `RETURNS` clause.** This guarantees the Python function returns a `List`.
+*   **If your function logically returns a single item or potentially nothing, define the return type *without* `SETOF`.** The Python function will return an `Optional`, correctly handling cases where no data is found. You don't need to explicitly handle `NULL` returns in SQL solely to get an `Optional` wrapper; the tool does this based on the lack of `SETOF`.
+
+**Note on Dataclass Fields:** Currently, fields within generated dataclasses (like `User` or `UserIdentity`) often default to `Optional[...]` for flexibility in handling potentially missing columns or `NULL` values returned by the database, even if the original `CREATE TABLE` or `CREATE TYPE` specified `NOT NULL`. This behavior might be refined in future versions to offer stricter typing based on schema nullability.

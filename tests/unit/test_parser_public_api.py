@@ -197,9 +197,9 @@ return_clause_test_cases = [
         ("id", "uuid", "Optional[UUID]", True),
         ("active", "boolean", "Optional[bool]", True)
     ], None, {"dataclass", "List", "UUID", "Optional"}),
-    # Return record
+    # Return record - falls back to Tuple when body cannot be parsed
     ("record", False, True, False, "Optional[Tuple]", [], None, {"Tuple", "Optional"}),
-    # Return SETOF record
+    # Return SETOF record - falls back to Tuple when body cannot be parsed  
     ("SETOF record", False, True, True, "List[Tuple]", [], None, {"List", "Tuple"})
 ]
 

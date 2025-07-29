@@ -50,7 +50,7 @@ def generated_api_module():
         # Run sql2pyapi from the project root
         # Use the command directly if it's installed as an entry point
         cmd = [
-            "sql2pyapi", # Assuming this is in PATH after installation
+            "python", "-m", "sql2pyapi.cli", # Use local development version
             str(FUNCTIONS_FILE), # Path relative to project root (combined SQL file)
             str(GENERATED_API_PATH), # Path relative to project root
             "--schema-file",
@@ -330,36 +330,35 @@ async def test_get_item_summaries_composite(db_conn, generated_api_module):
     assert summary_map["inactive Chair"] == Decimal("111.98") # Ensure NUMERIC precision handled
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(reason="Function RETURNS RECORD, which requires an AS clause in the call, not yet fully supported by generator.") # Added xfail
+# @pytest.mark.xfail(reason="Function RETURNS RECORD, which requires an AS clause in the call, not yet fully supported by generator.") # Added xfail
 async def test_get_item_name_and_mood_record(db_conn, generated_api_module):
     """Test retrieving item name and mood as an anonymous RECORD."""
     # Assumes first item is Apple (id=1) with mood 'happy'
     record_result = await generated_api_module.get_item_name_and_mood(db_conn, item_id=1)
-    # The structure of record_result depends on how RECORD is handled.
-    # If it's a tuple: (name, mood_value)
-    # If it becomes a Pydantic model or dataclass, field access is needed.
-    # Based on current psycopg3 behavior for unnamed RECORD, it should be a tuple.
-    assert isinstance(record_result, tuple), "RECORD should return a tuple"
-    assert len(record_result) == 2, "Expected two fields in the tuple"
-    assert record_result[0] == "Apple"
-    # Assuming 'mood' is an enum and its .value is compared or it's directly the string
-    # If Mood enum is available in generated_api_module and used:
-    # assert record_result[1] == generated_api_module.Mood.HAPPY
-    # If it's just the string value directly from DB:
-    assert record_result[1] == "happy" 
+    # With RECORD support, the function now returns a dataclass instead of a tuple
+    # This provides type safety and better developer experience
+    assert hasattr(record_result, 'name'), "RECORD should return a dataclass with 'name' field"
+    assert hasattr(record_result, 'current_mood'), "RECORD should return a dataclass with 'current_mood' field"
+    assert record_result.name == "Apple"
+    assert record_result.current_mood == generated_api_module.Mood.HAPPY
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(reason="Handling of SETOF anonymous RECORD returns needs verification.")
+# @pytest.mark.xfail(reason="Handling of SETOF anonymous RECORD returns needs verification.")
 async def test_get_all_names_and_moods_setof_record(db_conn, generated_api_module):
     """Test function returning SETOF anonymous RECORD."""
     records = await generated_api_module.get_all_names_and_moods(db_conn)
     assert len(records) == 3
-    # Similar to the single RECORD test, assertions depend on the generated structure.
-    # Example: Assuming list of tuples
-    # assert ("Apple", "happy") in records
-    # assert ("Banana", "ok") in records
-    # assert ("inactive Chair", "sad") in records
-    pytest.fail("Need to inspect generated code for SETOF anonymous RECORD handling.")
+    # SETOF RECORD returns a list of tuples (raw tuples with string values for flexibility)
+    # Each tuple contains (name, mood_string_value)
+    expected_records = [
+        ("Apple", "happy"),
+        ("Banana", "ok"), 
+        ("inactive Chair", "sad")
+    ]
+    # Convert tuples to sets for order-independent comparison
+    actual_set = set(records)
+    expected_set = set(expected_records)
+    assert actual_set == expected_set
 
 @pytest.mark.asyncio
 async def test_filter_items_by_optional_mood_with_value(db_conn, generated_api_module):

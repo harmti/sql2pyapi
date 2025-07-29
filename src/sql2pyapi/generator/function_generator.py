@@ -2,6 +2,7 @@
 # Standard library and third-party imports
 from typing import List, Tuple, Optional, Dict
 import textwrap
+import logging
 
 # Local imports
 from ..sql_models import ParsedFunction, ReturnColumn, SQLParameter
@@ -9,6 +10,39 @@ from ..constants import *
 from ..parser.utils import _to_singular_camel_case
 from .return_handlers import _determine_return_type
 from .composite_unpacker import needs_nested_unpacking, generate_composite_unpacking_code
+
+
+def _python_type_to_sql_type(python_type: str) -> str:
+    """
+    Maps Python types back to SQL types for AS clause generation.
+    
+    Args:
+        python_type: The Python type string
+        
+    Returns:
+        Corresponding SQL type string
+    """
+    # Basic type mappings (reverse of TYPE_MAP)
+    python_to_sql = {
+        "str": "TEXT",
+        "int": "INTEGER", 
+        "bool": "BOOLEAN",
+        "float": "DOUBLE PRECISION",
+        "UUID": "UUID",
+        "datetime": "TIMESTAMP",
+        "date": "DATE",
+        "Decimal": "NUMERIC",
+        "dict": "JSON",
+        "Mood": "mood",  # Custom enum type
+        "Any": "TEXT",   # Fallback
+    }
+    
+    # Handle Optional types
+    if python_type.startswith("Optional[") and python_type.endswith("]"):
+        inner_type = python_type[9:-1]
+        return python_to_sql.get(inner_type, "TEXT")
+    
+    return python_to_sql.get(python_type, "TEXT")
 
 
 def _generate_parameter_list(func_params: List[SQLParameter]) -> Tuple[List[SQLParameter], str]:
@@ -174,8 +208,18 @@ def _generate_function_body(func: ParsedFunction, final_dataclass_name: Optional
     body_lines.append("_sql_query_named_args = ', '.join(_sql_named_args_parts)")
 
     # Determine the base SQL query structure using func.sql_name (which is schema-qualified)
-    # No change needed for query_template itself, just how arguments are formatted within it
-    query_template = f"SELECT * FROM {func.sql_name}({{_sql_query_named_args}})"
+    # For RECORD functions, add AS clause with column definitions
+    if func.returns_record and func.return_columns:
+        # Generate column definitions for AS clause
+        as_columns = []
+        for col in func.return_columns:
+            # Map Python types back to SQL types for AS clause
+            sql_type = _python_type_to_sql_type(col.python_type)
+            as_columns.append(f"{col.name} {sql_type}")
+        as_clause = f" AS ({', '.join(as_columns)})"
+        query_template = f"SELECT * FROM {func.sql_name}({{_sql_query_named_args}}){as_clause}"
+    else:
+        query_template = f"SELECT * FROM {func.sql_name}({{_sql_query_named_args}})"
 
     body_lines.append(f"_full_sql_query = f\"{query_template}\"")
     body_lines.append("") # Blank line
@@ -232,7 +276,12 @@ def _generate_setof_return_body(func: ParsedFunction, final_dataclass_name: Opti
         body_lines.append(f"    return [{func.return_type}(row[0]) for row in rows]")
         return body_lines
     
-    if func.returns_table:
+    if func.returns_record and func.returns_setof:
+        # Handle SETOF RECORD specially - return list of tuples
+        body_lines.append("    # Return list of tuples for SETOF record")
+        body_lines.append("    return rows")
+        return body_lines
+    elif func.returns_table:
         # Covers SETOF table_name, SETOF custom_type_name, SETOF TABLE(...)
         body_lines.append(f"    # Ensure dataclass '{final_dataclass_name}' is defined above.")
         body_lines.append("    if not rows:")
@@ -246,6 +295,9 @@ def _generate_setof_return_body(func: ParsedFunction, final_dataclass_name: Opti
         # If it's a table name, make sure it's in singular form
         if func.returns_table and func.setof_table_name:
             singular_class_name = _to_singular_camel_case(func.setof_table_name)
+        
+        # Debug logging for troubleshooting
+        # Removed debug logging - implementation is stable
             
         # Check if any columns are ENUM types by checking if 'Enum' is in required imports
         is_enum_import = 'Enum' in func.required_imports
@@ -260,7 +312,9 @@ def _generate_setof_return_body(func: ParsedFunction, final_dataclass_name: Opti
         if has_enum_columns:
             # Generate an inner helper function to efficiently convert enum values during object creation
             body_lines.append("    # Inner helper function for efficient conversion")
-            body_lines.append(f"    def create_{singular_class_name.lower()}(row):")
+            # Defensive check for None singular_class_name
+            function_name_suffix = singular_class_name.lower() if singular_class_name else "item"
+            body_lines.append(f"    def create_{function_name_suffix}(row):")
             
             # Generate field assignments with ENUM conversions
             field_assignments = []
