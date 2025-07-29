@@ -54,25 +54,55 @@ def clean_and_split_column_fragments(col_defs_str: str) -> List[str]:
     combined = ','.join(processed_lines)
     logging.debug(f"Combined processed lines: '{combined}'")
     
-    # Then parse character by character to handle parentheses correctly
+    # Then parse character by character to handle parentheses, quotes, and braces correctly
     current_fragment = ""
     paren_depth = 0
+    in_single_quote = False
+    in_double_quote = False
+    brace_depth = 0
     
-    for char in combined:
-        if char == '(':
+    i = 0
+    while i < len(combined):
+        char = combined[i]
+        
+        # Handle escapes in quotes
+        if (in_single_quote or in_double_quote) and char == '\\' and i + 1 < len(combined):
+            current_fragment += char + combined[i + 1]  # Add both escape and escaped char
+            i += 2
+            continue
+            
+        # Handle single quotes
+        if char == "'" and not in_double_quote:
+            in_single_quote = not in_single_quote
+            current_fragment += char
+        # Handle double quotes  
+        elif char == '"' and not in_single_quote:
+            in_double_quote = not in_double_quote
+            current_fragment += char
+        # Handle parentheses (only when not in quotes)
+        elif char == '(' and not in_single_quote and not in_double_quote:
             paren_depth += 1
             current_fragment += char
-        elif char == ')':
+        elif char == ')' and not in_single_quote and not in_double_quote:
             paren_depth -= 1
             current_fragment += char
-        elif char == ',' and paren_depth == 0:
-            # Only split on commas outside of parentheses
+        # Handle braces (only when not in quotes)
+        elif char == '{' and not in_single_quote and not in_double_quote:
+            brace_depth += 1
+            current_fragment += char
+        elif char == '}' and not in_single_quote and not in_double_quote:
+            brace_depth -= 1
+            current_fragment += char
+        # Handle commas - only split when not inside any nesting
+        elif char == ',' and paren_depth == 0 and brace_depth == 0 and not in_single_quote and not in_double_quote:
             if current_fragment.strip():
                 fragments.append(current_fragment.strip())
                 logging.debug(f"Found fragment: '{current_fragment.strip()}'")
             current_fragment = ""
         else:
             current_fragment += char
+        
+        i += 1
     
     # Don't forget the last fragment
     if current_fragment.strip():
