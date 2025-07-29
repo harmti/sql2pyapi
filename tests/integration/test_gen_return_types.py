@@ -439,6 +439,77 @@ def test_setof_scalar_function_generation(tmp_path):
     assert list_comp is not None, "List comprehension '[row[0] for row in rows if row]' not found or has wrong structure"
 
 
+def test_setof_async_table_function_generation(tmp_path):
+    """Test SETOF with table names starting with 'as' and 'lang' (regression test for word boundary bug)."""
+    functions_sql_path = FIXTURES_DIR / "setof_async_table_function.sql"
+    actual_output_path = tmp_path / "setof_async_table_function_api.py"
+
+    # Run the generator tool
+    result = run_cli_tool(functions_sql_path, actual_output_path)
+    
+    # Ensure the CLI tool succeeded
+    assert result.returncode == 0, f"CLI tool failed with stderr: {result.stderr}"
+
+    # Check that the file was generated
+    assert actual_output_path.is_file(), "Generated file was not created."
+    actual_content = actual_output_path.read_text()
+    
+    # Parse the generated code
+    tree = ast.parse(actual_content)
+
+    # Check that both dataclasses were generated
+    async_process_class = None
+    language_setting_class = None
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ClassDef):
+            if node.name == 'AsyncProcess':
+                async_process_class = node
+            elif node.name == 'LanguageSetting':
+                language_setting_class = node
+    
+    assert async_process_class is not None, "AsyncProcess dataclass not found"
+    assert language_setting_class is not None, "LanguageSetting dataclass not found"
+
+    # Check both functions have correct signatures
+    async_func_node = None
+    lang_func_node = None
+    for node in ast.walk(tree):
+        if isinstance(node, ast.AsyncFunctionDef):
+            if node.name == 'list_async_processes':
+                async_func_node = node
+            elif node.name == 'get_language_settings':
+                lang_func_node = node
+    
+    assert async_func_node is not None, "Async function 'list_async_processes' not found"
+    assert lang_func_node is not None, "Async function 'get_language_settings' not found"
+
+    # Check return annotations are correct, not Optional[Any]
+    async_return = ast.unparse(async_func_node.returns)
+    lang_return = ast.unparse(lang_func_node.returns)
+    assert async_return == 'List[AsyncProcess]', f"Expected List[AsyncProcess], got {async_return}"
+    assert lang_return == 'List[LanguageSetting]', f"Expected List[LanguageSetting], got {lang_return}"
+
+    # Check that both functions use fetchall(), not fetchone()
+    for func_node, func_name in [(async_func_node, 'list_async_processes'), (lang_func_node, 'get_language_settings')]:
+        fetchall_found = False
+        fetchone_found = False
+        for node in ast.walk(func_node):
+            if isinstance(node, ast.Attribute) and node.attr == 'fetchall':
+                fetchall_found = True
+            elif isinstance(node, ast.Attribute) and node.attr == 'fetchone':
+                fetchone_found = True
+
+        assert fetchall_found, f"Function {func_name} should use fetchall() for SETOF return type"
+        assert not fetchone_found, f"Function {func_name} should not use fetchone() for SETOF return type"
+
+    # Check that the content includes the proper enum and dataclasses
+    assert 'AsyncStatus' in actual_content, "AsyncStatus enum should be generated"
+    assert 'class AsyncProcess:' in actual_content, "AsyncProcess dataclass should be generated"
+    assert 'class LanguageSetting:' in actual_content, "LanguageSetting dataclass should be generated"
+    assert 'List[AsyncProcess]' in actual_content, "Return type should be List[AsyncProcess]"
+    assert 'List[LanguageSetting]' in actual_content, "Return type should be List[LanguageSetting]"
+
+
 def test_returns_table_function_generation(tmp_path):
     """Test generating a function that returns TABLE(...)."""
     functions_sql_path = FIXTURES_DIR / "returns_table_function.sql"

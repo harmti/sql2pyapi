@@ -30,7 +30,7 @@ FUNCTION_REGEX = re.compile(
     \s*\(\s*(?P<params>.*?)\s*\)\s*            # Parameters with flexible whitespace
     \s+RETURNS\s+                              # RETURNS keyword
     (?P<return_def>.*?)                        # Return definition (non-greedy)
-    (?=\s+(?:AS|LANGUAGE))                    # Positive lookahead for AS or LANGUAGE
+    (?=\s+(?:AS|LANGUAGE)\b)                  # Positive lookahead for AS or LANGUAGE with word boundary
     """,
     re.IGNORECASE | re.DOTALL | re.VERBOSE,
 )
