@@ -44,13 +44,12 @@ def test_basic_composite_type():
     # Parse both
     functions, _, composite_types, _ = parse_test_sql(func_sql, type_sql)
     
-    # The parser may not fully support composite types in the way we expect
     # Verify the function was parsed
     func = find_function(functions, "save_address")
     param = find_parameter(func, "p_address")
     assert param.sql_type == "address_type"
-    # The parser treats unknown types as Any
-    assert param.python_type == "Any"
+    # The parser now correctly recognizes composite types
+    assert param.python_type == "AddressType"
 
 
 def test_schema_qualified_composite_type():
@@ -77,8 +76,8 @@ def test_schema_qualified_composite_type():
     func = find_function(functions, "calculate_distance")
     param1 = find_parameter(func, "p_point1")
     assert param1.sql_type == "public.point_type"
-    # The parser may treat unknown types as Any
-    assert "Any" in param1.python_type
+    # The parser now correctly recognizes schema-qualified composite types
+    assert param1.python_type == "PointType"
 
 
 def test_composite_type_array():
@@ -106,12 +105,11 @@ def test_composite_type_array():
     func = find_function(functions, "save_contacts")
     param = find_parameter(func, "p_contacts")
     assert param.sql_type == "contact_type[]"
-    # The parser treats arrays of unknown types as List[Any]
-    assert param.python_type == "List[Any]"
+    # The parser now correctly treats composite type arrays as List[CompositeType]
+    assert param.python_type == "List[ContactType]"
     
     # Verify imports
     assert "List" in func.required_imports
-    assert "Any" in func.required_imports
 
 
 def test_returning_composite_type():

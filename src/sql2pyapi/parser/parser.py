@@ -84,7 +84,7 @@ class SQLParser:
             TypeMappingError: If the SQL type cannot be mapped to a Python type
         """
         # Use the imported map_sql_to_python_type function
-        return map_sql_to_python_type(sql_type, is_optional, context, self.enum_types, self.table_schemas)
+        return map_sql_to_python_type(sql_type, is_optional, context, self.enum_types, self.table_schemas, self.composite_types)
 
     def _parse_column_definitions(self, col_defs_str: str, context: str = None) -> Tuple[List[ReturnColumn], Set[str]]:
         """
@@ -108,7 +108,8 @@ class SQLParser:
             sql_content, 
             self.table_schemas, 
             self.table_schema_imports,
-            self.enum_types
+            self.enum_types,
+            self.composite_types
         )
         
         # Store under both the original name and normalized name (for schema-qualified tables)
@@ -155,7 +156,8 @@ class SQLParser:
             param_str=param_str, 
             context=context, 
             enum_types=self.enum_types, 
-            table_schemas=self.table_schemas
+            table_schemas=self.table_schemas,
+            composite_types=self.composite_types
         )
 
     def _parse_return_clause(self, match_dict: Dict, initial_imports: Set[str], function_name: str = None) -> Tuple[Dict, Set[str]]:

@@ -103,12 +103,12 @@ def test_enum_array():
     func = find_function(functions, "get_items_by_tags")
     param = find_parameter(func, "p_tags")
     assert param.sql_type == "tag_type[]"
-    # The parser currently treats enum arrays as List[Any]
-    assert param.python_type == "List[Any]"
+    # The parser now correctly treats enum arrays as List[EnumType]
+    assert param.python_type == "List[TagType]"
     
     # Verify imports
     assert "List" in func.required_imports
-    assert "Any" in func.required_imports
+    assert "Enum" in func.required_imports
 
 
 def test_optional_enum():

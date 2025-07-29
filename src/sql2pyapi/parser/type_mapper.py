@@ -13,7 +13,8 @@ from ..sql_models import TYPE_MAP
 
 def map_sql_to_python_type(sql_type: str, is_optional: bool = False, context: str = None,
                            enum_types: Dict[str, List[str]] = None,
-                           table_schemas: Dict[str, List] = None) -> Tuple[str, Set[str]]:
+                           table_schemas: Dict[str, List] = None,
+                           composite_types: Dict[str, List] = None) -> Tuple[str, Set[str]]:
     """
     Maps a SQL type to its corresponding Python type and required imports.
     Refined logic to handle types with precision/qualifiers.
@@ -24,6 +25,7 @@ def map_sql_to_python_type(sql_type: str, is_optional: bool = False, context: st
         context (str, optional): Context information for error reporting
         enum_types (Dict[str, List[str]], optional): Dictionary of enum types
         table_schemas (Dict[str, List], optional): Dictionary of table schemas
+        composite_types (Dict[str, List], optional): Dictionary of composite types
 
     Returns:
         Tuple[str, Set[str]]: The Python type and a set of required imports
@@ -34,6 +36,7 @@ def map_sql_to_python_type(sql_type: str, is_optional: bool = False, context: st
     # Default empty dictionaries if not provided
     enum_types = enum_types or {}
     table_schemas = table_schemas or {}
+    composite_types = composite_types or {}
     
     # --- Check for ENUM Type ---
     if sql_type in enum_types:
@@ -68,6 +71,9 @@ def map_sql_to_python_type(sql_type: str, is_optional: bool = False, context: st
             
         return py_type, imports
     
+    # --- Initialize imports set ---
+    imports = set()
+    
     # --- Normalization and Array Handling --- 
     sql_type_normal = sql_type.lower().strip()
     is_array = False
@@ -101,6 +107,30 @@ def map_sql_to_python_type(sql_type: str, is_optional: bool = False, context: st
         if potential_base_type_split != lookup_type_for_split: 
              py_type = TYPE_MAP.get(potential_base_type_split)
 
+    # --- Check Custom Types (ENUM, Table, Composite) Before Fallback ---
+    if not py_type:
+        # Check for ENUM type (using the base type without array suffix)
+        if sql_type_no_array in enum_types:
+            # Convert enum_name to PascalCase for Python Enum class name
+            py_type = ''.join(word.capitalize() for word in sql_type_no_array.split('_'))
+            imports.add('Enum')
+        
+        # Check for Composite Type Reference (using the base type without array suffix)
+        elif sql_type_no_array in composite_types or (not '.' in sql_type_no_array and sql_type_no_array.split('.')[-1] in composite_types):
+            # Import the conversion function
+            from .utils import _to_singular_camel_case
+            
+            # Convert composite type name to dataclass name
+            py_type = _to_singular_camel_case(sql_type_no_array)
+        
+        # Check for Table Schema Reference (using the base type without array suffix)
+        elif sql_type_no_array in table_schemas or (not '.' in sql_type_no_array and sql_type_no_array.split('.')[-1] in table_schemas):
+            # Import the conversion function
+            from .utils import _to_singular_camel_case
+            
+            # Convert table name to dataclass name
+            py_type = _to_singular_camel_case(sql_type_no_array)
+
     # --- Fallback and Logging --- 
     if not py_type:
         error_msg = f"Unknown SQL type: {sql_type}"
@@ -109,7 +139,6 @@ def map_sql_to_python_type(sql_type: str, is_optional: bool = False, context: st
         py_type = "Any"
 
     # --- Import Handling --- 
-    imports = set()
     if py_type == 'UUID': imports.add('UUID')
     elif py_type == 'datetime': imports.add('datetime')
     elif py_type == 'date': imports.add('date')

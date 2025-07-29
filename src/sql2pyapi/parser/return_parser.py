@@ -38,6 +38,11 @@ def handle_returns_table(table_columns_str: str, initial_imports: Set[str], func
     Returns:
         Tuple[Dict, Set[str]]: Return info dictionary and updated imports
     """
+    # Initialize parameters to prevent None errors
+    enum_types = enum_types or {}
+    table_schemas = table_schemas or {}
+    composite_types = composite_types or {}
+    
     returns_info = {
         "return_type": "DataclassPlaceholder",
         "returns_table": True,
@@ -181,7 +186,7 @@ def handle_returns_type_name(sql_return_type: str, is_setof: bool, initial_impor
             try:
                 context_msg = f"return type of function {function_name or 'unknown'}"
                 py_type, type_imports = map_sql_to_python_type(sql_return_type, is_optional=False, context=context_msg,
-                                                            enum_types=enum_types, table_schemas=table_schemas)
+                                                            enum_types=enum_types, table_schemas=table_schemas, composite_types=composite_types)
                 current_imports.update(type_imports)
                 returns_info["return_type"] = py_type # Store the BASE type
 

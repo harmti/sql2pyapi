@@ -30,7 +30,8 @@ TABLE_REGEX = re.compile(
 def parse_create_table(sql_content: str, 
                       existing_table_schemas: Dict[str, List[ReturnColumn]] = None,
                       existing_table_schema_imports: Dict[str, Set[str]] = None,
-                      enum_types: Dict[str, List[str]] = None) -> Tuple[Dict[str, List[ReturnColumn]], Dict[str, Set[str]]]:
+                      enum_types: Dict[str, List[str]] = None,
+                      composite_types: Dict[str, List[ReturnColumn]] = None) -> Tuple[Dict[str, List[ReturnColumn]], Dict[str, Set[str]]]:
     """
     Finds and parses CREATE TABLE statements, storing schemas in instance variables.
     
@@ -46,6 +47,8 @@ def parse_create_table(sql_content: str,
     # Initialize or use existing dictionaries
     table_schemas = existing_table_schemas or {}
     table_schema_imports = existing_table_schema_imports or {}
+    enum_types = enum_types or {}
+    composite_types = composite_types or {}
     
     # Debug: Log the current state of table_schemas before parsing
     logging.debug(f"TABLE_SCHEMAS before parsing: {list(table_schemas.keys())}")
@@ -67,7 +70,8 @@ def parse_create_table(sql_content: str,
             columns, required_imports = parse_column_definitions(col_defs_str_cleaned, 
                                                               context=f"table {table_name}",
                                                               enum_types=enum_types,
-                                                              table_schemas=table_schemas) 
+                                                              table_schemas=table_schemas,
+                                                              composite_types=composite_types) 
             if columns:
                 # Store under both the normalized name and the fully qualified name
                 normalized_table_name = table_name.split(".")[-1]

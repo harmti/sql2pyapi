@@ -32,7 +32,8 @@ PARAM_REGEX = re.compile(
 
 def parse_single_param_definition(param_def: str, context: str, 
                                  enum_types: Dict[str, List[str]] = None,
-                                 table_schemas: Dict[str, List] = None) -> Optional[Tuple[SQLParameter, Set[str]]]:
+                                 table_schemas: Dict[str, List] = None,
+                                 composite_types: Dict[str, List] = None) -> Optional[Tuple[SQLParameter, Set[str]]]:
     """
     Parses a single parameter definition string. Returns SQLParameter and its imports, or None.
     
@@ -41,6 +42,7 @@ def parse_single_param_definition(param_def: str, context: str,
         context (str): Context for error reporting
         enum_types (Dict[str, List[str]], optional): Dictionary of enum types
         table_schemas (Dict[str, List], optional): Dictionary of table schemas
+        composite_types (Dict[str, List], optional): Dictionary of composite types
         
     Returns:
         Optional[Tuple[SQLParameter, Set[str]]]: The parsed parameter and its imports, or None if parsing failed
@@ -79,7 +81,7 @@ def parse_single_param_definition(param_def: str, context: str,
     # Map SQL type to Python type
     param_context = f"parameter '{sql_name}'" + (f" in {context}" if context else "")
     try:
-        py_type, imports = map_sql_to_python_type(sql_type, is_optional, param_context, enum_types, table_schemas)
+        py_type, imports = map_sql_to_python_type(sql_type, is_optional, param_context, enum_types, table_schemas, composite_types)
     except Exception as e:
         logging.warning(str(e))
         py_type = "Any" if not is_optional else "Optional[Any]"
@@ -98,7 +100,8 @@ def parse_single_param_definition(param_def: str, context: str,
 
 def parse_params(param_str: str, context: str = None, 
                 enum_types: Dict[str, List[str]] = None,
-                table_schemas: Dict[str, List] = None) -> Tuple[List[SQLParameter], Set[str]]:
+                table_schemas: Dict[str, List] = None,
+                composite_types: Dict[str, List] = None) -> Tuple[List[SQLParameter], Set[str]]:
     """
     Parses parameter string including optional DEFAULT values.
     Uses a helper to parse individual definitions.
@@ -108,6 +111,7 @@ def parse_params(param_str: str, context: str = None,
         context (str, optional): Context for error reporting
         enum_types (Dict[str, List[str]], optional): Dictionary of enum types
         table_schemas (Dict[str, List], optional): Dictionary of table schemas
+        composite_types (Dict[str, List], optional): Dictionary of composite types
         
     Returns:
         Tuple[List[SQLParameter], Set[str]]: The parsed parameters and their imports
@@ -128,7 +132,7 @@ def parse_params(param_str: str, context: str = None,
             continue
 
         # Attempt to parse the fragment using the helper
-        parse_result = parse_single_param_definition(param_def, current_context, enum_types, table_schemas)
+        parse_result = parse_single_param_definition(param_def, current_context, enum_types, table_schemas, composite_types)
 
         if parse_result:
             param, imports = parse_result
@@ -143,7 +147,7 @@ def parse_params(param_str: str, context: str = None,
                 # Re-run type mapping for the corrected type
                 try:
                     py_type, imports = map_sql_to_python_type(params[-1].sql_type, params[-1].is_optional, 
-                                                            param_context_recovery, enum_types, table_schemas)
+                                                            param_context_recovery, enum_types, table_schemas, composite_types)
                     params[-1].python_type = py_type
                     required_imports.update(imports)
                 except Exception as e:

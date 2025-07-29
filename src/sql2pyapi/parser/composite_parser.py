@@ -48,6 +48,8 @@ def parse_create_type(sql_content: str,
     # Initialize or use existing dictionaries
     composite_types = existing_composite_types or {}
     composite_type_imports = existing_composite_type_imports or {}
+    enum_types = enum_types or {}
+    table_schemas = table_schemas or {}
     
     logging.debug(f"COMPOSITE_TYPES before parsing: {list(composite_types.keys())}")
     
@@ -83,7 +85,8 @@ def parse_create_type(sql_content: str,
             fields, required_imports = parse_column_definitions(field_defs_str, 
                                                               context=f"type {type_name}",
                                                               enum_types=enum_types,
-                                                              table_schemas=table_schemas)
+                                                              table_schemas=table_schemas,
+                                                              composite_types=existing_composite_types)
             if fields:
                 normalized_type_name = type_name.split(".")[-1]
                 # Store under normalized name

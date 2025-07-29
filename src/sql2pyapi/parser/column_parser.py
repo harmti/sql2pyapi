@@ -115,12 +115,14 @@ def clean_and_split_column_fragments(col_defs_str: str) -> List[str]:
 
 def parse_single_column_fragment(current_def: str, columns: List[ReturnColumn], required_imports: Set[str], 
                                 context: str, enum_types: Dict[str, List[str]] = None,
-                                table_schemas: Dict[str, List] = None) -> Optional[ReturnColumn]:
+                                table_schemas: Dict[str, List] = None,
+                                composite_types: Dict[str, List] = None) -> Optional[ReturnColumn]:
     """Parses a single column definition fragment. Returns ReturnColumn or None if skipped."""
     
     # Default empty dictionaries if not provided
     enum_types = enum_types or {}
     table_schemas = table_schemas or {}
+    composite_types = composite_types or {}
     
     # Skip constraint definitions
     if current_def.lower().startswith((
@@ -145,7 +147,7 @@ def parse_single_column_fragment(current_def: str, columns: List[ReturnColumn], 
                 # For composite types, don't make columns optional by default
                 is_composite_type = context and "type " in context
                 use_optional = last_col.is_optional and not is_composite_type
-                py_type, imports = map_sql_to_python_type(merged_type, use_optional, col_context, enum_types, table_schemas)
+                py_type, imports = map_sql_to_python_type(merged_type, use_optional, col_context, enum_types, table_schemas, composite_types)
                 last_col.python_type = py_type # Update the existing column object
                 required_imports.update(imports) # Update the main import set
             except Exception as e:
@@ -218,7 +220,7 @@ def parse_single_column_fragment(current_def: str, columns: List[ReturnColumn], 
     else:
         try:
             col_context = f"column '{col_name}'" + (f" in {context}" if context else "")
-            py_type, imports = map_sql_to_python_type(sql_type_extracted, use_optional, col_context, enum_types, table_schemas)
+            py_type, imports = map_sql_to_python_type(sql_type_extracted, use_optional, col_context, enum_types, table_schemas, composite_types)
             required_imports.update(imports) # Update main import set
         except Exception as e:
             logging.warning(str(e))
@@ -247,6 +249,11 @@ def parse_column_definitions(col_defs_str: str, context: str = None,
     Returns:
         Tuple[List[ReturnColumn], Set[str]]: The parsed columns and their imports
     """
+    # Initialize parameters to prevent None errors
+    enum_types = enum_types or {}
+    table_schemas = table_schemas or {}
+    composite_types = composite_types or {}
+    
     columns = []
     required_imports = set()
     
@@ -258,7 +265,7 @@ def parse_column_definitions(col_defs_str: str, context: str = None,
     # --- Parse Fragments using helper --- 
     for fragment in fragments:
         # Pass current columns list for potential modification (numeric scale merge)
-        parsed_col = parse_single_column_fragment(fragment, columns, required_imports, context, enum_types, table_schemas)
+        parsed_col = parse_single_column_fragment(fragment, columns, required_imports, context, enum_types, table_schemas, composite_types)
         if parsed_col:
             columns.append(parsed_col)
 
