@@ -11,6 +11,7 @@ PYTHON_IMPORTS = {
     "UUID": "from uuid import UUID",
     "datetime": "from datetime import datetime",
     "date": "from datetime import date",
+    "timedelta": "from datetime import timedelta",
     "Decimal": "from decimal import Decimal",
     "dataclass": "from dataclasses import dataclass",
     "Enum": "from enum import Enum",

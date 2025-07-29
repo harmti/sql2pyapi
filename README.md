@@ -204,7 +204,7 @@ sql2pyapi functions.sql generated_api.py --no-helpers
   * Handles various return structures (scalar, TABLE, SETOF, RECORD)
 
 * **Type Mapping:**
-  * Maps PostgreSQL types to Python equivalents (uuid → UUID, text → str, etc.)
+  * Maps PostgreSQL types to Python equivalents (uuid → UUID, text → str, interval → timedelta, etc.)
   * Handles array types (e.g., integer[] → List[int], custom_type[] → List[CustomType])
   * Supports arrays of custom types (composite, enum, table types)
   * **JSON/JSONB Support:** Automatically serializes UUID and datetime objects in JSONB parameters using a custom encoder

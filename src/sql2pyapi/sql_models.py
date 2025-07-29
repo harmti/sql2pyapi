@@ -32,6 +32,7 @@ TYPE_MAP = {
     "jsonb": "dict",  # Or Any
     "bytea": "bytes",
     "double precision": "float", # Map double precision to float
+    "interval": "timedelta",  # Map PostgreSQL INTERVAL to Python timedelta
     # Add more mappings as needed
 }
 
@@ -39,6 +40,7 @@ PYTHON_IMPORTS = {
     "UUID": "from uuid import UUID",
     "datetime": "from datetime import datetime",  # Import only datetime
     "date": "from datetime import date",  # Import only date
+    "timedelta": "from datetime import timedelta",  # Import for timedelta
     "Decimal": "from decimal import Decimal",
     "Any": "from typing import Any",  # Import for Any
     "List": "from typing import List",  # Import for List

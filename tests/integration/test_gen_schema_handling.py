@@ -33,8 +33,7 @@ def test_func2_generation_with_schema(tmp_path, run_cli_tool):
     expected_imports_from_typing = {"List", "Optional", "Tuple", "Dict", "Any", "TypeVar", "Sequence"}
     expected_imports_other = {
         ("uuid", "UUID"),
-        ("datetime", "date"),
-        ("datetime", "datetime"),
+        ("datetime", "datetime"),  # Only datetime is used, not date
         ("psycopg", "AsyncConnection"),
         ("dataclasses", "dataclass")
     }

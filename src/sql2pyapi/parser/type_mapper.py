@@ -113,6 +113,7 @@ def map_sql_to_python_type(sql_type: str, is_optional: bool = False, context: st
     if py_type == 'UUID': imports.add('UUID')
     elif py_type == 'datetime': imports.add('datetime')
     elif py_type == 'date': imports.add('date')
+    elif py_type == 'timedelta': imports.add('timedelta')
     elif py_type == 'Decimal': imports.add('Decimal')
     elif py_type == 'Any': imports.add('Any')
     elif py_type == 'dict' or py_type == 'Dict[str, Any]':

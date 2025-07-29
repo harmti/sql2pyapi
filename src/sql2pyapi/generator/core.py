@@ -251,16 +251,32 @@ def generate_python_code(
 
     # Consolidate typing imports for better readability
     # Define standard imports that should always be present if used
+    # First, build the datetime import dynamically based on what's needed
+    datetime_imports_needed = []
+    if "from datetime import date" in current_imports:
+        datetime_imports_needed.append("date")
+    if "from datetime import datetime" in current_imports:
+        datetime_imports_needed.append("datetime")
+    if "from datetime import timedelta" in current_imports:
+        datetime_imports_needed.append("timedelta")
+    
+    datetime_import_line = ""
+    if datetime_imports_needed:
+        datetime_import_line = f"from datetime import {', '.join(sorted(datetime_imports_needed))}"
+    
     standard_imports_order = [
         "from typing import List, Optional, Tuple, Dict, Any", # Base typing imports
         "from typing import TypeVar, Sequence", # Helper function typing imports
         "from uuid import UUID",
-        "from datetime import date, datetime",
+        datetime_import_line,  # Dynamic datetime import
         "from decimal import Decimal",
         "from psycopg import AsyncConnection",
         "from dataclasses import dataclass",
         "from enum import Enum",
     ]
+    
+    # Remove empty datetime import line if no datetime imports needed
+    standard_imports_order = [imp for imp in standard_imports_order if imp]
 
     # Filter the standard imports based on what's actually in current_imports
     # AND conditionally add helper imports

@@ -7,7 +7,7 @@ rather than testing internal implementation details.
 import pytest
 from typing import Optional, Tuple, Set, List, Dict, Any
 from decimal import Decimal
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from uuid import UUID
 
 # Import the public API
@@ -50,6 +50,7 @@ map_type_test_cases = [
     ("timestamptz", False, "datetime", {"datetime"}),
     ("timestamp with time zone", False, "datetime", {"datetime"}),
     ("date", False, "date", {"date"}),
+    ("interval", False, "timedelta", {"timedelta"}),
     ("numeric", False, "Decimal", {"Decimal"}),
     ("decimal", False, "Decimal", {"Decimal"}),
     # JSON types
@@ -67,6 +68,7 @@ map_type_test_cases = [
     # Optional types (requiring imports)
     ("uuid", True, "Optional[UUID]", {"Optional", "UUID"}),
     ("date", True, "Optional[date]", {"Optional", "date"}),
+    ("interval", True, "Optional[timedelta]", {"Optional", "timedelta"}),
     ("numeric", True, "Optional[Decimal]", {"Optional", "Decimal"}),
     ("jsonb", True, "Optional[Dict[str, Any]]", {"Optional", "Dict", "Any"}),
     # Optional unknown type maps to Any (not Optional[Any])
@@ -78,11 +80,13 @@ map_type_test_cases = [
     # Array types (requiring imports)
     ("uuid[]", False, "List[UUID]", {"List", "UUID"}),
     ("date[]", False, "List[date]", {"List", "date"}),
+    ("interval[]", False, "List[timedelta]", {"List", "timedelta"}),
     ("numeric[]", False, "List[Decimal]", {"List", "Decimal"}),
     ("jsonb[]", False, "List[Dict[str, Any]]", {"List", "Dict", "Any"}),
     # Optional array types (Now expecting Optional[List[T]])
     ("integer[]", True, "Optional[List[int]]", {"List", "Optional"}),
     ("uuid[]", True, "Optional[List[UUID]]", {"List", "UUID", "Optional"}),
+    ("interval[]", True, "Optional[List[timedelta]]", {"List", "timedelta", "Optional"}),
     # We'll skip complex type names for now as they require special handling
     # and are tested in other ways
 ]
