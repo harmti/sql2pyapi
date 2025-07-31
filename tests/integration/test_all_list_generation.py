@@ -4,18 +4,18 @@ This test verifies that sql2pyapi automatically generates __all__ lists
 that include all dataclasses, enums, and functions.
 """
 
-from pathlib import Path
+import ast
 import subprocess
 import sys
-import ast
-import pytest
+from pathlib import Path
+
 
 # Define paths relative to the main tests/ directory
 TESTS_ROOT_DIR = Path(__file__).parent.parent  # Go up one level to tests/
 PROJECT_ROOT = TESTS_ROOT_DIR.parent  # Go up one level from tests/ to project root
 
 
-def run_cli_tool(functions_sql: Path, output_py: Path, schema_sql: Path = None, verbose: bool = False):
+def run_cli_tool(functions_sql: Path, output_py: Path, schema_sql: Path | None = None, verbose: bool = False):
     """Helper function to run the CLI tool as a subprocess."""
     cmd = [
         sys.executable,  # Use the current Python executable
@@ -42,11 +42,12 @@ def run_cli_tool(functions_sql: Path, output_py: Path, schema_sql: Path = None, 
 def extract_all_list_from_ast(tree: ast.AST) -> list:
     """Extract the __all__ list from an AST, returning its contents as a list of strings."""
     for node in ast.walk(tree):
-        if (isinstance(node, ast.Assign) and 
-            len(node.targets) == 1 and 
-            isinstance(node.targets[0], ast.Name) and 
-            node.targets[0].id == '__all__'):
-            
+        if (
+            isinstance(node, ast.Assign)
+            and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+            and node.targets[0].id == "__all__"
+        ):
             # Extract the list contents
             if isinstance(node.value, ast.List):
                 all_items = []
@@ -54,13 +55,13 @@ def extract_all_list_from_ast(tree: ast.AST) -> list:
                     if isinstance(elt, ast.Constant) and isinstance(elt.value, str):
                         all_items.append(elt.value)
                 return all_items
-    
+
     return []  # __all__ not found
 
 
 def test_all_list_basic_generation(tmp_path):
     """Test that __all__ list is generated with basic components."""
-    
+
     # Create test schema with table, enum, and composite type
     schema_sql_content = """
 -- Test table
@@ -110,7 +111,7 @@ BEGIN
     INSERT INTO test_users (id, name, status)
     VALUES (p_id, p_name, 'pending')
     RETURNING * INTO result.user;
-    
+
     result.is_new := TRUE;
     RETURN result;
 END;
@@ -136,43 +137,42 @@ $$;
 
     # Extract __all__ list
     all_list = extract_all_list_from_ast(tree)
-    
+
     # Verify __all__ list exists and is not empty
     assert all_list, "No __all__ list found in generated code"
-    
+
     # Expected items: dataclasses, enums, and functions
     expected_items = {
         # Dataclasses
-        'TestUser',          # from test_users table
-        'UserResult',        # from user_result composite type
-        
+        "TestUser",  # from test_users table
+        "UserResult",  # from user_result composite type
         # Enums
-        'UserStatus',        # from user_status enum
-        
-        # Functions  
-        'get_user_by_id',
-        'update_user_status', 
-        'create_user_result'
+        "UserStatus",  # from user_status enum
+        # Functions
+        "get_user_by_id",
+        "update_user_status",
+        "create_user_result",
     }
-    
+
     # Verify all expected items are in __all__
     actual_items = set(all_list)
-    assert expected_items.issubset(actual_items), \
+    assert expected_items.issubset(actual_items), (
         f"Missing items in __all__. Expected: {expected_items}, Got: {actual_items}"
-    
+    )
+
     # Verify __all__ is sorted alphabetically
     assert all_list == sorted(all_list), f"__all__ list is not sorted: {all_list}"
-    
+
     # Verify no duplicates
     assert len(all_list) == len(set(all_list)), f"__all__ list has duplicates: {all_list}"
 
 
 def test_all_list_empty_case(tmp_path):
     """Test __all__ list handling when no functions are defined."""
-    
+
     # Create empty function file
     function_sql_content = "-- No functions defined"
-    
+
     # Write test files
     function_sql_path = tmp_path / "empty_functions.sql"
     output_py_path = tmp_path / "empty_api.py"
@@ -187,10 +187,10 @@ def test_all_list_empty_case(tmp_path):
     assert output_py_path.is_file(), "Generated file was not created."
     actual_content = output_py_path.read_text()
     tree = ast.parse(actual_content)
-    
+
     # Extract __all__ list
     all_list = extract_all_list_from_ast(tree)
-    
+
     # With no functions/classes, __all__ should either be empty or not present
     # If present, it should be empty
     if all_list is not None:
@@ -199,7 +199,7 @@ def test_all_list_empty_case(tmp_path):
 
 def test_all_list_format_in_generated_code(tmp_path):
     """Test that __all__ list has proper formatting in the generated code."""
-    
+
     # Simple schema and function for testing format
     function_sql_content = """
 CREATE OR REPLACE FUNCTION simple_test()
@@ -222,30 +222,28 @@ $$;
 
     # Read the generated file as text to check formatting
     actual_content = output_py_path.read_text()
-    
+
     # Verify __all__ appears in the file
     assert "__all__ = [" in actual_content, "__all__ list not found in generated code"
-    
+
     # Verify it's properly positioned (after imports, before functions/classes)
-    lines = actual_content.split('\n')
+    lines = actual_content.split("\n")
     all_line_index = None
     import_line_index = None
     function_line_index = None
-    
+
     for i, line in enumerate(lines):
-        if line.startswith('from ') or line.startswith('import '):
+        if line.startswith("from ") or line.startswith("import "):
             import_line_index = i
-        elif line.startswith('__all__ = ['):
+        elif line.startswith("__all__ = ["):
             all_line_index = i
-        elif line.startswith('async def '):
+        elif line.startswith("async def "):
             function_line_index = i
             break
-    
+
     # Verify ordering: imports → __all__ → functions/classes
     if import_line_index is not None and all_line_index is not None:
-        assert import_line_index < all_line_index, \
-            "__all__ should come after imports"
-    
+        assert import_line_index < all_line_index, "__all__ should come after imports"
+
     if all_line_index is not None and function_line_index is not None:
-        assert all_line_index < function_line_index, \
-            "__all__ should come before function definitions"
+        assert all_line_index < function_line_index, "__all__ should come before function definitions"

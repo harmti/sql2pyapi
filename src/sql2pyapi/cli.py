@@ -1,11 +1,12 @@
-import typer
-from pathlib import Path
 import logging
-from typing import Optional
+from pathlib import Path
 
-from .parser import parse_sql
+import typer
+
 from .errors import SQL2PyAPIError
 from .generator import generate_python_code
+from .parser import parse_sql
+
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
@@ -30,7 +31,7 @@ def main(
         writable=True,
         help="Path for the generated Python output file.",
     ),
-    schema_file: Optional[Path] = typer.Option(
+    schema_file: Path | None = typer.Option(
         None,
         "--schema-file",
         "-s",
@@ -55,7 +56,7 @@ def main(
         False,
         "--allow-missing-schemas",
         help="Warn and generate placeholders instead of failing if a function's return table/type schema is not found. "
-             "Warning: This may produce code that fails at runtime.",
+        "Warning: This may produce code that fails at runtime.",
     ),
 ):
     """Generates Python async API wrappers from PostgreSQL function definitions."""
@@ -76,20 +77,18 @@ def main(
 
     try:
         sql_content = sql_file.read_text()
-        schema_content: Optional[str] = None
+        schema_content: str | None = None
         if schema_file:
             schema_content = schema_file.read_text()
 
     except Exception as e:
-        logging.error(f"Failed to read SQL file(s): {e}")
+        logging.exception(f"Failed to read SQL file(s): {e}")
         raise typer.Exit(code=1)
 
     try:
         # Get functions, schema imports, composite types, AND enum types from parser
         functions, table_schema_imports, composite_types, enum_types = parse_sql(
-            sql_content, 
-            schema_content=schema_content,
-            fail_on_missing_schema=not allow_missing_schemas
+            sql_content, schema_content=schema_content, fail_on_missing_schema=not allow_missing_schemas
         )
 
         if not functions:
@@ -112,10 +111,10 @@ def main(
         )
 
     except SQL2PyAPIError as e:
-        logging.error(f"Failed to parse SQL: {e}")
+        logging.exception(f"Failed to parse SQL: {e}")
         raise typer.Exit(code=1)
     except Exception as e:
-        logging.error(f"An unexpected error occurred during processing: {e}")
+        logging.exception(f"An unexpected error occurred during processing: {e}")
         # Optionally add traceback here for debugging
         # import traceback
         # logging.error(traceback.format_exc())
@@ -126,7 +125,7 @@ def main(
         output_file.write_text(python_code)
         logging.info(f"Successfully generated Python code to {output_file}")
     except Exception as e:
-        logging.error(f"Failed to write Python file: {e}")
+        logging.exception(f"Failed to write Python file: {e}")
         raise typer.Exit(code=1)
 
 

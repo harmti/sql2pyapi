@@ -1,18 +1,17 @@
 # tests/system/test_system.py
+import subprocess
+import sys
+import types
+import uuid
+from datetime import date
+from datetime import datetime
+from decimal import Decimal
+from pathlib import Path
+
+import psycopg  # type: ignore
 import pytest
 import pytest_asyncio
-import psycopg # type: ignore
-import subprocess
-import time
-import os
-import sys
-import importlib.util
-from pathlib import Path
-import uuid
-from decimal import Decimal
-from datetime import datetime, timezone, date
-from typing import Any, List, Optional, Tuple
-import types
+
 
 # --- Constants ---
 # Paths relative to project root (where pytest is run)
@@ -23,19 +22,20 @@ COMBINE_SCRIPT = SYSTEM_TEST_DIR / "combine_sql_files.py"
 SCHEMA_FILE = SQL_DIR / "combined_schema.sql"  # Combined schema file
 FUNCTIONS_FILE = SQL_DIR / "combined_functions.sql"  # Combined file with all functions
 GENERATED_API_FILENAME = "generated_db_api.py"
-GENERATED_API_PATH = SYSTEM_TEST_DIR / GENERATED_API_FILENAME # Generate inside tests/system
+GENERATED_API_PATH = SYSTEM_TEST_DIR / GENERATED_API_FILENAME  # Generate inside tests/system
 
 DB_USER = "testuser"
 DB_PASSWORD = "testpass"
 DB_NAME = "testdb"
 DB_HOST = "localhost"
-DB_PORT = 5433 # Exposed host port
+DB_PORT = 5433  # Exposed host port
 DSN = f"postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
 
 
 # --- Fixtures ---
 
 # The manage_db_container fixture has been moved to tests/system/conftest.py
+
 
 @pytest.fixture(scope="session")
 def generated_api_module():
@@ -50,11 +50,13 @@ def generated_api_module():
         # Run sql2pyapi from the project root
         # Use the command directly if it's installed as an entry point
         cmd = [
-            "python", "-m", "sql2pyapi.cli", # Use local development version
-            str(FUNCTIONS_FILE), # Path relative to project root (combined SQL file)
-            str(GENERATED_API_PATH), # Path relative to project root
+            "python",
+            "-m",
+            "sql2pyapi.cli",  # Use local development version
+            str(FUNCTIONS_FILE),  # Path relative to project root (combined SQL file)
+            str(GENERATED_API_PATH),  # Path relative to project root
             "--schema-file",
-            str(SCHEMA_FILE), # Path relative to project root
+            str(SCHEMA_FILE),  # Path relative to project root
         ]
         print(f"Running command: {' '.join(cmd)} from {PROJECT_ROOT}")
         result = subprocess.run(cmd, check=True, capture_output=True, text=True, cwd=PROJECT_ROOT)
@@ -66,7 +68,7 @@ def generated_api_module():
 
         # Read the generated code
         print(f"Reading generated code from {generated_file_abs_path}")
-        with open(generated_file_abs_path, 'r') as f:
+        with open(generated_file_abs_path) as f:
             generated_code = f.read()
 
         # Dynamically create and execute the corrected module code
@@ -85,19 +87,21 @@ def generated_api_module():
     finally:
         # Clean up sys.path
         if str(generated_file_abs_path.parent) in sys.path:
-             sys.path.pop(0)
+            sys.path.pop(0)
         # File cleanup is disabled for now during debugging
+
 
 @pytest_asyncio.fixture(scope="function")
 async def db_conn():
     """Provides an async psycopg connection with tuple row factory."""
     try:
         async with await psycopg.AsyncConnection.connect(DSN, autocommit=True) as aconn:
-             print(f"\nDB connection established ({id(aconn)})")
-             yield aconn
-             print(f"DB connection closed ({id(aconn)})")
+            print(f"\nDB connection established ({id(aconn)})")
+            yield aconn
+            print(f"DB connection closed ({id(aconn)})")
     except psycopg.OperationalError as e:
         pytest.fail(f"Failed to connect to database at {DSN}: {e}")
+
 
 @pytest_asyncio.fixture(scope="function")
 async def db_conn_dict_row():
@@ -106,8 +110,8 @@ async def db_conn_dict_row():
         # Connect using the same DSN, but specify row_factory
         async with await psycopg.AsyncConnection.connect(
             DSN,
-            row_factory=psycopg.rows.dict_row, # Use dict_row factory
-            autocommit=True
+            row_factory=psycopg.rows.dict_row,  # Use dict_row factory
+            autocommit=True,
         ) as aconn:
             print(f"\nDB dict_row connection established ({id(aconn)})\n")
             yield aconn
@@ -117,6 +121,7 @@ async def db_conn_dict_row():
 
 
 # --- Test Data Setup ---
+
 
 @pytest_asyncio.fixture(scope="function", autouse=True)
 async def setup_initial_data(db_conn):
@@ -139,17 +144,19 @@ async def setup_initial_data(db_conn):
             """
         )
         print("Initial data setup complete.")
-    yield # Test runs here
+    yield  # Test runs here
     # No specific teardown needed here as tables are cleaned at the start of next test
 
 
 # --- Test Functions ---
 
+
 @pytest.mark.asyncio
 async def test_get_item_count(db_conn, generated_api_module):
     """Test counting items after initial setup."""
     count = await generated_api_module.get_item_count(db_conn)
-    assert count == 3 # Based on setup_initial_data
+    assert count == 3  # Based on setup_initial_data
+
 
 @pytest.mark.asyncio
 async def test_get_item_by_id_found(db_conn, generated_api_module):
@@ -170,7 +177,8 @@ async def test_get_item_by_id_found(db_conn, generated_api_module):
     assert retrieved_item.related_ids == [101, 102]
     assert retrieved_item.metadata == {"color": "red", "origin": "local"}
     assert isinstance(retrieved_item.created_at, datetime)
-    assert retrieved_item.updated_at is None # Not set initially
+    assert retrieved_item.updated_at is None  # Not set initially
+
 
 @pytest.mark.asyncio
 async def test_get_item_by_id_not_found(db_conn, generated_api_module):
@@ -178,12 +186,14 @@ async def test_get_item_by_id_not_found(db_conn, generated_api_module):
     item = await generated_api_module.get_item_by_id(db_conn, item_id=999)
     assert item is None
 
+
 @pytest.mark.asyncio
 # @pytest.mark.xfail(reason="Generator currently uses fetchone() for SETOF scalar.") # Removed xfail
 async def test_get_all_item_names(db_conn, generated_api_module):
     """Test getting all item names using SETOF TEXT."""
     names = await generated_api_module.get_all_item_names(db_conn)
     assert sorted(names) == sorted(["Apple", "Banana", "inactive Chair"])
+
 
 @pytest.mark.asyncio
 async def test_get_items_with_mood(db_conn, generated_api_module):
@@ -204,6 +214,7 @@ async def test_get_items_with_mood(db_conn, generated_api_module):
     assert sad_items[0].name == "inactive Chair"
     assert sad_items[0].current_mood == generated_api_module.Mood.SAD
 
+
 @pytest.mark.asyncio
 async def test_search_items(db_conn, generated_api_module):
     """Test the function returning a TABLE definition."""
@@ -221,21 +232,22 @@ async def test_search_items(db_conn, generated_api_module):
     assert results[0].item_id == 3
     assert results[0].item_name == "inactive Chair"
 
-    results = await generated_api_module.search_items(db_conn, search_term="fruit") # Matches tags, not name/desc
+    results = await generated_api_module.search_items(db_conn, search_term="fruit")  # Matches tags, not name/desc
     # The SQL ILIKE is only on name/description, so this should be empty
     # Wait, the SQL function only searches name/description. Let's test that.
     results_fruit = await generated_api_module.search_items(db_conn, search_term="fruit")
-    assert len(results_fruit) == 0 # Correct, as 'fruit' is only in tags
+    assert len(results_fruit) == 0  # Correct, as 'fruit' is only in tags
 
-    results_an = await generated_api_module.search_items(db_conn, search_term="an") # Matches Banana
+    results_an = await generated_api_module.search_items(db_conn, search_term="an")  # Matches Banana
     assert len(results_an) == 1
     assert results_an[0].item_name == "Banana"
+
 
 @pytest.mark.asyncio
 async def test_add_related_item(db_conn, generated_api_module):
     """Test adding a related item and checking the returned UUID."""
     # This test verifies that PL/pgSQL functions with DECLARE blocks and RETURNING clauses work
-    item_id = 1 # Apple
+    item_id = 1  # Apple
     notes = "Related note for apple"
     config = {"setting": "value", "enabled": True}
     specific_uuid = uuid.uuid4()
@@ -245,8 +257,8 @@ async def test_add_related_item(db_conn, generated_api_module):
         db_conn,
         item_id=item_id,
         notes=notes,
-        config=config, # Pass dict directly, assuming json conversion
-        uuid=specific_uuid
+        config=config,  # Pass dict directly, assuming json conversion
+        uuid=specific_uuid,
     )
     assert returned_uuid == specific_uuid
 
@@ -257,19 +269,22 @@ async def test_add_related_item(db_conn, generated_api_module):
         assert row is not None
         assert row[0] == item_id
         assert row[1] == notes
-        assert row[2] == config # Check if JSON comes back correctly
+        assert row[2] == config  # Check if JSON comes back correctly
 
     # Call with default UUID
     returned_uuid_default = await generated_api_module.add_related_item(
-        db_conn, item_id=2, notes="Another note" # config defaults to {}
+        db_conn,
+        item_id=2,
+        notes="Another note",  # config defaults to {}
     )
     assert isinstance(returned_uuid_default, uuid.UUID)
     assert returned_uuid_default != specific_uuid
 
+
 @pytest.mark.asyncio
 async def test_update_item_timestamp(db_conn, generated_api_module):
     """Test the VOID function updating a timestamp."""
-    item_id = 2 # Banana
+    item_id = 2  # Banana
     # Get current timestamp (should be NULL)
     async with db_conn.cursor() as cur:
         await cur.execute("SELECT updated_at FROM items WHERE id = %s", (item_id,))
@@ -278,7 +293,7 @@ async def test_update_item_timestamp(db_conn, generated_api_module):
 
     # Call the VOID function
     result = await generated_api_module.update_item_timestamp(db_conn, item_id=item_id)
-    assert result is None # VOID functions should return None
+    assert result is None  # VOID functions should return None
 
     # Verify timestamp was updated
     async with db_conn.cursor() as cur:
@@ -306,13 +321,15 @@ async def test_get_item_description_nullable(db_conn, generated_api_module):
     # We need to insert an item without a description first.
     # Let's modify the setup fixture or add one here.
     async with db_conn.cursor() as cur:
-        await cur.execute("UPDATE items SET description = NULL WHERE id = 2;") # Ensure Banana has null desc
+        await cur.execute("UPDATE items SET description = NULL WHERE id = 2;")  # Ensure Banana has null desc
 
     desc2 = await generated_api_module.get_item_description(db_conn, item_id=2)
     assert desc2 is None
 
+
 # Tests for composite types (item_summary) and anonymous records might need adjustments
 # depending on how sql2pyapi generates code for them. Let's add placeholders.
+
 
 @pytest.mark.asyncio
 async def test_get_item_summaries_composite(db_conn, generated_api_module):
@@ -327,7 +344,8 @@ async def test_get_item_summaries_composite(db_conn, generated_api_module):
     summary_map = {s.item_name: s.total_value for s in summaries}
     assert summary_map["Apple"] == Decimal("5.00")
     assert summary_map["Banana"] == Decimal("7.50")
-    assert summary_map["inactive Chair"] == Decimal("111.98") # Ensure NUMERIC precision handled
+    assert summary_map["inactive Chair"] == Decimal("111.98")  # Ensure NUMERIC precision handled
+
 
 @pytest.mark.asyncio
 # @pytest.mark.xfail(reason="Function RETURNS RECORD, which requires an AS clause in the call, not yet fully supported by generator.") # Added xfail
@@ -337,10 +355,11 @@ async def test_get_item_name_and_mood_record(db_conn, generated_api_module):
     record_result = await generated_api_module.get_item_name_and_mood(db_conn, item_id=1)
     # With RECORD support, the function now returns a dataclass instead of a tuple
     # This provides type safety and better developer experience
-    assert hasattr(record_result, 'name'), "RECORD should return a dataclass with 'name' field"
-    assert hasattr(record_result, 'current_mood'), "RECORD should return a dataclass with 'current_mood' field"
+    assert hasattr(record_result, "name"), "RECORD should return a dataclass with 'name' field"
+    assert hasattr(record_result, "current_mood"), "RECORD should return a dataclass with 'current_mood' field"
     assert record_result.name == "Apple"
     assert record_result.current_mood == generated_api_module.Mood.HAPPY
+
 
 @pytest.mark.asyncio
 # @pytest.mark.xfail(reason="Handling of SETOF anonymous RECORD returns needs verification.")
@@ -350,101 +369,102 @@ async def test_get_all_names_and_moods_setof_record(db_conn, generated_api_modul
     assert len(records) == 3
     # SETOF RECORD returns a list of tuples (raw tuples with string values for flexibility)
     # Each tuple contains (name, mood_string_value)
-    expected_records = [
-        ("Apple", "happy"),
-        ("Banana", "ok"), 
-        ("inactive Chair", "sad")
-    ]
+    expected_records = [("Apple", "happy"), ("Banana", "ok"), ("inactive Chair", "sad")]
     # Convert tuples to sets for order-independent comparison
     actual_set = set(records)
     expected_set = set(expected_records)
     assert actual_set == expected_set
+
 
 @pytest.mark.asyncio
 async def test_filter_items_by_optional_mood_with_value(db_conn, generated_api_module):
     """Test filtering items with an optional enum parameter when a value is provided."""
     # Use 'happy' mood to filter
     items = await generated_api_module.filter_items_by_optional_mood(db_conn, mood=generated_api_module.Mood.HAPPY)
-    
+
     # Should only get the 'Apple' item which has 'happy' mood
     assert len(items) == 1
-    assert items[0].name == 'Apple'
+    assert items[0].name == "Apple"
     assert items[0].current_mood == generated_api_module.Mood.HAPPY
+
 
 @pytest.mark.asyncio
 async def test_filter_items_by_optional_mood_with_none(db_conn, generated_api_module):
     """Test filtering items with an optional enum parameter when None is provided."""
     # Pass None to get all items
     items = await generated_api_module.filter_items_by_optional_mood(db_conn, mood=None)
-    
+
     # Should get all items (3 from setup)
     assert len(items) == 3
-    
+
     # Verify we got all the different moods
     moods = [item.current_mood for item in items]
     assert generated_api_module.Mood.HAPPY in moods
     assert generated_api_module.Mood.OK in moods
     assert generated_api_module.Mood.SAD in moods
 
+
 @pytest.mark.asyncio
 async def test_get_default_mood_enum_return(db_conn, generated_api_module):
     """Test function that returns an enum value."""
     # Get the default mood
     mood = await generated_api_module.get_default_mood(db_conn)
-    
+
     # Should be 'happy' as defined in the function
     assert mood == generated_api_module.Mood.HAPPY
     assert isinstance(mood, generated_api_module.Mood)
 
+
 @pytest.mark.asyncio
 async def test_dict_row_with_enum(db_conn_dict_row, generated_api_module):
     """Test that functions returning rows with enum fields work with dictionary row factories.
-    
+
     This test verifies the fix for the KeyError bug that occurred when using dictionary row factories
     with composite types containing enum fields.
     """
     # When using dict_row factory, we need to directly execute SQL and handle the enum conversion manually
     # since the generated code expects tuple rows
-    
+
     # Test with happy mood
     async with db_conn_dict_row.cursor() as cur:
         await cur.execute(
             "SELECT * FROM items WHERE current_mood = %s ORDER BY id",
-            ('happy',)  # Pass the enum value as a string
+            ("happy",),  # Pass the enum value as a string
         )
         happy_items = await cur.fetchall()
-    
+
     # Verify results
     assert len(happy_items) == 1, "Expected exactly one item with happy mood"
-    assert happy_items[0]['name'] == "Apple"
-    assert happy_items[0]['current_mood'] == 'happy'
-    
+    assert happy_items[0]["name"] == "Apple"
+    assert happy_items[0]["current_mood"] == "happy"
+
     # Test with ok mood
     async with db_conn_dict_row.cursor() as cur:
         await cur.execute(
             "SELECT * FROM items WHERE current_mood = %s ORDER BY id",
-            ('ok',)  # Pass the enum value as a string
+            ("ok",),  # Pass the enum value as a string
         )
         ok_items = await cur.fetchall()
-    
+
     # Verify results
     assert len(ok_items) == 1, "Expected exactly one item with ok mood"
-    assert ok_items[0]['name'] == "Banana"
-    assert ok_items[0]['current_mood'] == 'ok'
-    
+    assert ok_items[0]["name"] == "Banana"
+    assert ok_items[0]["current_mood"] == "ok"
+
     # Test with sad mood
     async with db_conn_dict_row.cursor() as cur:
         await cur.execute(
             "SELECT * FROM items WHERE current_mood = %s ORDER BY id",
-            ('sad',)  # Pass the enum value as a string
+            ("sad",),  # Pass the enum value as a string
         )
         sad_items = await cur.fetchall()
-    
+
     # Verify results
     assert len(sad_items) == 1, "Expected exactly one item with sad mood"
-    assert sad_items[0]['name'] == "inactive Chair"
-    assert sad_items[0]['current_mood'] == 'sad'
-    
-    print(f"Successfully tested dictionary row factory with enum fields")
+    assert sad_items[0]["name"] == "inactive Chair"
+    assert sad_items[0]["current_mood"] == "sad"
+
+    print("Successfully tested dictionary row factory with enum fields")
+
 
 # End of file marker if necessary

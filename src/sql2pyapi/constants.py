@@ -25,7 +25,7 @@ PYTHON_IMPORTS = {
 DEFAULT_DOCSTRING_TEMPLATE = '"""Call PostgreSQL function {sql_name}()."""'
 
 # SQL query template
-SQL_QUERY_TEMPLATE = 'SELECT * FROM {sql_name}({placeholders})'
+SQL_QUERY_TEMPLATE = "SELECT * FROM {sql_name}({placeholders})"
 
 # NULL handling code snippets
 NULL_ROW_CHECK = "if row is None:\n    return None"

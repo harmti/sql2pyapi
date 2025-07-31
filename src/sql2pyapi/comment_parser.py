@@ -1,8 +1,8 @@
 # ===== SECTION: IMPORTS =====
+import logging
 import re
 import textwrap
-import logging
-from typing import List, Optional
+
 
 # ===== SECTION: REGEX =====
 # Regex to find comments (both -- and /* */)
@@ -10,7 +10,8 @@ COMMENT_REGEX = re.compile(r"(--.*?$)|(/\*.*?\*/)", re.MULTILINE | re.DOTALL)
 
 # ===== SECTION: FUNCTIONS =====
 
-def clean_comment_block(comment_lines: List[str]) -> str:
+
+def clean_comment_block(comment_lines: list[str]) -> str:
     """Cleans a list of raw SQL comment lines for use as a docstring."""
     if not comment_lines:
         return ""
@@ -28,25 +29,27 @@ def clean_comment_block(comment_lines: List[str]) -> str:
 
         if is_line_comment:
             cleaned_line = stripped_line[2:]
-            if cleaned_line.startswith(" "): cleaned_line = cleaned_line[1:]
+            if cleaned_line.startswith(" "):
+                cleaned_line = cleaned_line[1:]
         elif is_block_single:
             cleaned_line = stripped_line[2:-2].strip() if len(stripped_line) > 4 else ""
         elif is_block_start:
-             cleaned_line = stripped_line[2:].lstrip()
+            cleaned_line = stripped_line[2:].lstrip()
         elif is_block_end:
-             cleaned_line = stripped_line[:-2].rstrip()
+            cleaned_line = stripped_line[:-2].rstrip()
         elif is_leading_star:
-             cleaned_line = stripped_line[1:]
-             if cleaned_line.startswith(" "): cleaned_line = cleaned_line[1:]
+            cleaned_line = stripped_line[1:]
+            if cleaned_line.startswith(" "):
+                cleaned_line = cleaned_line[1:]
         else:
-             cleaned_line = stripped_line
+            cleaned_line = stripped_line
 
         if cleaned_line is not None:
-             cleaned_lines.append(cleaned_line)
+            cleaned_lines.append(cleaned_line)
 
     valid_lines = cleaned_lines
     if not valid_lines:
-         return ""
+        return ""
 
     raw_comment = "\n".join(valid_lines)
     try:
@@ -56,6 +59,7 @@ def clean_comment_block(comment_lines: List[str]) -> str:
         dedented_comment = raw_comment.strip()
 
     return dedented_comment
+
 
 def find_preceding_comment(lines: list[str], func_start_line_idx: int) -> str | None:
     """
@@ -70,18 +74,18 @@ def find_preceding_comment(lines: list[str], func_start_line_idx: int) -> str | 
         stripped_line = line_content.strip()
 
         if not stripped_line:
-             break 
-        
+            break
+
         is_block_end = stripped_line.endswith("*/")
         is_block_start = stripped_line.startswith("/*")
         is_line_comment = stripped_line.startswith("--")
         is_comment = is_line_comment or is_block_start or is_block_end or in_block_comment
-        
-        if not is_comment and not in_block_comment: 
-             break
+
+        if not is_comment and not in_block_comment:
+            break
 
         if is_block_end:
-            if in_block_comment: 
+            if in_block_comment:
                 comment_lines.clear()
                 break
             in_block_comment = True
@@ -90,14 +94,14 @@ def find_preceding_comment(lines: list[str], func_start_line_idx: int) -> str | 
                 in_block_comment = False
             else:
                 comment_lines.insert(0, line_content)
-            continue 
+            continue
 
         if is_block_start:
-            if not in_block_comment: 
-                 break 
+            if not in_block_comment:
+                break
             comment_lines.insert(0, line_content)
             in_block_comment = False
-            continue 
+            continue
 
         if in_block_comment:
             comment_lines.insert(0, line_content)
@@ -112,4 +116,4 @@ def find_preceding_comment(lines: list[str], func_start_line_idx: int) -> str | 
 
     # Call the cleaning function from this module
     cleaned_comment = clean_comment_block(comment_lines)
-    return cleaned_comment 
+    return cleaned_comment

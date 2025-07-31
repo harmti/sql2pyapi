@@ -1,7 +1,10 @@
 import pytest
-from sql2pyapi.parser import parse_sql, SQLParser
-from sql2pyapi.generator import generate_python_code
+
 from sql2pyapi.errors import MissingSchemaError
+from sql2pyapi.generator import generate_python_code
+from sql2pyapi.parser import SQLParser
+from sql2pyapi.parser import parse_sql
+
 
 # SQL definitions based on the bug report (matches temp/ files closely)
 SCHEMA_SQL = """
@@ -12,7 +15,7 @@ CREATE TYPE company_role AS ENUM ('owner', 'admin', 'member');
 
 CREATE TABLE company_members (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    user_id UUID NOT NULL, 
+    user_id UUID NOT NULL,
     company_id uuid NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
     role company_role NOT NULL DEFAULT 'member',
     status text NOT NULL DEFAULT 'active',
@@ -65,6 +68,7 @@ AS $$
 $$;
 """
 
+
 # Test that was failing due to CLI error message confusion, now understood.
 # The CLI error "Failed to parse SQL" was misleading; the error came from the generator.
 # parse_sql itself does NOT raise the error for this case.
@@ -75,10 +79,7 @@ def test_cli_reported_parsing_failure_for_table_row_type():
     The error reported by CLI originates from the generator.
     """
     # parse_sql returns 4 values: functions, imports, composite_types, enums
-    parsed_functions, _, _, _ = parse_sql( 
-        FUNCTION_SQL_FAILS, 
-        SCHEMA_SQL          
-    )
+    parsed_functions, _, _, _ = parse_sql(FUNCTION_SQL_FAILS, SCHEMA_SQL)
     assert len(parsed_functions) == 1
     assert parsed_functions[0].sql_name == "add_company_member"
     # No MissingSchemaError expected from parse_sql
@@ -91,12 +92,9 @@ def test_generator_handles_direct_table_return_schema_correctly():
     is not initially in parsed_composite_types.
     """
     parser = SQLParser()
-    parsed_funcs, imports_for_generator, composite_types_for_generator = parser.parse(
-        FUNCTION_SQL_FAILS, 
-        SCHEMA_SQL          
-    )
+    parsed_funcs, imports_for_generator, composite_types_for_generator = parser.parse(FUNCTION_SQL_FAILS, SCHEMA_SQL)
 
-    assert 'company_members' not in composite_types_for_generator
+    assert "company_members" not in composite_types_for_generator
 
     enum_types_for_generator = parser.enum_types
 
@@ -111,12 +109,12 @@ def test_generator_handles_direct_table_return_schema_correctly():
 
     # print(f"Generated code for test_generator_handles_direct_table_return_schema_correctly:\n{generated_code}") # DEBUG PRINT
     assert generated_code is not None
-    assert "@dataclass\nclass CompanyMember:" in generated_code # Singular form
+    assert "@dataclass\nclass CompanyMember:" in generated_code  # Singular form
     # Add more specific checks if necessary, e.g., for specific fields
-    assert "id: UUID" in generated_code # Example field check
+    assert "id: UUID" in generated_code  # Example field check
     assert "user_id: UUID" in generated_code
     assert "company_id: UUID" in generated_code
-    assert "role: CompanyRole" in generated_code # Check for Enum type
+    assert "role: CompanyRole" in generated_code  # Check for Enum type
 
 
 def test_function_returning_custom_type_works_for_contrast():
@@ -127,8 +125,8 @@ def test_function_returning_custom_type_works_for_contrast():
         _ = parse_sql(sql_content=FUNCTION_SQL_WORKS_CUSTOM_TYPE, schema_content=SCHEMA_SQL)
         # If parse_sql succeeds, the test for this contrast case is considered passed.
         # We are not testing generation here, just that parsing doesn't fail for the working case.
-        assert True # Explicitly mark success
+        assert True  # Explicitly mark success
     except MissingSchemaError as e:
         pytest.fail(f"parse_sql for custom type function failed unexpectedly: {e}")
     except Exception as e:
-        pytest.fail(f"An unexpected error occurred during parse_sql for working case: {e}") 
+        pytest.fail(f"An unexpected error occurred during parse_sql for working case: {e}")

@@ -6,18 +6,18 @@ generate Optional[Any] instead of the proper dataclass reference.
 Bug report: sql2pyapi-bug-report.md
 """
 
-from pathlib import Path
+import ast
 import subprocess
 import sys
-import ast
-import pytest
+from pathlib import Path
+
 
 # Define paths relative to the main tests/ directory
 TESTS_ROOT_DIR = Path(__file__).parent.parent  # Go up one level to tests/
 PROJECT_ROOT = TESTS_ROOT_DIR.parent  # Go up one level from tests/ to project root
 
 
-def run_cli_tool(functions_sql: Path, output_py: Path, schema_sql: Path = None, verbose: bool = False):
+def run_cli_tool(functions_sql: Path, output_py: Path, schema_sql: Path | None = None, verbose: bool = False):
     """Helper function to run the CLI tool as a subprocess."""
     cmd = [
         sys.executable,  # Use the current Python executable
@@ -43,10 +43,10 @@ def run_cli_tool(functions_sql: Path, output_py: Path, schema_sql: Path = None, 
 
 def test_composite_type_with_table_reference_bug(tmp_path):
     """Test that composite types with table references generate proper dataclass references.
-    
+
     This test reproduces the bug where:
     - A table 'metering_points' should generate a 'MeteringPoint' dataclass
-    - A composite type with field 'metering_point metering_points' should reference 
+    - A composite type with field 'metering_point metering_points' should reference
       Optional[MeteringPoint], not Optional[Any]
     """
     # Create test schema file
@@ -59,7 +59,7 @@ CREATE TABLE IF NOT EXISTS metering_points (
 );
 
 -- Composite type that references the table above
--- The bug: metering_point field should map to Optional[MeteringPoint] 
+-- The bug: metering_point field should map to Optional[MeteringPoint]
 -- but instead maps to Optional[Any]
 CREATE TYPE metering_point_upsert_result AS (
     metering_point metering_points,  -- Should map to MeteringPoint dataclass
@@ -91,10 +91,10 @@ DECLARE
     existing_point metering_points;
 BEGIN
     -- Try to find existing metering point
-    SELECT * INTO existing_point 
-    FROM metering_points 
+    SELECT * INTO existing_point
+    FROM metering_points
     WHERE id = p_id;
-    
+
     IF FOUND THEN
         result.metering_point := existing_point;
         result.was_created := FALSE;
@@ -103,10 +103,10 @@ BEGIN
         INSERT INTO metering_points (id, name, location)
         VALUES (p_id, p_name, p_location)
         RETURNING * INTO result.metering_point;
-        
+
         result.was_created := TRUE;
     END IF;
-    
+
     RETURN result;
 END;
 $$;"""
@@ -131,59 +131,63 @@ $$;"""
     # Check that MeteringPoint dataclass is generated
     metering_point_class = None
     for node in ast.walk(tree):
-        if isinstance(node, ast.ClassDef) and node.name == 'MeteringPoint':
+        if isinstance(node, ast.ClassDef) and node.name == "MeteringPoint":
             metering_point_class = node
             break
-    
+
     assert metering_point_class is not None, "MeteringPoint dataclass was not generated"
-    assert any(isinstance(d, ast.Name) and d.id == 'dataclass' for d in metering_point_class.decorator_list), \
+    assert any(isinstance(d, ast.Name) and d.id == "dataclass" for d in metering_point_class.decorator_list), (
         "MeteringPoint class is not decorated with @dataclass"
+    )
 
     # Check that MeteringPointUpsertResult dataclass is generated
     upsert_result_class = None
     for node in ast.walk(tree):
-        if isinstance(node, ast.ClassDef) and node.name == 'MeteringPointUpsertResult':
+        if isinstance(node, ast.ClassDef) and node.name == "MeteringPointUpsertResult":
             upsert_result_class = node
             break
-    
+
     assert upsert_result_class is not None, "MeteringPointUpsertResult dataclass was not generated"
-    assert any(isinstance(d, ast.Name) and d.id == 'dataclass' for d in upsert_result_class.decorator_list), \
+    assert any(isinstance(d, ast.Name) and d.id == "dataclass" for d in upsert_result_class.decorator_list), (
         "MeteringPointUpsertResult class is not decorated with @dataclass"
+    )
 
     # Extract the fields from MeteringPointUpsertResult
     upsert_result_fields = {}
     for stmt in upsert_result_class.body:
-        if isinstance(stmt, ast.AnnAssign) and hasattr(stmt.target, 'id'):
+        if isinstance(stmt, ast.AnnAssign) and hasattr(stmt.target, "id"):
             field_name = stmt.target.id
             field_type = ast.unparse(stmt.annotation)
             upsert_result_fields[field_name] = field_type
 
     # THIS IS THE KEY TEST: The bug is that metering_point field should be
     # Optional[MeteringPoint] but is currently Optional[Any]
-    assert 'metering_point' in upsert_result_fields, "metering_point field not found in MeteringPointUpsertResult"
-    
+    assert "metering_point" in upsert_result_fields, "metering_point field not found in MeteringPointUpsertResult"
+
     # EXPECTED: This assertion should pass after the bug is fixed
     # CURRENT BUG: This assertion will fail because it's currently Optional[Any]
     expected_type = "Optional[MeteringPoint]"
-    actual_type = upsert_result_fields['metering_point']
-    
-    assert actual_type == expected_type, \
-        f"BUG CONFIRMED: metering_point field type is '{actual_type}', should be '{expected_type}'. " \
-        f"This confirms the bug where composite types with table references generate Optional[Any] " \
+    actual_type = upsert_result_fields["metering_point"]
+
+    assert actual_type == expected_type, (
+        f"BUG CONFIRMED: metering_point field type is '{actual_type}', should be '{expected_type}'. "
+        f"This confirms the bug where composite types with table references generate Optional[Any] "
         f"instead of proper dataclass references."
+    )
 
     # Also verify the was_created field is correct
-    assert upsert_result_fields['was_created'] == "Optional[bool]", \
+    assert upsert_result_fields["was_created"] == "Optional[bool]", (
         f"was_created field type is incorrect: {upsert_result_fields['was_created']}"
+    )
 
     # Verify the functions are generated properly
     get_function = None
     upsert_function = None
     for node in ast.walk(tree):
         if isinstance(node, ast.AsyncFunctionDef):
-            if node.name == 'get_metering_point_by_id':
+            if node.name == "get_metering_point_by_id":
                 get_function = node
-            elif node.name == 'upsert_metering_point':
+            elif node.name == "upsert_metering_point":
                 upsert_function = node
 
     assert get_function is not None, "get_metering_point_by_id function not generated"
@@ -193,8 +197,10 @@ $$;"""
     get_return_type = ast.unparse(get_function.returns) if get_function.returns else None
     upsert_return_type = ast.unparse(upsert_function.returns) if upsert_function.returns else None
 
-    assert get_return_type == "Optional[MeteringPoint]", \
+    assert get_return_type == "Optional[MeteringPoint]", (
         f"get_metering_point_by_id return type is {get_return_type}, should be Optional[MeteringPoint]"
-    
-    assert upsert_return_type == "Optional[MeteringPointUpsertResult]", \
+    )
+
+    assert upsert_return_type == "Optional[MeteringPointUpsertResult]", (
         f"upsert_metering_point return type is {upsert_return_type}, should be Optional[MeteringPointUpsertResult]"
+    )

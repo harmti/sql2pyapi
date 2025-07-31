@@ -1,9 +1,7 @@
 # ===== SECTION: IMPORTS =====
-from dataclasses import dataclass, field
-from typing import List, Dict, Optional, Tuple, Any, Set, Union  # Added Union
-from uuid import UUID
-from datetime import datetime, date
-from decimal import Decimal
+from dataclasses import dataclass
+from dataclasses import field
+
 
 # ===== SECTION: TYPE MAPS AND CONSTANTS =====
 # Basic PostgreSQL to Python type mapping
@@ -12,7 +10,7 @@ TYPE_MAP = {
     "text": "str",
     "varchar": "str",
     "character varying": "str",  # Explicitly map this
-    "character": "str",         # Add mapping for 'character' base type
+    "character": "str",  # Add mapping for 'character' base type
     "integer": "int",
     "int": "int",
     "bigint": "int",  # Consider using int in Python 3, as it has arbitrary precision
@@ -31,7 +29,7 @@ TYPE_MAP = {
     "json": "dict",  # Or Any, depending on usage
     "jsonb": "dict",  # Or Any
     "bytea": "bytes",
-    "double precision": "float", # Map double precision to float
+    "double precision": "float",  # Map double precision to float
     "interval": "timedelta",  # Map PostgreSQL INTERVAL to Python timedelta
     # Add more mappings as needed
 }
@@ -46,14 +44,15 @@ PYTHON_IMPORTS = {
     "List": "from typing import List",  # Import for List
     "Dict": "from typing import Dict",  # Import for Dict
     "Tuple": "from typing import Tuple",  # Import for Tuple
-    "Optional": "from typing import Optional", # Added Optional
-    "dataclass": "from dataclasses import dataclass", # Added dataclass
-    "Enum": "from enum import Enum", # Added Enum for SQL ENUM types
+    "Optional": "from typing import Optional",  # Added Optional
+    "dataclass": "from dataclasses import dataclass",  # Added dataclass
+    "Enum": "from enum import Enum",  # Added Enum for SQL ENUM types
 }
 
 
 # ===== SECTION: DATA STRUCTURES =====
 # Core data structures for representing SQL functions, parameters, and return types
+
 
 @dataclass
 class SQLType:
@@ -61,12 +60,14 @@ class SQLType:
     python_type: str  # Corresponding Python type (e.g., 'str', 'MyType', 'User')
     is_array: bool = False
     is_setof: bool = False  # If the type is part of a SETOF construct
-    is_table_type: bool = False # True if 'name' refers to a known table
-    is_composite_type: bool = False # True if 'name' refers to a known composite type (CREATE TYPE)
-    is_enum_type: bool = False # True if 'name' refers to a known ENUM type
-    columns: List['ReturnColumn'] = field(default_factory=list) # For composite types / tables; Forward reference for ReturnColumn
-    type_name_override: Optional[str] = None # e.g., to 'Any' if schema missing
-    array_dimensions: int = 0 # Number of array dimensions if is_array is True
+    is_table_type: bool = False  # True if 'name' refers to a known table
+    is_composite_type: bool = False  # True if 'name' refers to a known composite type (CREATE TYPE)
+    is_enum_type: bool = False  # True if 'name' refers to a known ENUM type
+    columns: list["ReturnColumn"] = field(
+        default_factory=list
+    )  # For composite types / tables; Forward reference for ReturnColumn
+    type_name_override: str | None = None  # e.g., to 'Any' if schema missing
+    array_dimensions: int = 0  # Number of array dimensions if is_array is True
 
 
 @dataclass
@@ -82,6 +83,7 @@ class SQLParameter:
         is_optional (bool): Whether the parameter has a DEFAULT value in SQL
         has_sql_default (bool): Whether the parameter has a SQL DEFAULT value
     """
+
     name: str
     python_name: str
     sql_type: str
@@ -101,6 +103,7 @@ class ReturnColumn:
         python_type (str): Mapped Python type
         is_optional (bool): Whether the column can be NULL
     """
+
     name: str
     sql_type: str
     python_type: str
@@ -132,18 +135,19 @@ class ParsedFunction:
         returns_sql_type_name (Optional[str]): Store original SQL name for RETURNS named_type
         returns_enum_type (bool): Whether the function returns an ENUM type
     """
+
     sql_name: str
     python_name: str
-    params: List[SQLParameter] = field(default_factory=list)
-    return_type: Union[SQLType, str] = "None"
-    return_columns: List[ReturnColumn] = field(default_factory=list)
-    return_type_hint: Optional[str] = None # Add placeholder for generator
+    params: list[SQLParameter] = field(default_factory=list)
+    return_type: SQLType | str = "None"
+    return_columns: list[ReturnColumn] = field(default_factory=list)
+    return_type_hint: str | None = None  # Add placeholder for generator
     returns_table: bool = False
-    dataclass_name: Optional[str] = None # Store determined dataclass name
+    dataclass_name: str | None = None  # Store determined dataclass name
     returns_record: bool = False
     returns_setof: bool = False
-    required_imports: Set[str] = field(default_factory=set) # Changed to Set[str]
-    setof_table_name: Optional[str] = None
-    returns_sql_type_name: Optional[str] = None # Store original SQL name for RETURNS named_type
-    sql_comment: Optional[str] = None  # Store the cleaned SQL comment
+    required_imports: set[str] = field(default_factory=set)  # Changed to Set[str]
+    setof_table_name: str | None = None
+    returns_sql_type_name: str | None = None  # Store original SQL name for RETURNS named_type
+    sql_comment: str | None = None  # Store the cleaned SQL comment
     returns_enum_type: bool = False  # Whether the function returns an ENUM type

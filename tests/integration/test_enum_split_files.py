@@ -4,14 +4,17 @@ in a schema file and used by functions in a separate functions file.
 Tests the fix for the bug where enums were being overwritten.
 """
 
-import pytest
-from typing import Dict, List, Set, Optional
 import textwrap
+from typing import TYPE_CHECKING
+
+from sql2pyapi.generator import generate_python_code
 
 # Import the public API
 from sql2pyapi.parser import parse_sql
-from sql2pyapi.generator import generate_python_code
-from sql2pyapi.sql_models import ParsedFunction
+
+
+if TYPE_CHECKING:
+    from sql2pyapi.sql_models import ParsedFunction
 
 
 def test_enum_defined_in_schema_used_in_func():
@@ -59,17 +62,14 @@ def test_enum_defined_in_schema_used_in_func():
 
     # Parse using both schema and function content
     functions, table_imports, composite_types, enum_types = parse_sql(
-        sql_content=func_content,
-        schema_content=schema_content
+        sql_content=func_content, schema_content=schema_content
     )
 
-    # --- Verification --- 
+    # --- Verification ---
 
     # 1. Verify enum was parsed
-    assert 'invitation_status' in enum_types
-    assert enum_types['invitation_status'] == [
-        'pending', 'accepted', 'rejected', 'expired', 'cancelled'
-    ]
+    assert "invitation_status" in enum_types
+    assert enum_types["invitation_status"] == ["pending", "accepted", "rejected", "expired", "cancelled"]
 
     # 2. Verify function parameter type
     assert len(functions) == 1
@@ -77,26 +77,24 @@ def test_enum_defined_in_schema_used_in_func():
     assert list_func.sql_name == "list_company_invitations"
     assert len(list_func.params) == 2
 
-    status_param = next((p for p in list_func.params if p.name == 'p_status'), None)
+    status_param = next((p for p in list_func.params if p.name == "p_status"), None)
     assert status_param is not None
-    assert status_param.sql_type == 'invitation_status'
+    assert status_param.sql_type == "invitation_status"
     # Should be Optional[InvitationStatus] because of DEFAULT NULL
-    assert status_param.python_type == 'Optional[InvitationStatus]'
-    assert 'Enum' in list_func.required_imports
-    assert 'Optional' in list_func.required_imports
+    assert status_param.python_type == "Optional[InvitationStatus]"
+    assert "Enum" in list_func.required_imports
+    assert "Optional" in list_func.required_imports
 
     # 3. Verify function return type (SetOf Table -> List[Dataclass])
     assert list_func.returns_setof is True
     assert list_func.returns_table is True
-    assert list_func.setof_table_name == 'company_invitations'
-    assert list_func.return_type == 'List[CompanyInvitation]'
-    assert 'List' in list_func.required_imports
-    assert 'dataclass' in list_func.required_imports
+    assert list_func.setof_table_name == "company_invitations"
+    assert list_func.return_type == "List[CompanyInvitation]"
+    assert "List" in list_func.required_imports
+    assert "dataclass" in list_func.required_imports
 
     # 4. Generate Python code
-    python_code = generate_python_code(
-        functions, table_imports, composite_types, enum_types
-    )
+    python_code = generate_python_code(functions, table_imports, composite_types, enum_types)
 
     # 5. Verify generated Enum class
     assert "from enum import Enum" in python_code
@@ -109,21 +107,21 @@ def test_enum_defined_in_schema_used_in_func():
     assert "@dataclass" in python_code
     assert "class CompanyInvitation:" in python_code
     # Check a non-enum field
-    assert "email: str" in python_code # Non-null text field
+    assert "email: str" in python_code  # Non-null text field
     # Check the enum field (NOT NULL in table, so not Optional in dataclass)
     assert "status: InvitationStatus" in python_code
 
     # 7. Verify generated function signature
     expected_signature = (
-        "async def list_company_invitations(conn: AsyncConnection, " 
-        "company_id: UUID, " 
+        "async def list_company_invitations(conn: AsyncConnection, "
+        "company_id: UUID, "
         "status: Optional[InvitationStatus] = None) -> List[CompanyInvitation]:"
     )
     assert expected_signature in python_code
 
     # 8. Verify enum parameter is used correctly in function body
     assert "status_value = status.value if status is not None else None" in python_code
-    
+
     # Verify assignments to _call_params_dict for each parameter
     # company_id (SQL p_company_id, required, non-enum)
     assert "_sql_named_args_parts.append(f'p_company_id := %(company_id)s')" in python_code
@@ -131,7 +129,7 @@ def test_enum_defined_in_schema_used_in_func():
 
     # status (SQL p_status, optional enum, DEFAULT NULL)
     # This should be inside an 'if status is not None:' block
-    expected_status_handling = textwrap.dedent("""
+    textwrap.dedent("""
     if status is not None:
         _sql_named_args_parts.append(f'p_status := %(status)s')
         _call_params_dict['status'] = status_value
@@ -142,8 +140,8 @@ def test_enum_defined_in_schema_used_in_func():
     assert "_call_params_dict['status'] = status_value" in python_code
 
     # Ensure old logic for DEFAULT NULL or direct _call_values appends are not present
-    assert "if status is None:" not in python_code # Old conditional check
+    assert "if status is None:" not in python_code  # Old conditional check
     assert "_call_values.append(None)" not in python_code
     assert "_call_values.append(status_value)" not in python_code
     assert "_call_values.append(company_id)" not in python_code
-    assert "_sql_parts.append('DEFAULT')" not in python_code 
+    assert "_sql_parts.append('DEFAULT')" not in python_code

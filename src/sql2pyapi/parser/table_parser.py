@@ -1,10 +1,13 @@
 # ===== SECTION: IMPORTS =====
-import re
 import logging
-from typing import Dict, List, Tuple, Set
+import re
+
+# Import comment parser
+from ..comment_parser import COMMENT_REGEX
 
 # Import custom error classes
-from ..errors import ParsingError, TableParsingError
+from ..errors import ParsingError
+from ..errors import TableParsingError
 
 # Import the models
 from ..sql_models import ReturnColumn
@@ -12,8 +15,6 @@ from ..sql_models import ReturnColumn
 # Import column parser
 from .column_parser import parse_column_definitions
 
-# Import comment parser
-from ..comment_parser import COMMENT_REGEX
 
 # ===== SECTION: REGEX DEFINITIONS =====
 # Regex for CREATE TABLE
@@ -27,20 +28,23 @@ TABLE_REGEX = re.compile(
 
 # ===== SECTION: FUNCTIONS =====
 
-def parse_create_table(sql_content: str, 
-                      existing_table_schemas: Dict[str, List[ReturnColumn]] = None,
-                      existing_table_schema_imports: Dict[str, Set[str]] = None,
-                      enum_types: Dict[str, List[str]] = None,
-                      composite_types: Dict[str, List[ReturnColumn]] = None) -> Tuple[Dict[str, List[ReturnColumn]], Dict[str, Set[str]]]:
+
+def parse_create_table(
+    sql_content: str,
+    existing_table_schemas: dict[str, list[ReturnColumn]] | None = None,
+    existing_table_schema_imports: dict[str, set[str]] | None = None,
+    enum_types: dict[str, list[str]] | None = None,
+    composite_types: dict[str, list[ReturnColumn]] | None = None,
+) -> tuple[dict[str, list[ReturnColumn]], dict[str, set[str]]]:
     """
     Finds and parses CREATE TABLE statements, storing schemas in instance variables.
-    
+
     Args:
         sql_content (str): SQL content to parse
         existing_table_schemas (Dict[str, List[ReturnColumn]], optional): Existing table schemas to update
         existing_table_schema_imports (Dict[str, Set[str]], optional): Existing table schema imports to update
         enum_types (Dict[str, List[str]], optional): Dictionary of enum types
-        
+
     Returns:
         Tuple[Dict[str, List[ReturnColumn]], Dict[str, Set[str]]]: Updated table schemas and their imports
     """
@@ -49,7 +53,7 @@ def parse_create_table(sql_content: str,
     table_schema_imports = existing_table_schema_imports or {}
     enum_types = enum_types or {}
     composite_types = composite_types or {}
-    
+
     # Debug: Log the current state of table_schemas before parsing
     logging.debug(f"TABLE_SCHEMAS before parsing: {list(table_schemas.keys())}")
     logging.debug(f"TABLE_SCHEMA_IMPORTS before parsing: {list(table_schema_imports.keys())}")
@@ -67,11 +71,13 @@ def parse_create_table(sql_content: str,
         try:
             # Use method for parsing columns *within* the table definition
             # Pass the cleaned definition string
-            columns, required_imports = parse_column_definitions(col_defs_str_cleaned, 
-                                                              context=f"table {table_name}",
-                                                              enum_types=enum_types,
-                                                              table_schemas=table_schemas,
-                                                              composite_types=composite_types) 
+            columns, required_imports = parse_column_definitions(
+                col_defs_str_cleaned,
+                context=f"table {table_name}",
+                enum_types=enum_types,
+                table_schemas=table_schemas,
+                composite_types=composite_types,
+            )
             if columns:
                 # Store under both the normalized name and the fully qualified name
                 normalized_table_name = table_name.split(".")[-1]
@@ -88,20 +94,20 @@ def parse_create_table(sql_content: str,
                 else:
                     logging.debug(f"  -> Parsed {len(columns)} columns for table {normalized_table_name}")
 
+            # If parse_column_definitions returned empty list but input wasn't just comments, log warning
+            elif col_defs_str_cleaned:
+                logging.warning(
+                    f"  -> No columns parsed for table {table_name} from definition: '{col_defs_str_cleaned[:100]}...'"
+                )
             else:
-                # If parse_column_definitions returned empty list but input wasn't just comments, log warning
-                if col_defs_str_cleaned:
-                     logging.warning(
-                         f"  -> No columns parsed for table {table_name} from definition: '{col_defs_str_cleaned[:100]}...'")
-                else:
-                     logging.debug(f"  -> Table {table_name} definition contained only comments or was empty.")
-                    
+                logging.debug(f"  -> Table {table_name} definition contained only comments or was empty.")
+
         except ParsingError as e:
             # Re-raise with more context about the table
             raise TableParsingError(
                 f"Failed to parse columns for table '{table_name}'",
                 sql_snippet=col_defs_str_cleaned[:100] + "...",
-                line_number=None  # We don't have line number information here
+                line_number=None,  # We don't have line number information here
             ) from e
         except Exception as e:
             logging.exception(f"Failed to parse columns for table '{table_name}'.")
@@ -109,7 +115,7 @@ def parse_create_table(sql_content: str,
             raise TableParsingError(
                 f"Failed to parse columns for table '{table_name}'",
                 sql_snippet=col_defs_str_cleaned[:100] + "...",
-                line_number=None  # We don't have line number information here
+                line_number=None,  # We don't have line number information here
             ) from e
-            
+
     return table_schemas, table_schema_imports

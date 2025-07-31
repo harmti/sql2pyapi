@@ -1,16 +1,14 @@
 # ===== SECTION: IMPORTS =====
-import re
 import logging
-from typing import List, Dict, Optional, Tuple, Set
+import re
 
 # Import custom error classes
-from ..errors import ParsingError
-
 # Import the models
 from ..sql_models import SQLParameter
 
 # Import type mapper
 from .type_mapper import map_sql_to_python_type
+
 
 # ===== SECTION: REGEX DEFINITIONS =====
 # Regex for parsing parameters in _parse_params
@@ -30,25 +28,29 @@ PARAM_REGEX = re.compile(
 
 # ===== SECTION: FUNCTIONS =====
 
-def parse_single_param_definition(param_def: str, context: str, 
-                                 enum_types: Dict[str, List[str]] = None,
-                                 table_schemas: Dict[str, List] = None,
-                                 composite_types: Dict[str, List] = None) -> Optional[Tuple[SQLParameter, Set[str]]]:
+
+def parse_single_param_definition(
+    param_def: str,
+    context: str,
+    enum_types: dict[str, list[str]] | None = None,
+    table_schemas: dict[str, list] | None = None,
+    composite_types: dict[str, list] | None = None,
+) -> tuple[SQLParameter, set[str]] | None:
     """
     Parses a single parameter definition string. Returns SQLParameter and its imports, or None.
-    
+
     Args:
         param_def (str): The parameter definition string
         context (str): Context for error reporting
         enum_types (Dict[str, List[str]], optional): Dictionary of enum types
         table_schemas (Dict[str, List], optional): Dictionary of table schemas
         composite_types (Dict[str, List], optional): Dictionary of composite types
-        
+
     Returns:
         Optional[Tuple[SQLParameter, Set[str]]]: The parsed parameter and its imports, or None if parsing failed
     """
     match = PARAM_REGEX.match(param_def)
-    
+
     if not match:
         # Cannot parse this fragment as a standalone parameter
         # Recovery for split types (like numeric(10,2)) is handled in the caller
@@ -56,9 +58,9 @@ def parse_single_param_definition(param_def: str, context: str,
 
     sql_name = match.group(2).strip()
     sql_type = match.group(3).strip()
-    
-    default_keyword = match.group(4) # "DEFAULT" or None
-    default_value_str = match.group(5) # The actual default value string or None
+
+    default_keyword = match.group(4)  # "DEFAULT" or None
+    default_value_str = match.group(5)  # The actual default value string or None
 
     is_optional = bool(default_keyword)
     has_sql_default = False
@@ -66,7 +68,7 @@ def parse_single_param_definition(param_def: str, context: str,
     if default_keyword and default_value_str:
         normalized_default_value = default_value_str.strip().lower()
         # Check if it's a non-NULL SQL default
-        if normalized_default_value != 'null':
+        if normalized_default_value != "null":
             has_sql_default = True
     # Note: is_optional remains True for any DEFAULT, including DEFAULT NULL.
     # has_sql_default is True only for DEFAULT <non-NULL value>.
@@ -81,7 +83,9 @@ def parse_single_param_definition(param_def: str, context: str,
     # Map SQL type to Python type
     param_context = f"parameter '{sql_name}'" + (f" in {context}" if context else "")
     try:
-        py_type, imports = map_sql_to_python_type(sql_type, is_optional, param_context, enum_types, table_schemas, composite_types)
+        py_type, imports = map_sql_to_python_type(
+            sql_type, is_optional, param_context, enum_types, table_schemas, composite_types
+        )
     except Exception as e:
         logging.warning(str(e))
         py_type = "Any" if not is_optional else "Optional[Any]"
@@ -98,21 +102,24 @@ def parse_single_param_definition(param_def: str, context: str,
     return param, imports
 
 
-def parse_params(param_str: str, context: str = None, 
-                enum_types: Dict[str, List[str]] = None,
-                table_schemas: Dict[str, List] = None,
-                composite_types: Dict[str, List] = None) -> Tuple[List[SQLParameter], Set[str]]:
+def parse_params(
+    param_str: str,
+    context: str | None = None,
+    enum_types: dict[str, list[str]] | None = None,
+    table_schemas: dict[str, list] | None = None,
+    composite_types: dict[str, list] | None = None,
+) -> tuple[list[SQLParameter], set[str]]:
     """
     Parses parameter string including optional DEFAULT values.
     Uses a helper to parse individual definitions.
-    
+
     Args:
         param_str (str): The parameter string
         context (str, optional): Context for error reporting
         enum_types (Dict[str, List[str]], optional): Dictionary of enum types
         table_schemas (Dict[str, List], optional): Dictionary of table schemas
         composite_types (Dict[str, List], optional): Dictionary of composite types
-        
+
     Returns:
         Tuple[List[SQLParameter], Set[str]]: The parsed parameters and their imports
     """
@@ -123,7 +130,7 @@ def parse_params(param_str: str, context: str = None,
 
     # Split by comma first
     param_defs = param_str.split(",")
-    
+
     current_context = f"function '{context}'" if context else "unknown function"
 
     for param_def in param_defs:
@@ -132,31 +139,40 @@ def parse_params(param_str: str, context: str = None,
             continue
 
         # Attempt to parse the fragment using the helper
-        parse_result = parse_single_param_definition(param_def, current_context, enum_types, table_schemas, composite_types)
+        parse_result = parse_single_param_definition(
+            param_def, current_context, enum_types, table_schemas, composite_types
+        )
 
         if parse_result:
             param, imports = parse_result
             params.append(param)
             required_imports.update(imports)
+        # If helper failed, check for recovery case (split type)
+        elif params and ")" not in params[-1].sql_type and ")" in param_def:
+            param_context_recovery = f"parameter '{params[-1].name}' in {current_context}"
+            logging.debug(
+                f"Attempting recovery for split inside type: appending '{param_def}' to {param_context_recovery}"
+            )
+            params[-1].sql_type += "," + param_def
+            # Re-run type mapping for the corrected type
+            try:
+                py_type, imports = map_sql_to_python_type(
+                    params[-1].sql_type,
+                    params[-1].is_optional,
+                    param_context_recovery,
+                    enum_types,
+                    table_schemas,
+                    composite_types,
+                )
+                params[-1].python_type = py_type
+                required_imports.update(imports)
+            except Exception as e:
+                logging.warning(str(e))
+            # Continue to next fragment after recovery attempt
         else:
-            # If helper failed, check for recovery case (split type)
-            if params and ')' not in params[-1].sql_type and ')' in param_def:
-                param_context_recovery = f"parameter '{params[-1].name}' in {current_context}"
-                logging.debug(f"Attempting recovery for split inside type: appending '{param_def}' to {param_context_recovery}")
-                params[-1].sql_type += "," + param_def
-                # Re-run type mapping for the corrected type
-                try:
-                    py_type, imports = map_sql_to_python_type(params[-1].sql_type, params[-1].is_optional, 
-                                                            param_context_recovery, enum_types, table_schemas, composite_types)
-                    params[-1].python_type = py_type
-                    required_imports.update(imports)
-                except Exception as e:
-                    logging.warning(str(e))
-                # Continue to next fragment after recovery attempt
-            else:
-                # If not a recovery case, log warning for unparseable fragment
-                error_msg = f"Could not parse parameter definition fragment: {param_def}"
-                logging.warning(f"{error_msg} in {current_context}")
-                # Optionally, could add a placeholder parameter or raise error
+            # If not a recovery case, log warning for unparseable fragment
+            error_msg = f"Could not parse parameter definition fragment: {param_def}"
+            logging.warning(f"{error_msg} in {current_context}")
+            # Optionally, could add a placeholder parameter or raise error
 
     return params, required_imports

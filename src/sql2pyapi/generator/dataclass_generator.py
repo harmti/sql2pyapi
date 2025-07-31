@@ -1,30 +1,27 @@
 # ===== SECTION: IMPORTS AND SETUP =====
 # Standard library and third-party imports
-from typing import List, Dict, Tuple, Optional
-import textwrap
 import inflection  # Using inflection library for plural->singular
-from pathlib import Path
-import os
-import logging
 
 # Local imports
-from ..sql_models import ParsedFunction, ReturnColumn, SQLParameter
+from ..sql_models import ReturnColumn
+
+
 # from ..constants import * # Constants likely not needed directly here
 
 
-def _generate_dataclass(class_name: str, columns: List[ReturnColumn], make_fields_optional: bool = False) -> str:
+def _generate_dataclass(class_name: str, columns: list[ReturnColumn], make_fields_optional: bool = False) -> str:
     """
     Generates a Python dataclass definition string based on SQL column definitions.
-    
+
     Args:
         class_name (str): Name for the generated dataclass
         columns (List[ReturnColumn]): Column definitions extracted from SQL
         make_fields_optional (bool): Whether to make all fields Optional, regardless of
                                     their nullability in the database schema
-    
+
     Returns:
         str: Python code for the dataclass definition as a string
-    
+
     Notes:
         - If columns list is empty or only contains an 'unknown' column, a TODO comment
           will be generated instead of a complete dataclass
@@ -35,20 +32,20 @@ def _generate_dataclass(class_name: str, columns: List[ReturnColumn], make_field
         # If columns exist (parser couldn't map), use the SQL type from the dummy column.
         # If columns is empty (generator added placeholder), try to guess SQL name from class name.
         if columns:
-             sql_table_name_guess = columns[0].sql_type
+            sql_table_name_guess = columns[0].sql_type
         else:
-             # Attempt to convert CamelCase class_name back to snake_case for the comment
-             # REVISED: Pluralize the snake_case name for the comment to match original table likely name
-             singular_snake = inflection.underscore(class_name) 
-             sql_table_name_guess = inflection.pluralize(singular_snake) # Convert 'item' back to 'items'
-             # If it was an ad-hoc Result class, remove _result suffix (apply before pluralizing? No, class_name is Item)
-             # if sql_table_name_guess.endswith("_result"):
-             #      sql_table_name_guess = sql_table_name_guess[:-7] 
-        
+            # Attempt to convert CamelCase class_name back to snake_case for the comment
+            # REVISED: Pluralize the snake_case name for the comment to match original table likely name
+            singular_snake = inflection.underscore(class_name)
+            sql_table_name_guess = inflection.pluralize(singular_snake)  # Convert 'item' back to 'items'
+            # If it was an ad-hoc Result class, remove _result suffix (apply before pluralizing? No, class_name is Item)
+            # if sql_table_name_guess.endswith("_result"):
+            #      sql_table_name_guess = sql_table_name_guess[:-7]
+
         # Ensure the guessed name is not empty, fallback if needed
         if not sql_table_name_guess:
-             sql_table_name_guess = "unknown_table"
-             
+            sql_table_name_guess = "unknown_table"
+
         return f"""# TODO: Define dataclass for table '{sql_table_name_guess}'
 # @dataclass
 # class {class_name}:
@@ -73,4 +70,3 @@ def _generate_dataclass(class_name: str, columns: List[ReturnColumn], make_field
 class {class_name}:
 {fields_str}
 """
-

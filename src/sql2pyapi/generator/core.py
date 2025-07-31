@@ -1,23 +1,22 @@
 # ===== SECTION: IMPORTS AND SETUP =====
 # Standard library and third-party imports
-from typing import List, Dict, Tuple, Optional
-import textwrap
-import inflection  # Using inflection library for plural->singular
-from pathlib import Path
-import os
 import logging
+import os
 
-# Local imports
-from ..sql_models import ParsedFunction, ReturnColumn, SQLParameter
 from ..constants import *
 from ..constants import PYTHON_IMPORTS
-from ..errors import MissingSchemaError # Added import
-from .function_generator import _generate_function
-from .enum_generator import _generate_enum_class
-from .dataclass_generator import _generate_dataclass
+from ..errors import MissingSchemaError  # Added import
 from ..parser.utils import _to_singular_camel_case
-from .return_handlers import _determine_return_type
+
+# Local imports
+from ..sql_models import ParsedFunction
+from ..sql_models import ReturnColumn
+from .dataclass_generator import _generate_dataclass
 from .dependency_resolver import resolve_dataclass_order
+from .enum_generator import _generate_enum_class
+from .function_generator import _generate_function
+from .return_handlers import _determine_return_type
+
 
 # ===== SECTION: CONSTANTS AND CONFIGURATION =====
 # REMOVED local definition of PYTHON_IMPORTS
@@ -29,17 +28,17 @@ from .dependency_resolver import resolve_dataclass_order
 
 
 def generate_python_code(
-    functions: List[ParsedFunction],
-    table_schema_imports: Dict[str, set],  # Accept the schema imports
-    parsed_composite_types: Dict[str, List[ReturnColumn]], # Accept composite types
-    parsed_enum_types: Dict[str, List[str]] = None, # Accept enum types
+    functions: list[ParsedFunction],
+    table_schema_imports: dict[str, set],  # Accept the schema imports
+    parsed_composite_types: dict[str, list[ReturnColumn]],  # Accept composite types
+    parsed_enum_types: dict[str, list[str]] | None = None,  # Accept enum types
     source_sql_file: str = "",
     omit_helpers: bool = False,
-    fail_on_missing_schema: bool = True, # Added parameter
+    fail_on_missing_schema: bool = True,  # Added parameter
 ) -> str:
     """
     Generates the full Python module code as a string.
-    
+
     Args:
         functions (List[ParsedFunction]): List of parsed SQL function definitions
         table_schema_imports (Dict[str, set]): Imports needed for table schemas
@@ -49,13 +48,13 @@ def generate_python_code(
         omit_helpers (bool, optional): Whether to omit helper functions from the final output
         fail_on_missing_schema (bool, optional): If True (default), raise an error if a required schema is missing.
                                                If False, log a warning and generate a placeholder.
-    
+
     Returns:
         str: Complete Python module code as a string
-    
+
     Raises:
         MissingSchemaError: If `fail_on_missing_schema` is True and a required schema is not found.
-    
+
     Notes:
         - Imports are automatically collected based on types used
         - Dataclasses are generated for table returns and complex types
@@ -63,20 +62,18 @@ def generate_python_code(
         - The output follows a consistent structure: imports → dataclasses → functions
     """
 
-    logging.debug(f"Generating code with composite_types: {parsed_composite_types}") # Added debug log
+    logging.debug(f"Generating code with composite_types: {parsed_composite_types}")  # Added debug log
 
     current_imports = set()
     # Add logging if potentially used by error handling
     # Remove unnecessary logging import
     # REMOVED: Unconditional addition of "import logging"
-    dataclass_defs = {}
     generated_functions = []
 
     # Base typing imports like Optional, List etc are added by the parser as needed
 
     # Use the composite types passed from the parser
     current_custom_types = parsed_composite_types.copy()
-    function_defs = []
 
     # --- First pass: Determine return types and required imports, potentially create ad-hoc types ---
     for func in functions:
@@ -84,9 +81,11 @@ def generate_python_code(
         func.enum_types = parsed_enum_types or {}
         # Get the return type hint, dataclass name, and imports from the function
         # This uses the information already determined by the parser
-        return_type_hint_from_handler, determined_dataclass_name, type_imports = _determine_return_type(func, current_custom_types)
-        current_imports.update(type_imports) # Add imports specific to the return type
-        func.return_type_hint = return_type_hint_from_handler # Set the attribute on the ParsedFunction object
+        return_type_hint_from_handler, determined_dataclass_name, type_imports = _determine_return_type(
+            func, current_custom_types
+        )
+        current_imports.update(type_imports)  # Add imports specific to the return type
+        func.return_type_hint = return_type_hint_from_handler  # Set the attribute on the ParsedFunction object
 
         # If we have a dataclass name, ensure its definition exists in current_custom_types
         if determined_dataclass_name:
@@ -101,7 +100,9 @@ def generate_python_code(
                     current_imports.add(PYTHON_IMPORTS["dataclass"])
                 else:
                     # This case might indicate a parser issue, but we don't fail here.
-                    logging.warning(f"Function {func.sql_name} needs ad-hoc dataclass {determined_dataclass_name} but has no return columns.")
+                    logging.warning(
+                        f"Function {func.sql_name} needs ad-hoc dataclass {determined_dataclass_name} but has no return columns."
+                    )
 
             # For non-ad-hoc dataclasses (based on existing tables/types)
             else:
@@ -141,83 +142,84 @@ def generate_python_code(
     # --- Generate Enum classes section ---
     enum_classes_section_list = []
     processed_enum_names = set()
-    
+
     # Generate Enum classes if we have parsed enum types
     if parsed_enum_types:
         for enum_name, enum_values in parsed_enum_types.items():
             # Convert enum_name to PascalCase for Python Enum class name
-            class_name = ''.join(word.capitalize() for word in enum_name.split('_'))
-            
+            class_name = "".join(word.capitalize() for word in enum_name.split("_"))
+
             if class_name in processed_enum_names:
                 continue  # Avoid duplicates
             processed_enum_names.add(class_name)
-            
+
             # Generate the Enum class code
             enum_class_code = _generate_enum_class(enum_name, enum_values)
             enum_classes_section_list.append(enum_class_code)
-            
+
             # Ensure Enum is imported
-            current_imports.add(PYTHON_IMPORTS['Enum'])
-    
-    enum_classes_section = "\n\n".join(enum_classes_section_list)
-    
+            current_imports.add(PYTHON_IMPORTS["Enum"])
+
+    "\n\n".join(enum_classes_section_list)
+
     # --- Collect RECORD dataclasses from functions ---
     # Add RECORD dataclasses to custom_types so they get generated
     for func in functions:
-        if func.returns_record and hasattr(func, 'dataclass_name') and func.dataclass_name and func.return_columns:
+        if func.returns_record and hasattr(func, "dataclass_name") and func.dataclass_name and func.return_columns:
             # Add RECORD dataclass to current_custom_types for generation
             current_custom_types[func.dataclass_name] = func.return_columns
             logging.debug(f"Added RECORD dataclass '{func.dataclass_name}' to generation queue")
-    
-    # --- Generate Dataclasses section --- 
+
+    # --- Generate Dataclasses section ---
     dataclasses_section_list = []
     processed_dataclass_names = set()
-    
+
     # Use dependency resolver to get the correct order
     # Note: table_schema_imports contains imports, not schemas
     # The dependency resolver will handle collecting referenced types
     sorted_custom_types = resolve_dataclass_order(current_custom_types)
-    
+
     # Now add the generated dataclasses to the output in the correct order
     # Iterate through the custom types in dependency-sorted order
     for type_name, columns in sorted_custom_types:
-         # Determine the final class name (handle potential internal names for ad-hoc)
-         if type_name.endswith("Result"):
-              class_name = type_name # Use the name directly (e.g., GetUserDataResult)
-         elif '.' in type_name: # Schema-qualified table name
-              class_name = _to_singular_camel_case(type_name) # Convert SQL name (e.g., public.companies -> Company)
-         else: # Non-schema-qualified table name
-              class_name = _to_singular_camel_case(type_name) # Convert SQL name (e.g., users -> User)
+        # Determine the final class name (handle potential internal names for ad-hoc)
+        if type_name.endswith("Result"):
+            class_name = type_name  # Use the name directly (e.g., GetUserDataResult)
+        elif "." in type_name:  # Schema-qualified table name
+            class_name = _to_singular_camel_case(type_name)  # Convert SQL name (e.g., public.companies -> Company)
+        else:  # Non-schema-qualified table name
+            class_name = _to_singular_camel_case(type_name)  # Convert SQL name (e.g., users -> User)
 
-         if class_name in processed_dataclass_names:
-              continue # Avoid duplicates
-         processed_dataclass_names.add(class_name)
+        if class_name in processed_dataclass_names:
+            continue  # Avoid duplicates
+        processed_dataclass_names.add(class_name)
 
-         # Determine if fields should be optional (True for ad-hoc RETURNS TABLE)
-         make_fields_optional = type_name.endswith("Result")
+        # Determine if fields should be optional (True for ad-hoc RETURNS TABLE)
+        make_fields_optional = type_name.endswith("Result")
 
-         logging.debug(f"Generating dataclass '{class_name}' ({type_name}) with columns: {columns}") # DEBUG LOG
-         dataclass_code = _generate_dataclass(
-             class_name, columns, make_fields_optional
-         )
-         dataclasses_section_list.append(dataclass_code)
+        logging.debug(f"Generating dataclass '{class_name}' ({type_name}) with columns: {columns}")  # DEBUG LOG
+        dataclass_code = _generate_dataclass(class_name, columns, make_fields_optional)
+        dataclasses_section_list.append(dataclass_code)
 
-         # Collect imports needed *by this specific dataclass's fields*
-         # This logic seems better placed within _generate_dataclass or requires passing imports back
-         # For now, let's re-collect imports based on columns here
-         dataclass_imports = set()
-         for col in columns:
-             base_type = col.python_type.replace("Optional[", "").replace("List[", "").replace("]", "")
-             if base_type in PYTHON_IMPORTS: dataclass_imports.add(PYTHON_IMPORTS[base_type])
-             if col.python_type.startswith("Optional["): 
-                 dataclass_imports.add(PYTHON_IMPORTS["Optional"])
-                 logging.debug(f"Added Optional import for column {col.name}: {PYTHON_IMPORTS['Optional']}") # Added debug log
-             if col.python_type.startswith("List["): dataclass_imports.add(PYTHON_IMPORTS["List"])
-         # Ensure dataclass itself is imported if we generated one
-         if dataclass_code and not dataclass_code.startswith("# TODO"):
-             dataclass_imports.add(PYTHON_IMPORTS["dataclass"])
-         current_imports.update(dataclass_imports)
-
+        # Collect imports needed *by this specific dataclass's fields*
+        # This logic seems better placed within _generate_dataclass or requires passing imports back
+        # For now, let's re-collect imports based on columns here
+        dataclass_imports = set()
+        for col in columns:
+            base_type = col.python_type.replace("Optional[", "").replace("List[", "").replace("]", "")
+            if base_type in PYTHON_IMPORTS:
+                dataclass_imports.add(PYTHON_IMPORTS[base_type])
+            if col.python_type.startswith("Optional["):
+                dataclass_imports.add(PYTHON_IMPORTS["Optional"])
+                logging.debug(
+                    f"Added Optional import for column {col.name}: {PYTHON_IMPORTS['Optional']}"
+                )  # Added debug log
+            if col.python_type.startswith("List["):
+                dataclass_imports.add(PYTHON_IMPORTS["List"])
+        # Ensure dataclass itself is imported if we generated one
+        if dataclass_code and not dataclass_code.startswith("# TODO"):
+            dataclass_imports.add(PYTHON_IMPORTS["dataclass"])
+        current_imports.update(dataclass_imports)
 
     dataclasses_section = "\n\n".join(dataclasses_section_list)
 
@@ -225,12 +227,12 @@ def generate_python_code(
     # Restore the function generation loop
     processed_function_names = set()
     for func in functions:
-        logging.info(f"Attempting to generate function: {func.sql_name}") # DEBUG LOG
-        
+        logging.info(f"Attempting to generate function: {func.sql_name}")  # DEBUG LOG
+
         # Debug: print RECORD function details
         # if func.sql_name == "get_item_name_and_mood":
         #     logging.warning(f"DEBUG: RECORD function {func.sql_name}: returns_record={func.returns_record}, return_columns={func.return_columns}, dataclass_name={getattr(func, 'dataclass_name', 'N/A')}")
-        
+
         generated_functions.append(_generate_function(func, current_custom_types))
         # Collect function names for __all__ list
         processed_function_names.add(func.python_name)
@@ -238,14 +240,14 @@ def generate_python_code(
     # --- Generate __all__ list ---
     def _generate_all_list(enum_names: set, dataclass_names: set, function_names: set) -> str:
         """Generate __all__ list for the module."""
-        all_exports = sorted(list(enum_names | dataclass_names | function_names))
+        all_exports = sorted(enum_names | dataclass_names | function_names)
         if not all_exports:
             return ""
-        
+
         # Format as a Python list with proper indentation
         exports_str = ",\n    ".join(f"'{name}'" for name in all_exports)
         return f"__all__ = [\n    {exports_str},\n]"
-    
+
     all_list_section = _generate_all_list(processed_enum_names, processed_dataclass_names, processed_function_names)
 
     # --- Add imports needed for helper functions ---
@@ -260,7 +262,7 @@ def generate_python_code(
     current_imports.discard(None)
     # DEBUG: Print the final set of all collected imports before formatting
     # print(f"[GENERATOR DEBUG] Final current_imports before formatting: {current_imports}")
-    logging.debug(f"[DEBUG] Imports BEFORE consolidation: {current_imports}") # Added debug log
+    logging.debug(f"[DEBUG] Imports BEFORE consolidation: {current_imports}")  # Added debug log
 
     # Consolidate typing imports for better readability
     # Define standard imports that should always be present if used
@@ -272,14 +274,14 @@ def generate_python_code(
         datetime_imports_needed.append("datetime")
     if "from datetime import timedelta" in current_imports:
         datetime_imports_needed.append("timedelta")
-    
+
     datetime_import_line = ""
     if datetime_imports_needed:
         datetime_import_line = f"from datetime import {', '.join(sorted(datetime_imports_needed))}"
-    
+
     standard_imports_order = [
-        "from typing import List, Optional, Tuple, Dict, Any", # Base typing imports
-        "from typing import TypeVar, Sequence", # Helper function typing imports
+        "from typing import List, Optional, Tuple, Dict, Any",  # Base typing imports
+        "from typing import TypeVar, Sequence",  # Helper function typing imports
         "from uuid import UUID",
         datetime_import_line,  # Dynamic datetime import
         "from decimal import Decimal",
@@ -287,23 +289,23 @@ def generate_python_code(
         "from dataclasses import dataclass",
         "from enum import Enum",
     ]
-    
+
     # Remove empty datetime import line if no datetime imports needed
     standard_imports_order = [imp for imp in standard_imports_order if imp]
 
     # Filter the standard imports based on what's actually in current_imports
     # AND conditionally add helper imports
     present_standard_imports = []
-    needed_typing_names = set() # Track specific names needed from typing
-    needed_other_modules = set() # Track other modules needed
+    needed_typing_names = set()  # Track specific names needed from typing
+    needed_other_modules = set()  # Track other modules needed
 
     # Collect all needed names/modules from current_imports
     for imp_in_set in current_imports:
         if imp_in_set.startswith("from typing import"):
-            names = {name.strip() for name in imp_in_set.split('import')[1].split(',')}
+            names = {name.strip() for name in imp_in_set.split("import")[1].split(",")}
             needed_typing_names.update(names)
         elif imp_in_set.startswith("from"):
-            module = imp_in_set.split('import')[0].replace('from', '').strip()
+            module = imp_in_set.split("import")[0].replace("from", "").strip()
             needed_other_modules.add(module)
         # Handle direct imports like 'import psycopg' if needed later
 
@@ -313,19 +315,18 @@ def generate_python_code(
         # Ensure List/Optional are added if needed by helpers, even if not elsewhere
         needed_typing_names.update(["List", "Optional"])
 
-
     # Build the final list of standard import lines
     for std_imp in standard_imports_order:
-        import_parts = std_imp.split('import')
-        module = import_parts[0].replace('from', '').strip()
-        names_in_line = {name.strip() for name in import_parts[1].split(',')} if len(import_parts) > 1 else set()
+        import_parts = std_imp.split("import")
+        module = import_parts[0].replace("from", "").strip()
+        names_in_line = {name.strip() for name in import_parts[1].split(",")} if len(import_parts) > 1 else set()
 
         # Special handling for the TypeVar/Sequence import line
         is_helper_import_line = "TypeVar" in names_in_line or "Sequence" in names_in_line
         if is_helper_import_line and omit_helpers:
-            continue # Skip this line entirely if helpers are omitted
+            continue  # Skip this line entirely if helpers are omitted
 
-        if module == 'typing':
+        if module == "typing":
             # Include the typing line if any of its names are needed
             if any(name in needed_typing_names for name in names_in_line):
                 present_standard_imports.append(std_imp)
@@ -340,12 +341,12 @@ def generate_python_code(
     # Collect any remaining non-standard imports (this logic might need refinement)
     # For now, we assume standard imports cover everything needed, which might be too broad.
     # A more robust approach would track *all* required symbols and generate minimal imports.
-    other_imports = [] # Assume standard imports cover all for now
+    other_imports = []  # Assume standard imports cover all for now
 
     # Combine standard and other imports
     import_statements = present_standard_imports + other_imports
 
-    logging.debug(f"[DEBUG] Imports AFTER consolidation: {import_statements}") # Added debug log
+    logging.debug(f"[DEBUG] Imports AFTER consolidation: {import_statements}")  # Added debug log
 
     # --- Define Helper Functions Code ---
     # Conditionally define helper code
@@ -368,7 +369,7 @@ def generate_python_code(
     non_empty_enums = [enum_class for enum_class in enum_classes_section_list if enum_class.strip()]
     non_empty_dataclasses = [dc for dc in [dataclasses_section.strip()] if dc]
     non_empty_functions = [func.strip() for func in generated_functions if func.strip()]
-    
+
     # Combine definitions with minimal spacing, handling empty sections
     code_parts = non_empty_enums + non_empty_dataclasses + non_empty_functions
     code_body = "\n\n".join(code_parts)
@@ -377,17 +378,17 @@ def generate_python_code(
     final_parts = [header]
     if import_statements:
         # Keep only the correct logic using the pre-calculated import_statements:
-        final_imports = sorted(list(import_statements))
+        final_imports = sorted(import_statements)
         final_parts.append("\n".join(final_imports))
-    
+
     # Add __all__ list after imports
     if all_list_section:
         final_parts.append(all_list_section)
-    
+
     # Add code body (enums, dataclasses, and functions)
     if code_body:
         final_parts.append(code_body)
-    
+
     # Add Helpers (only if not omitted and code is non-empty)
     if helper_functions_code:
         final_parts.append(helper_functions_code)
@@ -397,6 +398,7 @@ def generate_python_code(
     final_code = "\n\n".join(part for part in final_parts if part) + "\n"
 
     return final_code
+
 
 # ===== SECTION: FILE WRITING =====
 # Function to write the generated code to a file

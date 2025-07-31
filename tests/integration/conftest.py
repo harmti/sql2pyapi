@@ -1,16 +1,27 @@
-import pytest
-from pathlib import Path
 import subprocess
 import sys
+from pathlib import Path
+
+import pytest
+
 
 # Define paths relative to the main tests/ directory
-TESTS_ROOT_DIR = Path(__file__).parent # This is tests/integration/
-PROJECT_ROOT = TESTS_ROOT_DIR.parent.parent # Go up two levels to project root
+TESTS_ROOT_DIR = Path(__file__).parent  # This is tests/integration/
+PROJECT_ROOT = TESTS_ROOT_DIR.parent.parent  # Go up two levels to project root
+
 
 @pytest.fixture
 def run_cli_tool():
     """Fixture to provide a helper function for running the CLI tool."""
-    def _run_cli(functions_sql: Path, output_py: Path, schema_sql: Path = None, verbose: bool = False, allow_missing_schemas: bool = False, no_helpers: bool = False):
+
+    def _run_cli(
+        functions_sql: Path,
+        output_py: Path,
+        schema_sql: Path | None = None,
+        verbose: bool = False,
+        allow_missing_schemas: bool = False,
+        no_helpers: bool = False,
+    ):
         """Helper function to run the CLI tool as a subprocess."""
         cmd = [
             sys.executable,  # Use the current Python executable
@@ -22,7 +33,7 @@ def run_cli_tool():
         if schema_sql:
             cmd.extend(["--schema-file", str(schema_sql)])
         if verbose:
-            cmd.append("-v") # Add verbose flag if requested
+            cmd.append("-v")  # Add verbose flag if requested
         if allow_missing_schemas:
             cmd.append("--allow-missing-schemas")
         if no_helpers:
@@ -45,17 +56,21 @@ def run_cli_tool():
         #     print("CLI Error STDERR:", result.stderr)
 
         return result
+
     return _run_cli
+
 
 # You might want to add fixtures for common paths too
 @pytest.fixture(scope="session")
 def fixtures_dir() -> Path:
     return Path(__file__).parent.parent / "fixtures"
 
+
 @pytest.fixture(scope="session")
 def expected_dir() -> Path:
     return Path(__file__).parent.parent / "expected"
 
+
 @pytest.fixture(scope="session")
 def project_root() -> Path:
-    return Path(__file__).parent.parent.parent 
+    return Path(__file__).parent.parent.parent
