@@ -221,9 +221,58 @@ sql2pyapi functions.sql generated_api.py --no-helpers
 
 ## Development
 
-* Install development dependencies: `uv pip install -e ".[dev]"`
-* Run tests: `pytest`
-* Linting/Formatting: `ruff check .` and `ruff format .`
+### Quick Setup
+
+```bash
+# One-time setup with Makefile
+make setup
+
+# Or manually:
+uv pip install -e ".[dev]"
+uv run pre-commit install
+```
+
+### Development Commands
+
+Use the provided Makefile for common development tasks:
+
+```bash
+make help              # Show all available commands
+make test              # Run all tests
+make test-unit         # Run unit tests only
+make lint              # Check code style and potential issues
+make format            # Format code automatically
+make check             # Run both linting and formatting checks
+make fix               # Auto-fix linting and formatting issues
+```
+
+### Code Quality
+
+This project uses comprehensive linting and formatting:
+
+- **Ruff**: Fast Python linter and formatter with extensive rule set
+- **Pre-commit hooks**: Automatic checks on commit
+- **Testing**: Unit, integration, and system tests
+
+The linting configuration includes:
+- Code style (pycodestyle, pyflakes)
+- Import sorting (isort)
+- Code complexity checks (pylint subset)
+- Security and bug detection (flake8-bugbear)
+- Modern Python practices (pyupgrade)
+
+### Pre-commit Hooks
+
+Pre-commit hooks run automatically on each commit:
+- Code formatting with ruff
+- Linting with auto-fix where possible
+- Unit tests to catch breaking changes early
+- Basic file checks (trailing whitespace, merge conflicts, etc.)
+
+Run manually with:
+```bash
+make pre-commit-run    # Run on all files
+```
 
 ### Testing
 

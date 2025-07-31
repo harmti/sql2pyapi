@@ -32,6 +32,7 @@ dev = [
     "pytest>=8.0.0", # Or pin to a specific version range if needed
     "pytest-asyncio", # Added for testing async functions
     "ruff>=0.5.5",
+    "pre-commit>=3.5.0",
 ]
 
 [project.urls]
@@ -55,9 +56,94 @@ packages = ["src/sql2pyapi"]
 
 [tool.ruff]
 line-length = 120
+target-version = "py312"
+src = ["src"]
 exclude = [
     "tests/expected",
+    ".git",
+    ".venv",
+    "__pycache__",
+    "*.pyc",
+    "*.pyo",
+    "temp/",
 ]
+
+[tool.ruff.lint]
+# Enable pycodestyle (`E`), pyflakes (`F`), isort (`I`), and bugbear (`B`)
+select = [
+    "E",      # pycodestyle errors
+    "W",      # pycodestyle warnings
+    "F",      # pyflakes
+    "I",      # isort
+    "B",      # flake8-bugbear
+    "C4",     # flake8-comprehensions
+    "UP",     # pyupgrade
+    "SIM",    # flake8-simplify
+    "TCH",    # flake8-type-checking
+    "PTH",    # flake8-use-pathlib
+    "ERA",    # eradicate
+    "PL",     # pylint
+    "TRY",    # tryceratops
+    "RUF",    # ruff-specific rules
+]
+
+ignore = [
+    "E501",    # line-too-long (handled by formatter)
+    "TRY003",  # avoid-too-long-messages (we want descriptive errors)
+    "TRY300",  # try-consider-else (acceptable pattern)
+    "TRY401",  # redundant-exception-object (acceptable pattern)
+    "PLR0913", # too-many-arguments (common in SQL functions)
+    "PLR0912", # too-many-branches (acceptable in parser logic)
+    "PLR0915", # too-many-statements (acceptable in code generation)
+    "PLR2004", # magic-value-comparison (acceptable for constants)
+    "PLW2901", # for-loop-variable-overwritten (acceptable pattern)
+    "ERA001",  # commented-out-code (we have intentional comments)
+    "F403",    # star-imports (used for constants module)
+    "F405",    # star-imports-undefined (used for constants module)
+    "F401",    # unused-import (acceptable for __init__.py exports)
+    "PLC0415", # import-outside-toplevel (lazy imports are OK)
+    "E402",    # module-level-import-not-at-top (lazy imports)
+    "E741",    # ambiguous-variable-name (single letters acceptable)
+    "B007",    # unused-loop-control-variable (enumerate acceptable)
+    "B904",    # raise-without-from-inside-except (CLI context acceptable)
+    "SIM102",  # nested-if (readable in context)
+    "SIM108",  # ternary-instead-of-if-else (readability preference)
+    "B008",    # function-call-in-default-argument (typer pattern)
+    "PTH",     # flake8-use-pathlib (os.path is fine for this project)
+]
+
+# Allow fix for all enabled rules (when `--fix`) is provided.
+fixable = ["ALL"]
+unfixable = []
+
+# Allow unused variables when underscore-prefixed.
+dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = [
+    "S101",     # assert (used in tests)
+    "B904",     # raise-without-from-inside-except (acceptable in tests)
+    "TRY300",   # try-consider-else (acceptable in tests)  
+    "TRY301",   # raise-within-try (acceptable in tests)
+    "SIM102",   # nested-if (acceptable in tests)
+    "B007",     # unused-loop-control-variable (acceptable in tests)
+    "PLC2401",  # non-ascii-name (test data can have unicode)
+    "E741",     # ambiguous-variable-name (single letters OK in tests)
+]
+"regenerate_expected.py" = [
+    "T20",      # print statements OK in scripts
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["sql2pyapi"]
+force-single-line = true
+lines-after-imports = 2
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "auto"
 
 [tool.pytest.ini_options]
 asyncio_mode = "strict"
