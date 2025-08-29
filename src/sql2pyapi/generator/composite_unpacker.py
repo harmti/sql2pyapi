@@ -3,6 +3,51 @@
 from ..sql_models import ReturnColumn
 
 
+def generate_postgresql_value_converter() -> list[str]:
+    """
+    Generates a helper function to convert PostgreSQL string representations to proper Python types.
+
+    Returns:
+        List of code lines for the converter function
+    """
+    return [
+        "def _convert_postgresql_value(field: str):",
+        '    """Convert PostgreSQL string representations to proper Python types."""',
+        "    field = field.strip()",
+        "    ",
+        "    # Handle boolean representations - these are PostgreSQL specific",
+        "    if field == 't':",
+        "        return True",
+        "    elif field == 'f':",
+        "        return False",
+        "    ",
+        "    # Handle numeric representations only for values that contain a decimal point",
+        "    # This is more conservative and avoids converting integer strings that might be IDs",
+        "    if '.' in field and field.replace('.', '').replace('-', '').replace('+', '').isdigit():",
+        "        # Only convert numbers with decimal points to Decimal",
+        "        try:",
+        "            from decimal import Decimal",
+        "            return Decimal(field)",
+        "        except (ValueError, TypeError):",
+        "            # If Decimal conversion fails, keep as string",
+        "            pass",
+        "    ",
+        "    # Handle JSON/JSONB representations",
+        "    if field.strip().startswith(('{', '[')):",
+        "        try:",
+        "            import json",
+        "            return json.loads(field)",
+        "        except (json.JSONDecodeError, ValueError):",
+        "            # If JSON parsing fails, keep as string",
+        "            pass",
+        "    ",
+        "    # For all other values (including integer strings), keep as string",
+        "    # This prevents converting IDs and other integer strings to Decimal",
+        "    return field",
+        "",
+    ]
+
+
 def generate_composite_string_parser() -> list[str]:
     """
     Generates a helper function to parse PostgreSQL composite type string representations.
@@ -67,9 +112,9 @@ def generate_composite_string_parser() -> list[str]:
         "            # Quoted string - remove quotes and handle escapes",
         "            parsed_fields.append(field[1:-1].replace('\\\\\"', '\"').replace('\\\\\\\\', '\\\\'))",
         "        else:",
-        "            # Unquoted value - keep as string for now",
-        "            # The dataclass constructor will handle type conversion",
-        "            parsed_fields.append(field)",
+        "            # Unquoted value - convert PostgreSQL representations to proper Python types",
+        "            converted_field = _convert_postgresql_value(field)",
+        "            parsed_fields.append(converted_field)",
         "    ",
         "    return tuple(parsed_fields)",
         "",
@@ -155,8 +200,14 @@ def generate_composite_unpacking_code(
             f"{indent}return instance",
         ]
 
-    # Generate the composite string parser function inline
+    # Generate the helper functions inline
     lines = []
+    lines.append(f"{indent}# Helper function to convert PostgreSQL values to Python types")
+    converter_lines = generate_postgresql_value_converter()
+    for converter_line in converter_lines:
+        lines.append(f"{indent}{converter_line}")
+    lines.append("")
+
     lines.append(f"{indent}# Helper function to parse composite string representations")
     parser_lines = generate_composite_string_parser()
     for parser_line in parser_lines:
