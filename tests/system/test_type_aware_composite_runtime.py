@@ -512,17 +512,18 @@ def test_enum_conversion_in_composite_types():
         # Verify the generated code structure
         import inspect
 
-        # Check if any function contains the enum conversion logic
+        # Check that global helper functions with enum conversion logic exist
+        # With the optimization, enum conversion logic is now in global helpers
+        has_global_converter = hasattr(generated_module, "_convert_postgresql_value_typed")
         has_enum_logic = False
-        for func_name in test_functions:
-            func = getattr(generated_module, func_name)
-            source = inspect.getsource(func)
-            if "_convert_postgresql_value_typed" in source and "frame.f_globals" in source:
-                has_enum_logic = True
-                break
 
-        assert has_enum_logic, "At least one function should contain enum conversion logic"
-        print("✅ Enum conversion logic is present in generated functions")
+        if has_global_converter:
+            converter_func = getattr(generated_module, "_convert_postgresql_value_typed")
+            converter_source = inspect.getsource(converter_func)
+            has_enum_logic = "frame.f_globals" in converter_source and "expected_type" in converter_source
+
+        assert has_enum_logic, "Global helper functions should contain enum conversion logic"
+        print("✅ Enum conversion logic is present in global helper functions")
 
         # Test dataclass creation with enums (manual test since we don't have DB)
         from datetime import datetime

@@ -75,6 +75,20 @@ def generate_type_aware_converter() -> list[str]:
         "        if field == 'f':",
         "            return False",
         "    ",
+        "    # Integer types",
+        "    if 'int' in expected_type.lower():",
+        "        try:",
+        "            return int(field)",
+        "        except (ValueError, TypeError):",
+        "            pass",
+        "    ",
+        "    # Float types",
+        "    if 'float' in expected_type.lower():",
+        "        try:",
+        "            return float(field)",
+        "        except (ValueError, TypeError):",
+        "            pass",
+        "    ",
         "    # Decimal types - only for Decimal types",
         "    if 'decimal' in expected_type.lower():",
         "        try:",
@@ -453,35 +467,8 @@ def generate_composite_unpacking_code(
             f"{indent}return instance",
         ]
 
-    # Generate the helper functions inline
+    # Use global helper functions instead of generating inline ones
     lines = []
-
-    if use_type_aware:
-        # Add type-aware helper functions
-        lines.append(f"{indent}# Type-aware helper function to convert PostgreSQL values to Python types")
-        converter_lines = generate_type_aware_converter()
-        for converter_line in converter_lines:
-            lines.append(f"{indent}{converter_line}")
-        lines.append("")
-
-        lines.append(f"{indent}# Type-aware helper function to parse composite string representations")
-        parser_lines = generate_type_aware_composite_parser()
-        for parser_line in parser_lines:
-            lines.append(f"{indent}{parser_line}")
-        lines.append("")
-    else:
-        # Use original helper functions
-        lines.append(f"{indent}# Helper function to convert PostgreSQL values to Python types")
-        converter_lines = generate_postgresql_value_converter()
-        for converter_line in converter_lines:
-            lines.append(f"{indent}{converter_line}")
-        lines.append("")
-
-        lines.append(f"{indent}# Helper function to parse composite string representations")
-        parser_lines = generate_composite_string_parser()
-        for parser_line in parser_lines:
-            lines.append(f"{indent}{parser_line}")
-        lines.append("")
 
     if nested_composites or use_type_aware:
         # We need to process the row field by field
@@ -590,6 +577,53 @@ def generate_composite_unpacking_code(
         lines.append(f"{indent}return instance")
 
     return lines
+
+
+def generate_global_helper_functions() -> list[str]:
+    """
+    Generates global helper functions to be placed at module level.
+
+    Returns:
+        List of code lines for the global helper functions
+    """
+    lines = []
+
+    # Add the type-aware converter function
+    lines.extend(generate_type_aware_converter())
+    lines.append("")
+
+    # Add the type-aware composite parser function
+    lines.extend(generate_type_aware_composite_parser())
+    lines.append("")
+
+    # Add the basic composite parser function (still needed for backwards compatibility)
+    lines.extend(generate_composite_string_parser())
+    lines.append("")
+
+    # Add the basic value converter function (still needed for backwards compatibility)
+    lines.extend(generate_postgresql_value_converter())
+    lines.append("")
+
+    return lines
+
+
+def needs_global_helpers(functions: list, composite_types: dict[str, list[ReturnColumn]]) -> bool:
+    """
+    Determines if any functions in the module need global helper functions.
+
+    Args:
+        functions: List of parsed functions
+        composite_types: Dictionary of all known composite types
+
+    Returns:
+        True if global helpers are needed, False otherwise
+    """
+    # Check if any function has return columns that need special handling
+    for func in functions:
+        if hasattr(func, "return_columns") and func.return_columns:
+            if needs_nested_unpacking(func.return_columns, composite_types):
+                return True
+    return False
 
 
 def needs_nested_unpacking(columns: list[ReturnColumn], composite_types: dict[str, list[ReturnColumn]]) -> bool:
