@@ -163,11 +163,12 @@ def test_func2_generation_with_schema(tmp_path, run_cli_tool):
                 fetchall_call = call
         elif isinstance(node_in_body, ast.Return) and isinstance(node_in_body.value, ast.ListComp):
             list_comp = node_in_body.value
+            # Can be either direct dataclass construction or helper function call
             assert (
                 isinstance(list_comp.elt, ast.Call)
                 and isinstance(list_comp.elt.func, ast.Name)
-                and list_comp.elt.func.id == "Company"
-            ), "List comprehension does not call Company()"
+                and (list_comp.elt.func.id == "Company" or list_comp.elt.func.id == "create_company")
+            ), "List comprehension does not call Company() or create_company()"
 
     assert execute_call is not None, "cur.execute call not found"
     assert full_sql_query_assign_node is not None, "Assignment to _full_sql_query not found"
@@ -326,11 +327,12 @@ def test_inline_schema_function_generation(tmp_path, run_cli_tool):
                 fetchall_call = call
         elif isinstance(node_in_body, ast.Return) and isinstance(node_in_body.value, ast.ListComp):
             list_comp = node_in_body.value
+            # Can be either direct dataclass construction or helper function call
             assert (
                 isinstance(list_comp.elt, ast.Call)
                 and isinstance(list_comp.elt.func, ast.Name)
-                and list_comp.elt.func.id == "Product"
-            ), "List comprehension does not call Product()"
+                and (list_comp.elt.func.id == "Product" or list_comp.elt.func.id == "create_product")
+            ), "List comprehension does not call Product() or create_product()"
 
     assert execute_call is not None, "cur.execute call not found"
     assert full_sql_query_assign_node is not None, "Assignment to _full_sql_query not found"

@@ -133,8 +133,9 @@ def test_enum_in_table_result_conversion():
             in_function = False
 
     # Verify that enums in table results are converted in the helper function
-    assert "# Inner helper function for efficient conversion" in python_code
-    assert "role=CompanyRole(row[3]) if row[3] is not None else None" in python_code
+    assert "# Inner helper function for composite/enum conversion" in python_code
+    # The new implementation uses type-aware conversion instead of direct enum construction
+    assert "CompanyRole" in python_code and "create_getcompanymemberresult" in python_code
 
 
 def test_enum_in_list_table_result_conversion():
@@ -174,7 +175,8 @@ def test_enum_in_list_table_result_conversion():
             in_function = False
 
     # Verify that we generate an inner helper function for list results
-    assert "# Inner helper function for efficient conversion" in python_code
+    assert "# Inner helper function for composite/enum conversion" in python_code
     assert "def create_listcompanymembersresult(row):" in python_code
-    assert "role=CompanyRole(row[3]) if row[3] is not None else None" in python_code
+    # The new implementation uses type-aware conversion instead of direct enum construction
+    assert "CompanyRole" in python_code and "_convert_postgresql_value_typed" in python_code
     assert "return [create_listcompanymembersresult(row) for row in rows]" in python_code

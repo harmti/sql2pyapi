@@ -130,8 +130,30 @@ async def setup_initial_data(db_conn):
         # Clean up tables in reverse order of dependencies
         await cur.execute("DELETE FROM related_items;")
         await cur.execute("DELETE FROM items;")
+        await cur.execute("DELETE FROM enum_users;")  # Clean enum_users table too
+        await cur.execute("DELETE FROM company_invitations;")  # Clean company_invitations table too
         # Reset sequence for SERIAL PK
         await cur.execute("ALTER SEQUENCE items_id_seq RESTART WITH 1;")
+
+        # Insert enum_users test data
+        await cur.execute(
+            """
+            INSERT INTO enum_users (name, role) VALUES 
+                ('Test Admin', 'admin'),
+                ('Test Owner', 'owner'), 
+                ('Test Member', 'member');
+            """
+        )
+
+        # Insert company_invitations test data
+        await cur.execute(
+            """
+            INSERT INTO company_invitations (company_id, email, role, status) VALUES 
+                (gen_random_uuid(), 'admin@test.com', 'admin', 'pending'),
+                (gen_random_uuid(), 'owner@test.com', 'owner', 'accepted'),
+                (gen_random_uuid(), 'member@test.com', 'member', 'pending');
+            """
+        )
 
         # Insert some initial data
         await cur.execute(
@@ -465,6 +487,138 @@ async def test_dict_row_with_enum(db_conn_dict_row, generated_api_module):
     assert sad_items[0]["current_mood"] == "sad"
 
     print("Successfully tested dictionary row factory with enum fields")
+
+
+@pytest.mark.asyncio
+async def test_composite_type_enum_conversion_definitive(generated_api_module, db_conn):
+    """THE DEFINITIVE TEST: Real database call to confirm enum conversion works."""
+
+    # First, get a user ID from the database that we know exists
+    async with db_conn.cursor() as cur:
+        await cur.execute("SELECT id FROM enum_users WHERE role = 'admin' LIMIT 1")
+        row = await cur.fetchone()
+        assert row is not None, "Test data not found - admin user should exist"
+        user_id = row[0]
+
+    print(f"Testing with user ID: {user_id}")
+
+    # THE CRITICAL TEST: Call get_user_by_id and check if role field is converted to enum
+    user = await generated_api_module.get_user_by_id(db_conn, user_id)
+
+    # Basic assertions
+    assert user is not None, "User should be found"
+    assert isinstance(user, generated_api_module.EnumUser), f"Expected EnumUser instance, got {type(user)}"
+
+    # Print debug info
+    print(f"Retrieved user:")
+    print(f"  Name: {user.name}")
+    print(f"  ID: {user.id}")
+    print(f"  Role: {user.role}")
+    print(f"  Role type: {type(user.role)}")
+
+    # THE BUG TEST: Is the role field an enum or a string?
+    if isinstance(user.role, str):
+        print("🐛 ENUM CONVERSION BUG CONFIRMED!")
+        print(f"  Expected: UserRoleEnum instance")
+        print(f"  Actual: string '{user.role}'")
+
+        # Test the comparison failure
+        comparison_works = user.role == generated_api_module.UserRoleEnum.ADMIN
+        print(f"  Comparison user.role == UserRoleEnum.ADMIN: {comparison_works}")
+
+        # This should fail, demonstrating the bug
+        assert False, f"ENUM REGRESSION BUG: Role field is string '{user.role}', not enum"
+
+    elif isinstance(user.role, generated_api_module.UserRoleEnum):
+        print("✅ ENUM CONVERSION WORKS!")
+        print(f"  Role is properly converted to: {user.role}")
+        print(f"  Type: {type(user.role)}")
+
+        # Test that comparisons work
+        assert user.role == generated_api_module.UserRoleEnum.ADMIN, f"Expected UserRoleEnum.ADMIN, got {user.role}"
+
+        # Test that it has enum properties
+        assert hasattr(user.role, "value"), "Enum should have value attribute"
+        assert user.role.value == "admin", f"Enum value should be 'admin', got '{user.role.value}'"
+
+        print("✅ All enum functionality works correctly!")
+        return True
+
+    else:
+        assert False, f"Unexpected type for role field: {type(user.role)} - {user.role}"
+
+
+@pytest.mark.asyncio
+async def test_company_invitation_enum_conversion_comprehensive(generated_api_module, db_conn):
+    """COMPREHENSIVE TEST: Test the original failing case with company invitations and multiple enum fields."""
+
+    print("Testing company invitation creation with multiple enum fields...")
+
+    # Test data
+    from uuid import uuid4
+
+    test_company_id = uuid4()
+    test_email = "newuser@test.com"
+    test_role = generated_api_module.CompanyRole.ADMIN
+
+    # Call the create_company_invitation function
+    invitation = await generated_api_module.create_company_invitation(db_conn, test_company_id, test_email, test_role)
+
+    # Basic assertions
+    assert invitation is not None, "Invitation should be created"
+    assert isinstance(invitation, generated_api_module.CompanyInvitation), (
+        f"Expected CompanyInvitation instance, got {type(invitation)}"
+    )
+
+    # Print debug info
+    print(f"Created invitation:")
+    print(f"  ID: {invitation.id}")
+    print(f"  Email: {invitation.email}")
+    print(f"  Company ID: {invitation.company_id}")
+    print(f"  Role: {invitation.role} (type: {type(invitation.role)})")
+    print(f"  Status: {invitation.status} (type: {type(invitation.status)})")
+
+    # THE CRITICAL TEST 1: Role field should be enum
+    if isinstance(invitation.role, str):
+        print("🐛 COMPANY ROLE ENUM BUG CONFIRMED!")
+        print(f"  Expected: CompanyRole.ADMIN")
+        print(f"  Actual: string '{invitation.role}'")
+        assert False, f"ENUM BUG: Role field is string '{invitation.role}', not CompanyRole enum"
+    else:
+        assert isinstance(invitation.role, generated_api_module.CompanyRole), (
+            f"Expected CompanyRole enum, got {type(invitation.role)}: {invitation.role}"
+        )
+        assert invitation.role == generated_api_module.CompanyRole.ADMIN, (
+            f"Expected CompanyRole.ADMIN, got {invitation.role}"
+        )
+        print("✅ Role enum conversion works!")
+
+    # THE CRITICAL TEST 2: Status field should be enum
+    if isinstance(invitation.status, str):
+        print("🐛 INVITATION STATUS ENUM BUG CONFIRMED!")
+        print(f"  Expected: InvitationStatus enum")
+        print(f"  Actual: string '{invitation.status}'")
+        assert False, f"ENUM BUG: Status field is string '{invitation.status}', not InvitationStatus enum"
+    else:
+        assert isinstance(invitation.status, generated_api_module.InvitationStatus), (
+            f"Expected InvitationStatus enum, got {type(invitation.status)}: {invitation.status}"
+        )
+        assert invitation.status == generated_api_module.InvitationStatus.PENDING, (
+            f"Expected InvitationStatus.PENDING (default), got {invitation.status}"
+        )
+        print("✅ Status enum conversion works!")
+
+    # Test enum properties
+    assert hasattr(invitation.role, "value"), "Role enum should have value attribute"
+    assert invitation.role.value == "admin", f"Role enum value should be 'admin', got '{invitation.role.value}'"
+
+    assert hasattr(invitation.status, "value"), "Status enum should have value attribute"
+    assert invitation.status.value == "pending", (
+        f"Status enum value should be 'pending', got '{invitation.status.value}'"
+    )
+
+    print("✅ ALL ENUM CONVERSIONS WORK - Multiple enum fields in composite type!")
+    print("✅ This confirms the original bug report scenario is working correctly!")
 
 
 # End of file marker if necessary

@@ -48,6 +48,174 @@ def generate_postgresql_value_converter() -> list[str]:
     ]
 
 
+def generate_type_aware_converter() -> list[str]:
+    """
+    Generates a helper function to convert PostgreSQL values with type awareness.
+
+    Returns:
+        List of code lines for the type-aware converter function
+    """
+    return [
+        "def _convert_postgresql_value_typed(field: str, expected_type: str) -> Any:",
+        '    """Convert PostgreSQL string representations to proper Python types with type guidance."""',
+        "    if field is None:",
+        "        return None",
+        "    # Only apply string-specific conversions if field is actually a string",
+        "    if not isinstance(field, str):",
+        "        return field",
+        "    if field.lower() in ('null', ''):",
+        "        return None",
+        "    ",
+        "    field = field.strip()",
+        "    ",
+        "    # Boolean types - only for bool types",
+        "    if 'bool' in expected_type.lower():",
+        "        if field == 't':",
+        "            return True",
+        "        if field == 'f':",
+        "            return False",
+        "    ",
+        "    # Decimal types - only for Decimal types",
+        "    if 'decimal' in expected_type.lower():",
+        "        try:",
+        "            from decimal import Decimal",
+        "            return Decimal(field)",
+        "        except (ValueError, TypeError):",
+        "            pass",
+        "    ",
+        "    # UUID types",
+        "    if 'uuid' in expected_type.lower():",
+        "        try:",
+        "            from uuid import UUID",
+        "            return UUID(field)",
+        "        except (ValueError, TypeError):",
+        "            pass",
+        "    ",
+        "    # DateTime types",
+        "    if 'datetime' in expected_type.lower():",
+        "        try:",
+        "            from datetime import datetime",
+        "            # Handle PostgreSQL timestamp format",
+        "            return datetime.fromisoformat(field.replace(' ', 'T'))",
+        "        except (ValueError, TypeError):",
+        "            pass",
+        "    ",
+        "    # JSON/JSONB types - only for Dict/List types",
+        "    if any(hint in expected_type.lower() for hint in ['dict', 'list', 'any']):",
+        "        if field.strip().startswith(('{', '[')):",
+        "            try:",
+        "                import json",
+        "                return json.loads(field)",
+        "            except (json.JSONDecodeError, ValueError):",
+        "                pass",
+        "    ",
+        "    # Enum types - check if expected_type looks like an enum class name",
+        "    # Enum types are typically PascalCase and don't contain common type hints",
+        "    if (expected_type and ",
+        "        expected_type[0].isupper() and ",
+        "        not any(expected_type.lower() == hint or expected_type.lower().startswith(hint + '[') for hint in ['optional', 'list', 'dict', 'bool', 'str', 'int', 'float', 'decimal', 'uuid', 'datetime', 'any'])):",
+        "        # Try to find the enum class in globals and convert",
+        "        try:",
+        "            # Look up the enum class by name",
+        "            import sys",
+        "            frame = sys._getframe(1)",
+        "            while frame:",
+        "                if expected_type in frame.f_globals:",
+        "                    enum_class = frame.f_globals[expected_type]",
+        "                    # Check if it's actually an enum class",
+        "                    if hasattr(enum_class, '_member_map_') and field.upper() in enum_class._member_map_:",
+        "                        return enum_class[field.upper()]",
+        "                    elif hasattr(enum_class, '_value2member_map_') and field in enum_class._value2member_map_:",
+        "                        return enum_class(field)",
+        "                    break",
+        "                frame = frame.f_back",
+        "        except (KeyError, ValueError, AttributeError, TypeError):",
+        "            # If enum conversion fails, fall back to string",
+        "            pass",
+        "    ",
+        "    # For all other values, keep as string",
+        "    return field",
+        "",
+    ]
+
+
+def generate_type_aware_composite_parser() -> list[str]:
+    """
+    Generates a helper function to parse PostgreSQL composite type strings with type awareness.
+
+    Returns:
+        List of code lines for the type-aware parser function
+    """
+    return [
+        "def _parse_composite_string_typed(composite_str: str, field_types: List[str]) -> tuple:",
+        '    """Parse a PostgreSQL composite type string representation with type awareness."""',
+        "    if not composite_str or not composite_str.startswith('(') or not composite_str.endswith(')'):",
+        "        raise ValueError(f'Invalid composite string format: {composite_str}')",
+        "    ",
+        "    # Remove outer parentheses",
+        "    content = composite_str[1:-1]",
+        "    if not content:",
+        "        return ()",
+        "    ",
+        "    # Split by comma, but respect nested structures and quoted strings",
+        "    fields = []",
+        "    current_field = ''",
+        "    paren_depth = 0",
+        "    in_quotes = False",
+        "    escape_next = False",
+        "    ",
+        "    for char in content:",
+        "        if escape_next:",
+        "            current_field += char",
+        "            escape_next = False",
+        "        elif char == '\\\\' and in_quotes:",
+        "            current_field += char",
+        "            escape_next = True",
+        "        elif char == '\"':",
+        "            current_field += char",
+        "            in_quotes = not in_quotes",
+        "        elif not in_quotes:",
+        "            if char == '(':",
+        "                paren_depth += 1",
+        "                current_field += char",
+        "            elif char == ')':",
+        "                paren_depth -= 1",
+        "                current_field += char",
+        "            elif char == ',' and paren_depth == 0:",
+        "                fields.append(current_field.strip())",
+        "                current_field = ''",
+        "            else:",
+        "                current_field += char",
+        "        else:",
+        "            current_field += char",
+        "    ",
+        "    # Add the last field",
+        "    if current_field:",
+        "        fields.append(current_field.strip())",
+        "    ",
+        "    # Convert fields to proper Python types with type guidance",
+        "    parsed_fields = []",
+        "    for i, field in enumerate(fields):",
+        "        field = field.strip()",
+        "        if not field or field.lower() in ('null', ''):",
+        "            parsed_fields.append(None)",
+        "        elif field.startswith('\"') and field.endswith('\"'):",
+        "            # Quoted string - remove quotes and handle escapes, then apply type conversion",
+        "            unquoted_field = field[1:-1].replace('\\\\\"', '\"').replace('\\\\\\\\', '\\\\')",
+        "            expected_type = field_types[i] if i < len(field_types) else 'str'",
+        "            converted_field = _convert_postgresql_value_typed(unquoted_field, expected_type)",
+        "            parsed_fields.append(converted_field)",
+        "        else:",
+        "            # Unquoted value - convert with type guidance",
+        "            expected_type = field_types[i] if i < len(field_types) else 'str'",
+        "            converted_field = _convert_postgresql_value_typed(field, expected_type)",
+        "            parsed_fields.append(converted_field)",
+        "    ",
+        "    return tuple(parsed_fields)",
+        "",
+    ]
+
+
 def generate_composite_string_parser() -> list[str]:
     """
     Generates a helper function to parse PostgreSQL composite type string representations.
@@ -173,6 +341,90 @@ def detect_nested_composites(
     return nested_composites
 
 
+def should_use_type_aware_parsing(
+    columns: list[ReturnColumn], composite_types: dict[str, list[ReturnColumn]] | None = None
+) -> bool:
+    """
+    Determines if type-aware parsing should be used based on column types.
+
+    Type-aware parsing is beneficial when we have:
+    - Boolean types (that would benefit from 't'/'f' conversion)
+    - Decimal types (that would benefit from proper numeric conversion)
+    - UUID, DateTime, or other specialized types
+    - Enum types (that would benefit from string-to-enum conversion)
+    - Nested composite types that contain any of the above
+
+    Args:
+        columns: List of columns in the composite type
+        composite_types: Dictionary of all known composite types (for recursive checking)
+
+    Returns:
+        True if type-aware parsing would be beneficial
+    """
+    composite_types = composite_types or {}
+
+    def _check_column_needs_type_aware_parsing(col: ReturnColumn, visited: set = None) -> bool:
+        """Recursively check if a column needs type-aware parsing."""
+        visited = visited or set()
+
+        python_type = col.python_type
+        python_type_lower = python_type.lower()
+
+        # Remove Optional[] wrapper if present
+        if python_type.startswith("Optional[") and python_type.endswith("]"):
+            python_type = python_type[9:-1]
+            python_type_lower = python_type.lower()
+
+        # Check for types that benefit from type-aware parsing
+        if any(type_hint in python_type_lower for type_hint in ["bool", "decimal", "uuid", "datetime", "dict", "list"]):
+            return True
+
+        # Check for enum types - enum types are typically PascalCase and don't contain common type hints
+        # This ensures composite types with enum fields use type-aware parsing for enum conversion
+        # Use exact matching to avoid false matches (e.g. 'any' in 'CompanyRole')
+        exact_common_types = ["int", "str", "bool", "float", "decimal", "uuid", "datetime", "any", "dict", "list"]
+        has_exact_match = python_type_lower in exact_common_types
+
+        # Also check for generic type patterns like Optional[...], List[...], etc.
+        has_generic_pattern = (
+            python_type_lower.startswith(("optional[", "list[", "dict["))
+            or "[" in python_type_lower  # Any generic type with brackets
+        )
+
+        has_common_hints = has_exact_match or has_generic_pattern
+
+        if python_type and python_type[0].isupper() and not has_common_hints:
+            # Check if this is a known composite type
+            # Look for matching composite type by checking both snake_case and CamelCase forms
+            composite_key = None
+            for comp_name in composite_types:
+                from ..parser.utils import _to_singular_camel_case
+
+                if _to_singular_camel_case(comp_name) == python_type or comp_name == python_type:
+                    composite_key = comp_name
+                    break
+
+            if composite_key and composite_key not in visited:
+                # This is a known composite type - recursively check its fields
+                visited.add(composite_key)
+                composite_columns = composite_types[composite_key]
+                for nested_col in composite_columns:
+                    if _check_column_needs_type_aware_parsing(nested_col, visited):
+                        return True
+            else:
+                # This looks like an enum type (not a known composite type)
+                return True
+
+        return False
+
+    # Check all columns for type-aware parsing needs
+    for col in columns:
+        if _check_column_needs_type_aware_parsing(col):
+            return True
+
+    return False
+
+
 def generate_composite_unpacking_code(
     class_name: str, columns: list[ReturnColumn], composite_types: dict[str, list[ReturnColumn]], indent: str = "    "
 ) -> list[str]:
@@ -189,9 +441,10 @@ def generate_composite_unpacking_code(
         List of code lines for unpacking the composite type
     """
     nested_composites = detect_nested_composites(columns, composite_types)
+    use_type_aware = should_use_type_aware_parsing(columns, composite_types)
 
-    if not nested_composites:
-        # No nested composites, use simple unpacking
+    if not nested_composites and not use_type_aware:
+        # No nested composites and no type-aware parsing needed, use simple unpacking
         return [
             f"{indent}instance = {class_name}(*row)",
             f"{indent}# Check for 'empty' composite rows (all values are None) returned as a single tuple",
@@ -202,84 +455,155 @@ def generate_composite_unpacking_code(
 
     # Generate the helper functions inline
     lines = []
-    lines.append(f"{indent}# Helper function to convert PostgreSQL values to Python types")
-    converter_lines = generate_postgresql_value_converter()
-    for converter_line in converter_lines:
-        lines.append(f"{indent}{converter_line}")
-    lines.append("")
 
-    lines.append(f"{indent}# Helper function to parse composite string representations")
-    parser_lines = generate_composite_string_parser()
-    for parser_line in parser_lines:
-        lines.append(f"{indent}{parser_line}")
-    lines.append("")
+    if use_type_aware:
+        # Add type-aware helper functions
+        lines.append(f"{indent}# Type-aware helper function to convert PostgreSQL values to Python types")
+        converter_lines = generate_type_aware_converter()
+        for converter_line in converter_lines:
+            lines.append(f"{indent}{converter_line}")
+        lines.append("")
 
-    # Generate code for nested composite unpacking
-    lines.append(f"{indent}# Handle nested composite types")
-    lines.append(f"{indent}field_values = []")
-    lines.append(f"{indent}for i, value in enumerate(row):")
+        lines.append(f"{indent}# Type-aware helper function to parse composite string representations")
+        parser_lines = generate_type_aware_composite_parser()
+        for parser_line in parser_lines:
+            lines.append(f"{indent}{parser_line}")
+        lines.append("")
+    else:
+        # Use original helper functions
+        lines.append(f"{indent}# Helper function to convert PostgreSQL values to Python types")
+        converter_lines = generate_postgresql_value_converter()
+        for converter_line in converter_lines:
+            lines.append(f"{indent}{converter_line}")
+        lines.append("")
 
-    # Generate if-elif chain for each nested composite
-    first = True
-    for col_idx, composite_type in nested_composites.items():
-        col = columns[col_idx]
-        # Get the Python class name for the composite type
-        # Always convert to CamelCase class name
-        from ..parser.utils import _to_singular_camel_case
+        lines.append(f"{indent}# Helper function to parse composite string representations")
+        parser_lines = generate_composite_string_parser()
+        for parser_line in parser_lines:
+            lines.append(f"{indent}{parser_line}")
+        lines.append("")
 
-        python_class_name = _to_singular_camel_case(composite_type)
+    if nested_composites or use_type_aware:
+        # We need to process the row field by field
+        lines.append(f"{indent}# Process fields with type awareness and/or nested composite handling")
+        if use_type_aware:
+            # Add field types for type-aware parsing
+            field_types = [col.python_type for col in columns]
+            lines.append(f"{indent}field_types = {field_types!r}")
 
-        if first:
-            lines.append(f"{indent}    if i == {col_idx}:")
-            first = False
+        lines.append(f"{indent}field_values = []")
+        lines.append(f"{indent}for i, value in enumerate(row):")
+
+        # Generate if-elif chain for each nested composite
+        if nested_composites:
+            first = True
+            for col_idx, composite_type in nested_composites.items():
+                col = columns[col_idx]
+                # Get the Python class name for the composite type
+                # Always convert to CamelCase class name
+                from ..parser.utils import _to_singular_camel_case
+
+                python_class_name = _to_singular_camel_case(composite_type)
+
+                if first:
+                    lines.append(f"{indent}    if i == {col_idx}:")
+                    first = False
+                else:
+                    lines.append(f"{indent}    elif i == {col_idx}:")
+
+                lines.append(f"{indent}        # Column '{col.name}' is a nested composite type")
+                lines.append(f"{indent}        if value is None:")
+                lines.append(f"{indent}            field_values.append(None)")
+                lines.append(f"{indent}        elif isinstance(value, tuple):")
+                lines.append(f"{indent}            # Recursively create nested dataclass")
+                lines.append(f"{indent}            field_values.append({python_class_name}(*value))")
+                lines.append(
+                    f"{indent}        elif isinstance(value, str) and value.startswith('(') and value.endswith(')'):"
+                )
+                lines.append(f"{indent}            # Parse composite string representation")
+                lines.append(f"{indent}            try:")
+                if use_type_aware:
+                    lines.append(f"{indent}                # Use type-aware parsing for nested composite")
+                    # Get the field types for the nested composite at generation time
+                    nested_field_types = [col.python_type for col in composite_types[composite_type]]
+                    lines.append(f"{indent}                nested_field_types = {nested_field_types!r}")
+                    lines.append(
+                        f"{indent}                parsed_tuple = _parse_composite_string_typed(value, nested_field_types)"
+                    )
+                else:
+                    lines.append(f"{indent}                parsed_tuple = _parse_composite_string(value)")
+                lines.append(f"{indent}                field_values.append({python_class_name}(*parsed_tuple))")
+                lines.append(f"{indent}            except (ValueError, TypeError) as e:")
+                lines.append(
+                    f"{indent}                raise ValueError(f'Failed to parse nested composite type {{{python_class_name}}} from string: {{value!r}}. Error: {{e}}')"
+                )
+                lines.append(f"{indent}        else:")
+                lines.append(f"{indent}            # Already a dataclass instance or other value")
+                lines.append(f"{indent}            field_values.append(value)")
+
+            lines.append(f"{indent}    else:")
+            lines.append(f"{indent}        # Regular field")
         else:
-            lines.append(f"{indent}    elif i == {col_idx}:")
+            lines.append(f"{indent}    # Regular field processing")
 
-        lines.append(f"{indent}        # Column '{col.name}' is a nested composite type")
-        lines.append(f"{indent}        if value is None:")
-        lines.append(f"{indent}            field_values.append(None)")
-        lines.append(f"{indent}        elif isinstance(value, tuple):")
-        lines.append(f"{indent}            # Recursively create nested dataclass")
-        lines.append(f"{indent}            field_values.append({python_class_name}(*value))")
-        lines.append(f"{indent}        elif isinstance(value, str) and value.startswith('(') and value.endswith(')'):")
-        lines.append(f"{indent}            # Parse composite string representation")
-        lines.append(f"{indent}            try:")
-        lines.append(f"{indent}                parsed_tuple = _parse_composite_string(value)")
-        lines.append(f"{indent}                field_values.append({python_class_name}(*parsed_tuple))")
-        lines.append(f"{indent}            except (ValueError, TypeError) as e:")
-        lines.append(
-            f"{indent}                raise ValueError(f'Failed to parse nested composite type {{{python_class_name}}} from string: {{value!r}}. Error: {{e}}')"
-        )
-        lines.append(f"{indent}        else:")
-        lines.append(f"{indent}            # Already a dataclass instance or other value")
-        lines.append(f"{indent}            field_values.append(value)")
+        if use_type_aware:
+            lines.append(f"{indent}        # Apply type-aware conversion for regular fields")
+            lines.append(
+                f"{indent}        if isinstance(value, str) and value.startswith('(') and value.endswith(')'):"
+            )
+            lines.append(f"{indent}            # This might be a composite string that needs parsing")
+            lines.append(f"{indent}            try:")
+            lines.append(f"{indent}                parsed_tuple = _parse_composite_string_typed(value, field_types)")
+            lines.append(
+                f"{indent}                # If this succeeds, we had a composite string, use the parsed result"
+            )
+            lines.append(f"{indent}                if len(parsed_tuple) == len(field_types):")
+            lines.append(f"{indent}                    # Replace the entire row with parsed values")
+            lines.append(f"{indent}                    field_values = list(parsed_tuple)")
+            lines.append(f"{indent}                    break")
+            lines.append(f"{indent}                else:")
+            lines.append(f"{indent}                    # Fallback to regular processing")
+            lines.append(f"{indent}                    field_values.append(value)")
+            lines.append(f"{indent}            except (ValueError, TypeError):")
+            lines.append(f"{indent}                # Not a composite string, treat as regular field")
+            lines.append(f"{indent}                expected_type = field_types[i] if i < len(field_types) else 'str'")
+            lines.append(
+                f"{indent}                field_values.append(_convert_postgresql_value_typed(value, expected_type))"
+            )
+            lines.append(f"{indent}        else:")
+            lines.append(f"{indent}            # Regular field, apply type-aware conversion")
+            lines.append(f"{indent}            expected_type = field_types[i] if i < len(field_types) else 'str'")
+            lines.append(
+                f"{indent}            field_values.append(_convert_postgresql_value_typed(value, expected_type))"
+            )
+        else:
+            lines.append(f"{indent}        field_values.append(value)")
 
-    lines.append(f"{indent}    else:")
-    lines.append(f"{indent}        # Regular field")
-    lines.append(f"{indent}        field_values.append(value)")
-
-    lines.append(f"{indent}")
-    lines.append(f"{indent}# Create the main dataclass instance")
-    lines.append(f"{indent}instance = {class_name}(*field_values)")
-    lines.append(f"{indent}")
-    lines.append(f"{indent}# Check for 'empty' composite rows")
-    lines.append(f"{indent}if all(v is None for v in field_values):")
-    lines.append(f"{indent}    return None")
-    lines.append(f"{indent}")
-    lines.append(f"{indent}return instance")
+        lines.append(f"{indent}")
+        lines.append(f"{indent}# Create the main dataclass instance")
+        lines.append(f"{indent}instance = {class_name}(*field_values)")
+        lines.append(f"{indent}")
+        lines.append(f"{indent}# Check for 'empty' composite rows")
+        lines.append(f"{indent}if all(v is None for v in field_values):")
+        lines.append(f"{indent}    return None")
+        lines.append(f"{indent}")
+        lines.append(f"{indent}return instance")
 
     return lines
 
 
 def needs_nested_unpacking(columns: list[ReturnColumn], composite_types: dict[str, list[ReturnColumn]]) -> bool:
     """
-    Checks if a composite type needs special handling for nested composites.
+    Checks if a composite type needs special handling for nested composites or type-aware parsing.
 
     Args:
         columns: List of columns in the composite type
         composite_types: Dictionary of all known composite types
 
     Returns:
-        True if the type has nested composites, False otherwise
+        True if the type has nested composites or needs type-aware parsing, False otherwise
     """
-    return bool(detect_nested_composites(columns, composite_types))
+    # Check for nested composites or type-aware parsing needs (enums, booleans, etc.)
+    return bool(
+        detect_nested_composites(columns, composite_types) or should_use_type_aware_parsing(columns, composite_types)
+    )

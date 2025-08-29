@@ -170,6 +170,7 @@ We recommend using `uv` for managing dependencies:
 - **Support for Complex Returns** (scalar, SETOF, TABLE, RECORD)
 - **RECORD Support** with automatic AS clause generation and type-safe dataclasses
 - **Composite Types** with automatic nested dataclass handling
+- **Type-Aware Parsing** for composite types with automatic conversion (enums, booleans, decimals, UUIDs, JSON)
 - **Docstring Generation** from SQL comments
 - **Pythonic Parameter Names** (removes prefixes like p_)
 
@@ -209,6 +210,7 @@ sql2pyapi functions.sql generated_api.py --no-helpers
   * Handles array types (e.g., integer[] → List[int], custom_type[] → List[CustomType])
   * Supports arrays of custom types (composite, enum, table types)
   * **JSON/JSONB Support:** Automatically serializes UUID and datetime objects in JSONB parameters using a custom encoder
+  * **Smart Composite Parsing:** Automatically converts PostgreSQL composite string values to proper Python types (enum strings to enum instances, 't'/'f' to booleans, etc.)
   * Automatically adds necessary imports
 
 ## Limitations and Future Work

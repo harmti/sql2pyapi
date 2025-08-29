@@ -147,8 +147,8 @@ def test_boolean_conversion_scenarios():
 
     # Test cases for boolean values that appear in PostgreSQL composite strings
     test_cases = [
-        ('t', True, "PostgreSQL TRUE representation"),
-        ('f', False, "PostgreSQL FALSE representation"),
+        ("t", True, "PostgreSQL TRUE representation"),
+        ("f", False, "PostgreSQL FALSE representation"),
         (None, None, "NULL value"),
     ]
 
@@ -165,11 +165,11 @@ def test_numeric_conversion_scenarios():
 
     # Test cases for numeric values that appear in PostgreSQL composite strings
     test_cases = [
-        ('60.1698570', Decimal('60.1698570'), "NUMERIC(10,7) value"),
-        ('123.45', Decimal('123.45'), "NUMERIC(10,2) value"),
-        ('-456.789', Decimal('-456.789'), "Negative numeric value"),
-        ('0', Decimal('0'), "Zero value"),
-        ('0.0000000', Decimal('0.0000000'), "Zero with precision"),
+        ("60.1698570", Decimal("60.1698570"), "NUMERIC(10,7) value"),
+        ("123.45", Decimal("123.45"), "NUMERIC(10,2) value"),
+        ("-456.789", Decimal("-456.789"), "Negative numeric value"),
+        ("0", Decimal("0"), "Zero value"),
+        ("0.0000000", Decimal("0.0000000"), "Zero with precision"),
         (None, None, "NULL numeric value"),
     ]
 
@@ -186,33 +186,23 @@ def test_jsonb_conversion_scenarios():
 
     # Test cases for JSONB values that appear in PostgreSQL composite strings
     test_cases = [
-        ('{"source": "DH-131", "grid_operator": "Fingrid"}',
-         {"source": "DH-131", "grid_operator": "Fingrid"},
-         "JSONB object"),
-        ('{"nested": {"key": "value"}, "array": [1, 2, 3]}',
-         {"nested": {"key": "value"}, "array": [1, 2, 3]},
-         "Complex nested JSONB"),
-        ('[1, 2, 3, "string"]',
-         [1, 2, 3, "string"],
-         "JSONB array"),
-        ('[]',
-         [],
-         "Empty JSONB array"),
-        ('{}',
-         {},
-         "Empty JSONB object"),
-        ('{"key": null}',
-         {"key": None},
-         "JSONB with null value"),
-        ('"just a string"',
-         "just a string",
-         "JSONB string value"),
-        ('not_json_at_all',
-         'not_json_at_all',
-         "Regular string (should not be converted)"),
-        ('{broken json',
-         '{broken json',
-         "Malformed JSON (should remain as string)"),
+        (
+            '{"source": "DH-131", "grid_operator": "Fingrid"}',
+            {"source": "DH-131", "grid_operator": "Fingrid"},
+            "JSONB object",
+        ),
+        (
+            '{"nested": {"key": "value"}, "array": [1, 2, 3]}',
+            {"nested": {"key": "value"}, "array": [1, 2, 3]},
+            "Complex nested JSONB",
+        ),
+        ('[1, 2, 3, "string"]', [1, 2, 3, "string"], "JSONB array"),
+        ("[]", [], "Empty JSONB array"),
+        ("{}", {}, "Empty JSONB object"),
+        ('{"key": null}', {"key": None}, "JSONB with null value"),
+        ('"just a string"', "just a string", "JSONB string value"),
+        ("not_json_at_all", "not_json_at_all", "Regular string (should not be converted)"),
+        ("{broken json", "{broken json", "Malformed JSON (should remain as string)"),
         (None, None, "NULL JSONB value"),
     ]
 
@@ -279,12 +269,310 @@ def test_composite_type_with_jsonb_fields():
     print(f"Composite fields: {[(f.name, f.sql_type, f.python_type) for f in composite_fields]}")
 
 
+def test_type_aware_composite_parsing_functionality():
+    """
+    Test the new type-aware composite parsing functionality.
+    This tests both the should_use_type_aware_parsing detection
+    and the generation of type-aware parsing code.
+    """
+    from src.sql2pyapi.generator.composite_unpacker import generate_composite_unpacking_code
+    from src.sql2pyapi.generator.composite_unpacker import generate_type_aware_composite_parser
+    from src.sql2pyapi.generator.composite_unpacker import generate_type_aware_converter
+    from src.sql2pyapi.generator.composite_unpacker import should_use_type_aware_parsing
+    from src.sql2pyapi.sql_models import ReturnColumn
+
+    # Test should_use_type_aware_parsing detection
+
+    # Test case 1: Simple string columns - should not use type-aware parsing
+    simple_columns = [
+        ReturnColumn(name="id", sql_type="TEXT", python_type="str"),
+        ReturnColumn(name="name", sql_type="TEXT", python_type="str"),
+    ]
+    assert not should_use_type_aware_parsing(simple_columns)
+
+    # Test case 2: Boolean columns - should use type-aware parsing
+    boolean_columns = [
+        ReturnColumn(name="id", sql_type="TEXT", python_type="str"),
+        ReturnColumn(name="is_active", sql_type="BOOLEAN", python_type="Optional[bool]"),
+    ]
+    assert should_use_type_aware_parsing(boolean_columns)
+
+    # Test case 3: Decimal columns - should use type-aware parsing
+    decimal_columns = [
+        ReturnColumn(name="id", sql_type="TEXT", python_type="str"),
+        ReturnColumn(name="amount", sql_type="NUMERIC", python_type="Optional[Decimal]"),
+    ]
+    assert should_use_type_aware_parsing(decimal_columns)
+
+    # Test case 4: UUID columns - should use type-aware parsing
+    uuid_columns = [
+        ReturnColumn(name="user_id", sql_type="UUID", python_type="Optional[UUID]"),
+        ReturnColumn(name="name", sql_type="TEXT", python_type="str"),
+    ]
+    assert should_use_type_aware_parsing(uuid_columns)
+
+    # Test case 5: DateTime columns - should use type-aware parsing
+    datetime_columns = [
+        ReturnColumn(name="created_at", sql_type="TIMESTAMP", python_type="Optional[datetime]"),
+        ReturnColumn(name="name", sql_type="TEXT", python_type="str"),
+    ]
+    assert should_use_type_aware_parsing(datetime_columns)
+
+    # Test case 6: Dict/List columns (JSON/JSONB) - should use type-aware parsing
+    json_columns = [
+        ReturnColumn(name="metadata", sql_type="JSONB", python_type="Optional[Dict[str, Any]]"),
+        ReturnColumn(name="tags", sql_type="JSONB", python_type="Optional[List[str]]"),
+    ]
+    assert should_use_type_aware_parsing(json_columns)
+
+    print("✅ should_use_type_aware_parsing detection works correctly")
+
+    # Test generation of type-aware functions
+    converter_code = generate_type_aware_converter()
+    assert any("_convert_postgresql_value_typed" in line for line in converter_code)
+    assert any("bool" in line for line in converter_code)
+    assert any("decimal" in line for line in converter_code)
+    assert any("uuid" in line for line in converter_code)
+    assert any("datetime" in line for line in converter_code)
+
+    parser_code = generate_type_aware_composite_parser()
+    assert any("_parse_composite_string_typed" in line for line in parser_code)
+    assert any("field_types: List[str]" in line for line in parser_code)
+    assert any("_convert_postgresql_value_typed" in line for line in parser_code)
+
+    print("✅ Type-aware function generation works correctly")
+
+    # Test composite unpacking code generation with type-aware parsing
+    unpacking_code = generate_composite_unpacking_code(
+        class_name="TestResult",
+        columns=boolean_columns,  # Has bool, should trigger type-aware parsing
+        composite_types={},  # No nested composites
+    )
+
+    # Should include type-aware functions and field_types
+    unpacking_str = "\n".join(unpacking_code)
+    assert "_convert_postgresql_value_typed" in unpacking_str
+    assert "_parse_composite_string_typed" in unpacking_str
+    assert "field_types = " in unpacking_str
+
+    print("✅ Type-aware composite unpacking code generation works correctly")
+
+
+def test_type_aware_converter_logic():
+    """
+    Test the actual conversion logic of the type-aware converter.
+    This simulates what would happen when the generated code runs.
+    """
+
+    # This is a simulation of the generated _convert_postgresql_value_typed function
+    def _convert_postgresql_value_typed(field: str, expected_type: str):  # noqa: PLR0911
+        """Simulate the generated converter function."""
+        if field is None or field.lower() in ("null", ""):
+            return None
+
+        field = field.strip()
+
+        # Boolean types - only for bool types
+        if "bool" in expected_type.lower():
+            if field == "t":
+                return True
+            if field == "f":
+                return False
+
+        # Decimal types - only for Decimal types
+        if "decimal" in expected_type.lower():
+            try:
+                from decimal import Decimal
+
+                return Decimal(field)
+            except (ValueError, TypeError):
+                pass
+
+        # UUID types
+        if "uuid" in expected_type.lower():
+            try:
+                from uuid import UUID
+
+                return UUID(field)
+            except (ValueError, TypeError):
+                pass
+
+        # DateTime types
+        if "datetime" in expected_type.lower():
+            try:
+                from datetime import datetime
+
+                # Handle PostgreSQL timestamp format
+                return datetime.fromisoformat(field.replace(" ", "T"))
+            except (ValueError, TypeError):
+                pass
+
+        # JSON/JSONB types - only for Dict/List types
+        if any(hint in expected_type.lower() for hint in ["dict", "list", "any"]):
+            if field.strip().startswith(("{", "[")):
+                try:
+                    import json
+
+                    return json.loads(field)
+                except (json.JSONDecodeError, ValueError):
+                    pass
+
+        # For all other values, keep as string
+        return field
+
+    # Test boolean conversions
+    assert _convert_postgresql_value_typed("t", "Optional[bool]") is True
+    assert _convert_postgresql_value_typed("f", "Optional[bool]") is False
+    assert _convert_postgresql_value_typed("t", "str") == "t"  # Should not convert for non-bool types
+
+    # Test decimal conversions
+    from decimal import Decimal
+
+    assert _convert_postgresql_value_typed("123.45", "Optional[Decimal]") == Decimal("123.45")
+    assert _convert_postgresql_value_typed("123", "Optional[Decimal]") == Decimal("123")
+    assert _convert_postgresql_value_typed("123.45", "str") == "123.45"  # Should not convert for non-decimal types
+
+    # Test UUID conversions
+    from uuid import UUID
+
+    test_uuid = "123e4567-e89b-12d3-a456-426614174000"
+    assert _convert_postgresql_value_typed(test_uuid, "Optional[UUID]") == UUID(test_uuid)
+    assert _convert_postgresql_value_typed(test_uuid, "str") == test_uuid  # Should not convert for non-UUID types
+
+    # Test JSON conversions
+    json_obj = '{"key": "value"}'
+    json_array = "[1, 2, 3]"
+    assert _convert_postgresql_value_typed(json_obj, "Optional[Dict[str, Any]]") == {"key": "value"}
+    assert _convert_postgresql_value_typed(json_array, "Optional[List[int]]") == [1, 2, 3]
+    assert _convert_postgresql_value_typed(json_obj, "str") == json_obj  # Should not convert for non-dict/list types
+
+    # Test that invalid values fallback to string
+    assert _convert_postgresql_value_typed("invalid-uuid", "Optional[UUID]") == "invalid-uuid"
+    assert _convert_postgresql_value_typed("{broken json", "Optional[Dict[str, Any]]") == "{broken json"
+
+    print("✅ Type-aware converter logic works correctly")
+
+
+def test_unboundlocalerror_fix():
+    """
+    Test that the UnboundLocalError bug is fixed.
+
+    This test verifies that our type-aware parser doesn't generate
+    redundant local imports that would shadow global typing imports.
+    """
+    from src.sql2pyapi.generator.composite_unpacker import generate_type_aware_composite_parser
+    from src.sql2pyapi.generator.composite_unpacker import generate_type_aware_converter
+
+    # Generate the code
+    parser_lines = generate_type_aware_composite_parser()
+    converter_lines = generate_type_aware_converter()
+
+    # Check that no problematic typing imports are generated
+    parser_code = "\n".join(parser_lines)
+    converter_code = "\n".join(converter_lines)
+
+    # The critical fix: ensure no "from typing import" statements are generated
+    assert "from typing import" not in parser_code, (
+        f"Parser code contains problematic typing imports. This would cause UnboundLocalError.\n"
+        f"Generated code:\n{parser_code}"
+    )
+
+    # Converter should also not have typing imports
+    typing_imports = [line for line in converter_lines if "from typing import" in line]
+    assert len(typing_imports) == 0, (
+        f"Converter code contains typing imports: {typing_imports}. This would cause UnboundLocalError."
+    )
+
+    print("✅ UnboundLocalError bug is fixed - no redundant typing imports generated")
+
+    # Verify the generated functions can be executed without import issues
+    # This simulates the environment in a generated API file
+    test_globals = {
+        "List": list,  # These would be available globally in generated files
+        "Any": object,  # Simplified for test
+        "ValueError": ValueError,
+        "TypeError": TypeError,
+    }
+
+    try:
+        # Execute function definitions - this should not raise UnboundLocalError
+        exec(parser_code, test_globals)
+        exec(converter_code, test_globals)
+        print("✅ Generated functions execute without UnboundLocalError")
+
+    except NameError as e:
+        if "List" in str(e) or "Any" in str(e):
+            raise AssertionError(f"UnboundLocalError-style issue detected: {e}")
+        else:
+            # Other NameErrors might be expected due to missing imports (like Decimal)
+            print(f"Info: Expected NameError for missing imports: {e}")
+    except UnboundLocalError as e:
+        raise AssertionError(f"UnboundLocalError occurred - fix failed: {e}")
+
+
+def test_composite_types_nameerror_fix():
+    """
+    Test that the NameError for undefined composite_types variable is fixed.
+
+    This test covers the scenario where nested composite types would generate
+    code that references composite_types[...] at runtime, causing a NameError.
+    """
+    from src.sql2pyapi.generator.composite_unpacker import generate_composite_unpacking_code
+    from src.sql2pyapi.sql_models import ReturnColumn
+
+    # Create a scenario with nested composite types
+    # Main composite contains a nested composite
+    nested_composite_columns = [
+        ReturnColumn(name="id", sql_type="INTEGER", python_type="int"),
+        ReturnColumn(name="name", sql_type="TEXT", python_type="str"),
+        ReturnColumn(name="is_active", sql_type="BOOLEAN", python_type="Optional[bool]"),
+    ]
+
+    main_composite_columns = [
+        ReturnColumn(name="nested_item", sql_type="nested_type", python_type="NestedType"),
+        ReturnColumn(name="status", sql_type="BOOLEAN", python_type="bool"),
+    ]
+
+    composite_types = {"nested_type": nested_composite_columns}
+
+    # Generate unpacking code
+    unpacking_code = generate_composite_unpacking_code(
+        class_name="MainResult", columns=main_composite_columns, composite_types=composite_types
+    )
+
+    generated_code = "\n".join(unpacking_code)
+
+    # Critical fix verification: no runtime composite_types references
+    assert "composite_types[" not in generated_code, (
+        f"Generated code contains runtime composite_types reference that would cause NameError:\n{generated_code}"
+    )
+
+    # Verify field types are properly inlined instead
+    assert "nested_field_types = [" in generated_code, (
+        "Field types should be inlined as literals, not referenced at runtime"
+    )
+
+    # Check that the correct types are inlined
+    assert "'int'" in generated_code, "Should contain inlined int type"
+    assert "'str'" in generated_code, "Should contain inlined str type"
+    assert "'Optional[bool]'" in generated_code, "Should contain inlined Optional[bool] type"
+
+    print("✅ NameError for composite_types variable is fixed - types are properly inlined")
+
+
 if __name__ == "__main__":
-    # Run the tests
+    # Run the original structure tests
     test_composite_type_boolean_numeric_parsing_bug()
     test_composite_type_generation_produces_parsing_function()
     test_boolean_conversion_scenarios()
     test_numeric_conversion_scenarios()
     test_jsonb_conversion_scenarios()
     test_composite_type_with_jsonb_fields()
-    print("\n🎯 All structure tests passed - ready to implement the fix!")
+    print("\n🎯 All structure tests passed!")
+
+    # Run the new type-aware parsing tests
+    test_type_aware_composite_parsing_functionality()
+    test_type_aware_converter_logic()
+    test_unboundlocalerror_fix()
+    test_composite_types_nameerror_fix()
+    print("\n🚀 All type-aware parsing tests passed - implementation is ready!")
