@@ -187,9 +187,11 @@ def test_func2_generation_with_schema(tmp_path, run_cli_tool):
     sql_query_named_args_assign_node_check = None
     for node_in_body_for_assign_check in ast.walk(list_func_node):
         if isinstance(node_in_body_for_assign_check, ast.Assign):
-            if len(node_in_body_for_assign_check.targets) == 1 and isinstance(
-                node_in_body_for_assign_check.targets[0], ast.Name
-            ) and node_in_body_for_assign_check.targets[0].id == "_sql_query_named_args":
+            if (
+                len(node_in_body_for_assign_check.targets) == 1
+                and isinstance(node_in_body_for_assign_check.targets[0], ast.Name)
+                and node_in_body_for_assign_check.targets[0].id == "_sql_query_named_args"
+            ):
                 sql_query_named_args_assign_node_check = node_in_body_for_assign_check
                 break
     assert sql_query_named_args_assign_node_check is not None, "Assignment to _sql_query_named_args not found"

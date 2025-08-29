@@ -29,6 +29,42 @@ PARAM_REGEX = re.compile(
 # ===== SECTION: FUNCTIONS =====
 
 
+def _smart_comma_split(param_str: str) -> list[str]:
+    """
+    Split parameter string by commas while respecting parentheses.
+    This prevents splitting inside type definitions like NUMERIC(10,7).
+
+    Args:
+        param_str: The parameter string to split
+
+    Returns:
+        List of parameter definition strings
+    """
+    result = []
+    current_param = ""
+    paren_count = 0
+
+    for char in param_str:
+        if char == "(":
+            paren_count += 1
+        elif char == ")":
+            paren_count -= 1
+        elif char == "," and paren_count == 0:
+            # Only split on commas when not inside parentheses
+            if current_param.strip():
+                result.append(current_param.strip())
+            current_param = ""
+            continue
+
+        current_param += char
+
+    # Add the last parameter if any
+    if current_param.strip():
+        result.append(current_param.strip())
+
+    return result
+
+
 def parse_single_param_definition(
     param_def: str,
     context: str,
@@ -128,8 +164,8 @@ def parse_params(
     if not param_str:
         return params, required_imports
 
-    # Split by comma first
-    param_defs = param_str.split(",")
+    # Split by comma while respecting parentheses
+    param_defs = _smart_comma_split(param_str)
 
     current_context = f"function '{context}'" if context else "unknown function"
 

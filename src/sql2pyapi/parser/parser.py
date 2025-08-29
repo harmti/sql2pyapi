@@ -113,7 +113,9 @@ class SQLParser:
             sql_type, is_optional, context, self.enum_types, self.table_schemas, self.composite_types
         )
 
-    def _parse_column_definitions(self, col_defs_str: str, context: str | None = None) -> tuple[list[ReturnColumn], set[str]]:
+    def _parse_column_definitions(
+        self, col_defs_str: str, context: str | None = None
+    ) -> tuple[list[ReturnColumn], set[str]]:
         """
         Parses column definitions from CREATE TABLE or RETURNS TABLE.
         Delegates to the column_parser module.

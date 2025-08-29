@@ -691,9 +691,7 @@ def _generate_function(func: ParsedFunction, composite_types: dict[str, list[Ret
     # then the return_type_hint from _determine_return_type should be preserved.
 
     # Check if _determine_return_type already set the hint to involve 'Any'
-    is_already_any_hint = (
-        return_type_hint in {"Any", "Optional[Any]", "List[Any]"}
-    )
+    is_already_any_hint = return_type_hint in {"Any", "Optional[Any]", "List[Any]"}
 
     if not is_already_any_hint:  # Only proceed with this refinement if not already an 'Any' hint
         if func.returns_table:

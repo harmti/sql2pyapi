@@ -11,7 +11,9 @@ class SQL2PyAPIError(Exception):
 class ParsingError(SQL2PyAPIError):
     """Error during SQL parsing."""
 
-    def __init__(self, message: str, sql_snippet: str | None = None, line_number: int | None = None, file_name: str | None = None):
+    def __init__(
+        self, message: str, sql_snippet: str | None = None, line_number: int | None = None, file_name: str | None = None
+    ):
         self.sql_snippet = sql_snippet
         self.line_number = line_number
         self.file_name = file_name
@@ -80,7 +82,13 @@ class CodeGenerationError(SQL2PyAPIError):
 class ParameterError(SQL2PyAPIError):
     """Error related to function parameters."""
 
-    def __init__(self, message: str, param_name: str | None = None, param_type: str | None = None, function_name: str | None = None):
+    def __init__(
+        self,
+        message: str,
+        param_name: str | None = None,
+        param_type: str | None = None,
+        function_name: str | None = None,
+    ):
         self.param_name = param_name
         self.param_type = param_type
         self.function_name = function_name
