@@ -471,17 +471,45 @@ def test_unboundlocalerror_fix():
     parser_code = "\n".join(parser_lines)
     converter_code = "\n".join(converter_lines)
 
-    # The critical fix: ensure no "from typing import" statements are generated
+    # The critical fix: ensure no LOCAL "from typing import" statements are generated INSIDE functions
+    # Module-level typing imports are fine and necessary (like "from typing import Any")
     assert "from typing import" not in parser_code, (
         f"Parser code contains problematic typing imports. This would cause UnboundLocalError.\n"
         f"Generated code:\n{parser_code}"
     )
 
-    # Converter should also not have typing imports
-    typing_imports = [line for line in converter_lines if "from typing import" in line]
-    assert len(typing_imports) == 0, (
-        f"Converter code contains typing imports: {typing_imports}. This would cause UnboundLocalError."
-    )
+    # Converter may have module-level typing imports (which are fine), but should not have local imports inside functions
+    # Check for problematic patterns like imports inside function bodies
+    function_bodies = []
+    in_function = False
+    current_function = []
+
+    for line in converter_lines:
+        if line.startswith("def "):
+            if current_function:
+                function_bodies.append("\n".join(current_function))
+            current_function = []
+            in_function = True
+        elif in_function and (
+            line.startswith("class ") or (line and not line[0].isspace() and not line.startswith("#"))
+        ):
+            if current_function:
+                function_bodies.append("\n".join(current_function))
+                current_function = []
+            in_function = False
+        elif in_function:
+            current_function.append(line)
+
+    if current_function:
+        function_bodies.append("\n".join(current_function))
+
+    # Check for problematic local imports inside function bodies
+    for i, body in enumerate(function_bodies):
+        local_typing_imports = [line for line in body.split("\n") if "from typing import" in line and line.strip()]
+        assert len(local_typing_imports) == 0, (
+            f"Function body {i} contains problematic local typing imports: {local_typing_imports}. "
+            f"This would cause UnboundLocalError.\nFunction body:\n{body}"
+        )
 
     print("✅ UnboundLocalError bug is fixed - no redundant typing imports generated")
 

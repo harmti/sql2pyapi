@@ -11,7 +11,11 @@ from ..parser.utils import _to_singular_camel_case
 # Local imports
 from ..sql_models import ParsedFunction
 from ..sql_models import ReturnColumn
-from .composite_unpacker import generate_global_helper_functions, needs_global_helpers
+from .composite_unpacker import (
+    generate_global_helper_functions,
+    needs_global_helpers,
+    generate_enum_registration_section,
+)
 from .dataclass_generator import _generate_dataclass
 from .dependency_resolver import resolve_dataclass_order
 from .enum_generator import _generate_enum_class
@@ -161,7 +165,14 @@ def generate_python_code(
             # Ensure Enum is imported
             current_imports.add(PYTHON_IMPORTS["Enum"])
 
-    "\n\n".join(enum_classes_section_list)
+    enum_classes_section = "\n\n".join(enum_classes_section_list)
+
+    # --- Generate Enum Registration section (will be placed after global helpers) ---
+    enum_registration_section = ""
+    if parsed_enum_types:
+        enum_registration_lines = generate_enum_registration_section(parsed_enum_types)
+        if enum_registration_lines:
+            enum_registration_section = "\n".join(enum_registration_lines)
 
     # --- Collect RECORD dataclasses from functions ---
     # Add RECORD dataclasses to custom_types so they get generated
@@ -227,7 +238,7 @@ def generate_python_code(
     # --- Generate global helper functions if needed ---
     global_helpers_section = ""
     if needs_global_helpers(functions, current_custom_types):
-        helper_lines = generate_global_helper_functions()
+        helper_lines = generate_global_helper_functions(parsed_enum_types)
         global_helpers_section = "\n".join(helper_lines)
         logging.debug("Generated global helper functions for composite type handling")
 
@@ -372,15 +383,24 @@ def generate_python_code(
     ]
     header = "\n".join(header_lines)
 
-    # --- Generate Enum classes, Dataclasses, Global Helpers and Functions (without section headers) ---
+    # --- Generate Enum classes, Dataclasses, Global Helpers, Enum Registration, and Functions (without section headers) ---
+    # Note: Enum Registration must come AFTER Global Helpers because it uses _ENUM_REGISTRY
     # Filter out empty strings before joining
     non_empty_enums = [enum_class for enum_class in enum_classes_section_list if enum_class.strip()]
     non_empty_dataclasses = [dc for dc in [dataclasses_section.strip()] if dc]
     non_empty_global_helpers = [global_helpers_section.strip()] if global_helpers_section.strip() else []
+    non_empty_enum_registration = [enum_registration_section.strip()] if enum_registration_section.strip() else []
     non_empty_functions = [func.strip() for func in generated_functions if func.strip()]
 
     # Combine definitions with minimal spacing, handling empty sections
-    code_parts = non_empty_enums + non_empty_dataclasses + non_empty_global_helpers + non_empty_functions
+    # Order: Enums -> Dataclasses -> Global Helpers -> Enum Registration -> Functions
+    code_parts = (
+        non_empty_enums
+        + non_empty_dataclasses
+        + non_empty_global_helpers
+        + non_empty_enum_registration
+        + non_empty_functions
+    )
     code_body = "\n\n".join(code_parts)
 
     # --- Assemble final code --- REVISED

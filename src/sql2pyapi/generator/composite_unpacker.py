@@ -48,109 +48,218 @@ def generate_postgresql_value_converter() -> list[str]:
     ]
 
 
-def generate_type_aware_converter() -> list[str]:
+def generate_type_aware_converter(enum_types: dict[str, list[str]] = None) -> list[str]:
     """
     Generates a helper function to convert PostgreSQL values with type awareness.
+    Uses precise regex patterns for reliable type matching and a known enum registry.
+
+    Args:
+        enum_types: Dictionary mapping enum names to their possible values
 
     Returns:
         List of code lines for the type-aware converter function
     """
-    return [
-        "def _convert_postgresql_value_typed(field: str, expected_type: str) -> Any:",
-        '    """Convert PostgreSQL string representations to proper Python types with type guidance."""',
-        "    if field is None:",
-        "        return None",
-        "    # Only apply string-specific conversions if field is actually a string",
-        "    if not isinstance(field, str):",
-        "        return field",
-        "    if field.lower() in ('null', ''):",
-        "        return None",
-        "    ",
-        "    field = field.strip()",
-        "    ",
-        "    # Boolean types - only for bool types",
-        "    if 'bool' in expected_type.lower():",
-        "        if field == 't':",
-        "            return True",
-        "        if field == 'f':",
-        "            return False",
-        "    ",
-        "    # Integer types",
-        "    if 'int' in expected_type.lower():",
-        "        try:",
-        "            return int(field)",
-        "        except (ValueError, TypeError):",
-        "            pass",
-        "    ",
-        "    # Float types",
-        "    if 'float' in expected_type.lower():",
-        "        try:",
-        "            return float(field)",
-        "        except (ValueError, TypeError):",
-        "            pass",
-        "    ",
-        "    # Decimal types - only for Decimal types",
-        "    if 'decimal' in expected_type.lower():",
-        "        try:",
-        "            from decimal import Decimal",
-        "            return Decimal(field)",
-        "        except (ValueError, TypeError):",
-        "            pass",
-        "    ",
-        "    # UUID types",
-        "    if 'uuid' in expected_type.lower():",
-        "        try:",
-        "            from uuid import UUID",
-        "            return UUID(field)",
-        "        except (ValueError, TypeError):",
-        "            pass",
-        "    ",
-        "    # DateTime types",
-        "    if 'datetime' in expected_type.lower():",
-        "        try:",
-        "            from datetime import datetime",
-        "            # Handle PostgreSQL timestamp format",
-        "            return datetime.fromisoformat(field.replace(' ', 'T'))",
-        "        except (ValueError, TypeError):",
-        "            pass",
-        "    ",
-        "    # JSON/JSONB types - only for Dict/List types",
-        "    if any(hint in expected_type.lower() for hint in ['dict', 'list', 'any']):",
-        "        if field.strip().startswith(('{', '[')):",
-        "            try:",
-        "                import json",
-        "                return json.loads(field)",
-        "            except (json.JSONDecodeError, ValueError):",
-        "                pass",
-        "    ",
-        "    # Enum types - check if expected_type looks like an enum class name",
-        "    # Enum types are typically PascalCase and don't contain common type hints",
-        "    if (expected_type and ",
-        "        expected_type[0].isupper() and ",
-        "        not any(expected_type.lower() == hint or expected_type.lower().startswith(hint + '[') for hint in ['optional', 'list', 'dict', 'bool', 'str', 'int', 'float', 'decimal', 'uuid', 'datetime', 'any'])):",
-        "        # Try to find the enum class in globals and convert",
-        "        try:",
-        "            # Look up the enum class by name",
-        "            import sys",
-        "            frame = sys._getframe(1)",
-        "            while frame:",
-        "                if expected_type in frame.f_globals:",
-        "                    enum_class = frame.f_globals[expected_type]",
-        "                    # Check if it's actually an enum class",
-        "                    if hasattr(enum_class, '_member_map_') and field.upper() in enum_class._member_map_:",
-        "                        return enum_class[field.upper()]",
-        "                    elif hasattr(enum_class, '_value2member_map_') and field in enum_class._value2member_map_:",
-        "                        return enum_class(field)",
-        "                    break",
-        "                frame = frame.f_back",
-        "        except (KeyError, ValueError, AttributeError, TypeError):",
-        "            # If enum conversion fails, fall back to string",
-        "            pass",
-        "    ",
-        "    # For all other values, keep as string",
-        "    return field",
+    enum_types = enum_types or {}
+
+    lines = [
+        "# Module-level imports for type conversions",
+        "import re",
+        "from decimal import Decimal",
+        "from uuid import UUID",
+        "from datetime import datetime",
+        "from typing import Any",
+        "import json",
+        "",
+        "# Compiled regex patterns for precise type matching",
+        "_TYPE_PATTERNS = {",
+        "    'bool': re.compile(r'^(?:Optional\\[bool\\]|bool)$'),",
+        "    'int': re.compile(r'^(?:Optional\\[int\\]|int)$'),",
+        "    'float': re.compile(r'^(?:Optional\\[float\\]|float)$'),",
+        "    'decimal': re.compile(r'^(?:Optional\\[(?:Decimal|decimal)\\]|(?:Decimal|decimal))$'),",
+        "    'uuid': re.compile(r'^(?:Optional\\[UUID\\]|UUID)$'),",
+        "    'datetime': re.compile(r'^(?:Optional\\[datetime\\]|datetime)$'),",
+        "    'dict': re.compile(r'^(?:Optional\\[(?:Dict|dict)(?:\\[.*\\])?\\]|(?:Dict|dict)(?:\\[.*\\])?)$'),",
+        "    'list': re.compile(r'^(?:Optional\\[(?:List|list)(?:\\[.*\\])?\\]|(?:List|list)(?:\\[.*\\])?)$'),",
+        "    'any': re.compile(r'^(?:Optional\\[(?:Any|any)\\]|(?:Any|any))$'),",
+        "}",
         "",
     ]
+
+    # Add enum registry if there are enums
+    if enum_types:
+        lines.extend(
+            [
+                "# Known Enum Registry - eliminates fragile sys._getframe() approach",
+                "class _EnumRegistry:",
+                "    def __init__(self):",
+                "        self.known_enums = {}",
+                "    ",
+                "    def register_enum(self, enum_name: str, enum_class):",
+                '        """Register an enum class with the registry."""',
+                "        self.known_enums[enum_name] = enum_class",
+                "    ",
+                "    def convert_enum_value(self, value: str, enum_name: str):",
+                '        """Convert string value to enum instance if enum is registered."""',
+                "        if enum_name in self.known_enums:",
+                "            enum_class = self.known_enums[enum_name]",
+                "            try:",
+                "                # Try by name first (case insensitive)",
+                "                return enum_class[value.upper()]",
+                "            except (KeyError, AttributeError):",
+                "                try:",
+                "                    # Try by value",
+                "                    return enum_class(value)",
+                "                except (ValueError, TypeError):",
+                "                    pass",
+                "        return value",
+                "",
+                "# Global enum registry instance",
+                "_ENUM_REGISTRY = _EnumRegistry()",
+                "",
+            ]
+        )
+
+        # Generate enum registration calls for all known enums
+        lines.append("")
+        for enum_name in enum_types.keys():
+            from ..parser.utils import _to_singular_camel_case
+
+            python_enum_name = _to_singular_camel_case(enum_name)
+            lines.append(f"# Register {python_enum_name} enum (will be registered after import)")
+    else:
+        lines.extend(
+            [
+                "# No enums detected - enum registry not generated",
+                "",
+            ]
+        )
+
+    lines.extend(
+        [
+            "def _matches_type_pattern(expected_type: str, pattern_name: str) -> bool:",
+            '    """Check if expected_type matches a specific type pattern."""',
+            "    return _TYPE_PATTERNS[pattern_name].match(expected_type) is not None",
+            "",
+            "def _convert_postgresql_value_typed(field: str, expected_type: str) -> Any:",
+            '    """Convert PostgreSQL string representations to proper Python types with type guidance."""',
+            "    if field is None:",
+            "        return None",
+            "    # Only apply string-specific conversions if field is actually a string",
+            "    if not isinstance(field, str):",
+            "        return field",
+            "    if field.lower() in ('null', ''):",
+            "        return None",
+            "    ",
+            "    field = field.strip()",
+            "    ",
+            "    # Boolean types - precise matching",
+            "    if _matches_type_pattern(expected_type, 'bool'):",
+            "        if field == 't':",
+            "            return True",
+            "        if field == 'f':",
+            "            return False",
+            "    ",
+            "    # Integer types - precise matching",
+            "    if _matches_type_pattern(expected_type, 'int'):",
+            "        try:",
+            "            return int(field)",
+            "        except (ValueError, TypeError) as e:",
+            "            # Enhanced error context for debugging",
+            "            if getattr(_convert_postgresql_value_typed, 'debug_mode', False):",
+            "                print(f\"Int conversion failed: field='{field}', expected='{expected_type}', error={e}\")",
+            "            pass",
+            "    ",
+            "    # Float types - precise matching",
+            "    if _matches_type_pattern(expected_type, 'float'):",
+            "        try:",
+            "            return float(field)",
+            "        except (ValueError, TypeError) as e:",
+            "            # Enhanced error context for debugging",
+            "            if getattr(_convert_postgresql_value_typed, 'debug_mode', False):",
+            "                print(f\"Float conversion failed: field='{field}', expected='{expected_type}', error={e}\")",
+            "            pass",
+            "    ",
+            "    # Decimal types - precise matching",
+            "    if _matches_type_pattern(expected_type, 'decimal'):",
+            "        try:",
+            "            return Decimal(field)",
+            "        except (ValueError, TypeError) as e:",
+            "            # Enhanced error context for debugging",
+            "            if getattr(_convert_postgresql_value_typed, 'debug_mode', False):",
+            "                print(f\"Decimal conversion failed: field='{field}', expected='{expected_type}', error={e}\")",
+            "            pass",
+            "    ",
+            "    # UUID types - precise matching",
+            "    if _matches_type_pattern(expected_type, 'uuid'):",
+            "        try:",
+            "            return UUID(field)",
+            "        except (ValueError, TypeError) as e:",
+            "            # Enhanced error context for debugging",
+            "            if getattr(_convert_postgresql_value_typed, 'debug_mode', False):",
+            "                print(f\"UUID conversion failed: field='{field}', expected='{expected_type}', error={e}\")",
+            "            pass",
+            "    ",
+            "    # DateTime types - precise matching",
+            "    if _matches_type_pattern(expected_type, 'datetime'):",
+            "        try:",
+            "            # Handle PostgreSQL timestamp format",
+            "            return datetime.fromisoformat(field.replace(' ', 'T'))",
+            "        except (ValueError, TypeError) as e:",
+            "            # Enhanced error context for debugging",
+            "            if getattr(_convert_postgresql_value_typed, 'debug_mode', False):",
+            "                print(f\"DateTime conversion failed: field='{field}', expected='{expected_type}', error={e}\")",
+            "            pass",
+            "    ",
+            "    # JSON/JSONB types - precise matching for Dict/List/Any types",
+            "    if (_matches_type_pattern(expected_type, 'dict') or ",
+            "        _matches_type_pattern(expected_type, 'list') or ",
+            "        _matches_type_pattern(expected_type, 'any')):",
+            "        if field.strip().startswith(('{', '[')):",
+            "            try:",
+            "                return json.loads(field)",
+            "            except (json.JSONDecodeError, ValueError) as e:",
+            "                # Enhanced error context for debugging",
+            "                if getattr(_convert_postgresql_value_typed, 'debug_mode', False):",
+            "                    print(f\"JSON conversion failed: field='{field}', expected='{expected_type}', error={e}\")",
+            "                pass",
+            "    ",
+        ]
+    )
+
+    # Add enum handling based on whether we have enum types
+    if enum_types:
+        lines.extend(
+            [
+                "    # Enum types - use registry-based conversion (replaces fragile sys._getframe approach)",
+                "    # Enum types are typically PascalCase and don't contain common type hints",
+                "    if (expected_type and ",
+                "        expected_type[0].isupper() and ",
+                "        not any(_matches_type_pattern(expected_type, pattern) for pattern in _TYPE_PATTERNS.keys()) and",
+                "        not any(expected_type.lower().startswith(hint + '[') for hint in ['optional', 'list', 'dict'])):",
+                "        # Use the registry-based enum conversion",
+                "        converted_value = _ENUM_REGISTRY.convert_enum_value(field, expected_type)",
+                "        if converted_value != field:  # Conversion succeeded",
+                "            return converted_value",
+                "    ",
+            ]
+        )
+    else:
+        lines.extend(
+            [
+                "    # No enum types detected - enum conversion skipped",
+                "    ",
+            ]
+        )
+
+    lines.extend(
+        [
+            "    # For all other values, keep as string",
+            "    return field",
+            "",
+        ]
+    )
+
+    return lines
 
 
 def generate_type_aware_composite_parser() -> list[str]:
@@ -579,17 +688,50 @@ def generate_composite_unpacking_code(
     return lines
 
 
-def generate_global_helper_functions() -> list[str]:
+def generate_enum_registration_section(enum_types: dict[str, list[str]] = None) -> list[str]:
+    """
+    Generates enum registration calls to populate the enum registry.
+
+    Args:
+        enum_types: Dictionary mapping enum names to their possible values
+
+    Returns:
+        List of code lines for enum registration
+    """
+    enum_types = enum_types or {}
+
+    if not enum_types:
+        return []
+
+    lines = [
+        "# Register enum classes with the registry (Phase 2.2: Enum Discovery Enhancement)",
+        "# This eliminates the need for fragile sys._getframe() lookups at runtime",
+    ]
+
+    for enum_name in enum_types.keys():
+        from ..parser.utils import _to_singular_camel_case
+
+        python_enum_name = _to_singular_camel_case(enum_name)
+        lines.append(f"_ENUM_REGISTRY.register_enum('{python_enum_name}', {python_enum_name})")
+
+    return lines
+
+
+def generate_global_helper_functions(enum_types: dict[str, list[str]] = None) -> list[str]:
     """
     Generates global helper functions to be placed at module level.
+
+    Args:
+        enum_types: Dictionary mapping enum names to their possible values
 
     Returns:
         List of code lines for the global helper functions
     """
+    enum_types = enum_types or {}
     lines = []
 
-    # Add the type-aware converter function
-    lines.extend(generate_type_aware_converter())
+    # Add the type-aware converter function with enum support
+    lines.extend(generate_type_aware_converter(enum_types))
     lines.append("")
 
     # Add the type-aware composite parser function

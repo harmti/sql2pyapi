@@ -450,9 +450,10 @@ def test_enum_conversion_in_composite_types():
         omit_helpers=False,
     )
 
-    # Verify that enum conversion logic is present in generated code
+    # Verify that enum conversion logic is present in generated code (Phase 2: Registry-based approach)
     assert "_convert_postgresql_value_typed" in api_code, "Type-aware converter should be generated for enum types"
-    assert "enum_class = frame.f_globals[expected_type]" in api_code, "Enum conversion logic should be present"
+    assert "_ENUM_REGISTRY.register_enum" in api_code, "Enum registry registration should be present"
+    assert "class _EnumRegistry:" in api_code, "Enum registry class should be generated"
 
     print("✅ Python API code with enum support generated")
 
@@ -520,7 +521,10 @@ def test_enum_conversion_in_composite_types():
         if has_global_converter:
             converter_func = getattr(generated_module, "_convert_postgresql_value_typed")
             converter_source = inspect.getsource(converter_func)
-            has_enum_logic = "frame.f_globals" in converter_source and "expected_type" in converter_source
+            # Check for Phase 2 registry-based enum conversion logic
+            has_enum_logic = (
+                "_ENUM_REGISTRY.convert_enum_value" in converter_source and "expected_type" in converter_source
+            )
 
         assert has_enum_logic, "Global helper functions should contain enum conversion logic"
         print("✅ Enum conversion logic is present in global helper functions")
