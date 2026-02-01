@@ -35,7 +35,7 @@ FUNCTION_REGEX = re.compile(
     (?P<func_name>[a-zA-Z0-9_.]+)              # Function name (Group 'func_name')
     \s*\(\s*(?P<params>.*?)\s*\)\s*            # Parameters with flexible whitespace
     \s+RETURNS\s+                              # RETURNS keyword
-    (?P<return_def>.*?)                        # Return definition (non-greedy)
+    (?P<return_def>(?:[^()\s]|\s(?!(?:AS|LANGUAGE)\b)|\((?:[^()]*|\([^)]*\))*\))*)  # Return definition (handles nested parens)
     (?=\s+(?:AS|LANGUAGE)\b)                  # Positive lookahead for AS or LANGUAGE with word boundary
     """,
     re.IGNORECASE | re.DOTALL | re.VERBOSE,
