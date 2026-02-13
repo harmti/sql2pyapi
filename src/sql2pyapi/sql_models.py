@@ -11,6 +11,7 @@ TYPE_MAP = {
     "varchar": "str",
     "character varying": "str",  # Explicitly map this
     "character": "str",  # Add mapping for 'character' base type
+    "char": "str",  # Short form alias for character
     "integer": "int",
     "int": "int",
     "bigint": "int",  # Consider using int in Python 3, as it has arbitrary precision
