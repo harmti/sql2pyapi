@@ -567,9 +567,9 @@ def generate_composite_unpacking_code(
     use_type_aware = should_use_type_aware_parsing(columns, composite_types)
 
     if not nested_composites and not use_type_aware:
-        # No nested composites and no type-aware parsing needed, use simple unpacking
+        # No nested composites and no type-aware parsing needed, use name-based mapping
         return [
-            f"{indent}instance = {class_name}(*row)",
+            f"{indent}instance = {class_name}(**dict(zip(_columns, row)))",
             f"{indent}# Check for 'empty' composite rows (all values are None) returned as a single tuple",
             f"{indent}if all(v is None for v in row):",
             f"{indent}    return None",
@@ -580,15 +580,16 @@ def generate_composite_unpacking_code(
     lines = []
 
     if nested_composites or use_type_aware:
-        # We need to process the row field by field
+        # We need to process the row field by field using column names
         lines.append(f"{indent}# Process fields with type awareness and/or nested composite handling")
         if use_type_aware:
-            # Add field types for type-aware parsing
-            field_types = [col.python_type for col in columns]
-            lines.append(f"{indent}field_types = {field_types!r}")
+            # Add field type map for type-aware parsing (column name -> expected type)
+            field_type_map = {col.name: col.python_type for col in columns}
+            lines.append(f"{indent}_field_type_map = {field_type_map!r}")
 
-        lines.append(f"{indent}field_values = []")
-        lines.append(f"{indent}for i, value in enumerate(row):")
+        lines.append(f"{indent}_row_dict = dict(zip(_columns, row))")
+        lines.append(f"{indent}_processed_dict = {{}}")
+        lines.append(f"{indent}for col_name, value in _row_dict.items():")
 
         # Generate if-elif chain for each nested composite
         if nested_composites:
@@ -602,17 +603,17 @@ def generate_composite_unpacking_code(
                 python_class_name = _to_singular_camel_case(composite_type)
 
                 if first:
-                    lines.append(f"{indent}    if i == {col_idx}:")
+                    lines.append(f"{indent}    if col_name == '{col.name}':")
                     first = False
                 else:
-                    lines.append(f"{indent}    elif i == {col_idx}:")
+                    lines.append(f"{indent}    elif col_name == '{col.name}':")
 
                 lines.append(f"{indent}        # Column '{col.name}' is a nested composite type")
                 lines.append(f"{indent}        if value is None:")
-                lines.append(f"{indent}            field_values.append(None)")
+                lines.append(f"{indent}            _processed_dict[col_name] = None")
                 lines.append(f"{indent}        elif isinstance(value, tuple):")
                 lines.append(f"{indent}            # Recursively create nested dataclass")
-                lines.append(f"{indent}            field_values.append({python_class_name}(*value))")
+                lines.append(f"{indent}            _processed_dict[col_name] = {python_class_name}(*value)")
                 lines.append(
                     f"{indent}        elif isinstance(value, str) and value.startswith('(') and value.endswith(')'):"
                 )
@@ -628,14 +629,14 @@ def generate_composite_unpacking_code(
                     )
                 else:
                     lines.append(f"{indent}                parsed_tuple = _parse_composite_string(value)")
-                lines.append(f"{indent}                field_values.append({python_class_name}(*parsed_tuple))")
+                lines.append(f"{indent}                _processed_dict[col_name] = {python_class_name}(*parsed_tuple)")
                 lines.append(f"{indent}            except (ValueError, TypeError) as e:")
                 lines.append(
                     f"{indent}                raise ValueError(f'Failed to parse nested composite type {{{python_class_name}}} from string: {{value!r}}. Error: {{e}}')"
                 )
                 lines.append(f"{indent}        else:")
                 lines.append(f"{indent}            # Already a dataclass instance or other value")
-                lines.append(f"{indent}            field_values.append(value)")
+                lines.append(f"{indent}            _processed_dict[col_name] = value")
 
             lines.append(f"{indent}    else:")
             lines.append(f"{indent}        # Regular field")
@@ -649,38 +650,38 @@ def generate_composite_unpacking_code(
             )
             lines.append(f"{indent}            # This might be a composite string that needs parsing")
             lines.append(f"{indent}            try:")
-            lines.append(f"{indent}                parsed_tuple = _parse_composite_string_typed(value, field_types)")
+            lines.append(f"{indent}                parsed_tuple = _parse_composite_string_typed(value, list(_field_type_map.values()))")
             lines.append(
                 f"{indent}                # If this succeeds, we had a composite string, use the parsed result"
             )
-            lines.append(f"{indent}                if len(parsed_tuple) == len(field_types):")
-            lines.append(f"{indent}                    # Replace the entire row with parsed values")
-            lines.append(f"{indent}                    field_values = list(parsed_tuple)")
+            lines.append(f"{indent}                if len(parsed_tuple) == len(_field_type_map):")
+            lines.append(f"{indent}                    # Replace the entire row with parsed values using definition-order column names")
+            lines.append(f"{indent}                    _processed_dict = dict(zip(_field_type_map.keys(), parsed_tuple))")
             lines.append(f"{indent}                    break")
             lines.append(f"{indent}                else:")
             lines.append(f"{indent}                    # Fallback to regular processing")
-            lines.append(f"{indent}                    field_values.append(value)")
+            lines.append(f"{indent}                    _processed_dict[col_name] = value")
             lines.append(f"{indent}            except (ValueError, TypeError):")
             lines.append(f"{indent}                # Not a composite string, treat as regular field")
-            lines.append(f"{indent}                expected_type = field_types[i] if i < len(field_types) else 'str'")
+            lines.append(f"{indent}                expected_type = _field_type_map.get(col_name, 'str')")
             lines.append(
-                f"{indent}                field_values.append(_convert_postgresql_value_typed(value, expected_type))"
+                f"{indent}                _processed_dict[col_name] = _convert_postgresql_value_typed(value, expected_type)"
             )
             lines.append(f"{indent}        else:")
             lines.append(f"{indent}            # Regular field, apply type-aware conversion")
-            lines.append(f"{indent}            expected_type = field_types[i] if i < len(field_types) else 'str'")
+            lines.append(f"{indent}            expected_type = _field_type_map.get(col_name, 'str')")
             lines.append(
-                f"{indent}            field_values.append(_convert_postgresql_value_typed(value, expected_type))"
+                f"{indent}            _processed_dict[col_name] = _convert_postgresql_value_typed(value, expected_type)"
             )
         else:
-            lines.append(f"{indent}        field_values.append(value)")
+            lines.append(f"{indent}        _processed_dict[col_name] = value")
 
         lines.append(f"{indent}")
         lines.append(f"{indent}# Create the main dataclass instance")
-        lines.append(f"{indent}instance = {class_name}(*field_values)")
+        lines.append(f"{indent}instance = {class_name}(**_processed_dict)")
         lines.append(f"{indent}")
         lines.append(f"{indent}# Check for 'empty' composite rows")
-        lines.append(f"{indent}if all(v is None for v in field_values):")
+        lines.append(f"{indent}if all(v is None for v in _processed_dict.values()):")
         lines.append(f"{indent}    return None")
         lines.append(f"{indent}")
         lines.append(f"{indent}return instance")

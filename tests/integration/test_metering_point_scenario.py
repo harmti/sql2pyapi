@@ -208,6 +208,7 @@ $$;
 
         # Test process_metering_point - returns nested composite
         # Mock the row data - this should be a tuple with nested tuple
+        mock_cursor.description = [("metering_point",), ("validation_status",), ("error_message",), ("processed_at",)]
         mock_cursor.fetchone.return_value = (
             # First element is the nested metering_points tuple (26 fields)
             (

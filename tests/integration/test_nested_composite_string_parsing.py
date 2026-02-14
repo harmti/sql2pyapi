@@ -140,6 +140,7 @@ $$;
 
         # Test Case 1: Database returns proper nested tuple (should work)
         print("=== Test Case 1: Database returns proper nested tuple ===")
+        mock_cursor.description = [("metering_point",), ("was_created",)]
         mock_cursor.fetchone.return_value = (
             # metering_point as a tuple (should be parsed as MeteringPoint)
             (test_id, location_id, "123456789", "electric", "discovery", datetime.now(), datetime.now()),

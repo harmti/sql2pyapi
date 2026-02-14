@@ -225,6 +225,7 @@ $$;
         # Test get_device_with_stats (composite with table reference)
         # This is the tricky part - the Device might have many fields
         # Let's assume Device has the fields from the devices table
+        mock_cursor.description = [("device",), ("total_errors",), ("uptime_percentage",)]
         mock_cursor.fetchone.return_value = (
             # First element is the device tuple (all device fields)
             (1, "Device 1", "online", "Room A", datetime.now()),

@@ -1173,21 +1173,19 @@ def test_custom_type_return_generation(tmp_path):
             assert len(try_except_node_single.handlers) == 1 and isinstance(
                 try_except_node_single.handlers[0], ast.ExceptHandler
             ), "Single func Try/Except structure mismatch"
-            # Check exception type - can be TypeError (simple) or (ValueError, TypeError) (type-aware)
+            # Check exception type - can be TypeError, (ValueError, TypeError), or (TypeError, KeyError)
             except_type = try_except_node_single.handlers[0].type
             if isinstance(except_type, ast.Name) and except_type.id == "TypeError":
                 # Simple unpacking - should raise TypeError
                 raises_type_error = any(isinstance(item, ast.Raise) for item in try_except_node_single.handlers[0].body)
                 assert raises_type_error, "Except handler should raise a TypeError"
-            elif (
-                isinstance(except_type, ast.Tuple)
-                and len(except_type.elts) == 2
-                and isinstance(except_type.elts[0], ast.Name)
-                and except_type.elts[0].id == "ValueError"
-                and isinstance(except_type.elts[1], ast.Name)
-                and except_type.elts[1].id == "TypeError"
-            ):
-                # Type-aware unpacking - should raise some kind of error (ValueError or TypeError)
+            elif isinstance(except_type, ast.Tuple) and len(except_type.elts) == 2:
+                # Could be (ValueError, TypeError) or (TypeError, KeyError) - both are valid
+                type_names = {elt.id for elt in except_type.elts if isinstance(elt, ast.Name)}
+                valid_combos = [{"ValueError", "TypeError"}, {"TypeError", "KeyError"}]
+                assert type_names in valid_combos, (
+                    f"Unexpected exception type combo: {type_names}"
+                )
                 raises_error = any(isinstance(item, ast.Raise) for item in try_except_node_single.handlers[0].body)
                 assert raises_error, "Except handler should raise an error"
             else:

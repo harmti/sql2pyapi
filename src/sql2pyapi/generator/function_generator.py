@@ -307,10 +307,7 @@ def _generate_setof_return_body(
         body_lines.append(f"    # Ensure dataclass '{final_dataclass_name}' is defined above.")
         body_lines.append("    if not rows:")
         body_lines.append("        return []")
-        # Logic for SETOF custom_type (expect list of tuples)
-        # Logic for SETOF table_name / TABLE(...) (expect list of Row/dict or tuples)
-        # Use tuple unpacking, assuming it works for list of tuples from custom types
-        # This MIGHT break for SETOF table_name if list of dicts is returned.
+        body_lines.append("    _columns = [desc[0] for desc in cur.description]")
         # Ensure we use the singular form of the class name in the list comprehension
         singular_class_name = final_dataclass_name
         # If it's a table name, make sure it's in singular form
@@ -332,15 +329,15 @@ def _generate_setof_return_body(
             body_lines.extend(unpacking_lines)
 
             body_lines.append("        except (ValueError, TypeError) as e:")
-            body_lines.append("            # Fallback to simple unpacking if composite parsing fails")
-            body_lines.append(f"            return {singular_class_name}(*row)")
+            body_lines.append("            # Fallback to name-based mapping if composite parsing fails")
+            body_lines.append(f"            return {singular_class_name}(**dict(zip(_columns, row)))")
             body_lines.append("")
 
             # Main try block for the function
             body_lines.append("    try:")
             body_lines.append(f"        return [create_{function_name_suffix}(row) for row in rows]")
-            body_lines.append("    except TypeError as e:")
-            body_lines.append("        # Tuple unpacking failed. This often happens if the DB connection")
+            body_lines.append("    except (TypeError, KeyError) as e:")
+            body_lines.append("        # Column name mapping failed. This often happens if the DB connection")
             body_lines.append("        # is configured with a dict-like row factory (e.g., DictRow).")
             body_lines.append("        # This generated code expects the default tuple row factory.")
             body_lines.append("        raise TypeError(")
@@ -382,7 +379,7 @@ def _generate_setof_return_body(
                 function_name_suffix = singular_class_name.lower() if singular_class_name else "item"
                 body_lines.append(f"    def create_{function_name_suffix}(row):")
 
-                # Generate field assignments with ENUM conversions
+                # Generate field assignments with ENUM conversions (name-based)
                 field_assignments = []
                 for i, col in enumerate(func.return_columns):
                     if not col.python_type.startswith(("Optional[", "List[")) and col.python_type not in (
@@ -399,17 +396,17 @@ def _generate_setof_return_body(
                         "Dict[str, Any]",
                     ):
                         field_assignments.append(
-                            f"{col.name}={col.python_type}(row[{i}]) if row[{i}] is not None else None"
+                            f"{col.name}={col.python_type}(_row_dict['{col.name}']) if _row_dict['{col.name}'] is not None else None"
                         )
                     else:
-                        field_assignments.append(f"{col.name}=row[{i}]")
+                        field_assignments.append(f"{col.name}=_row_dict['{col.name}']")
                 field_assignments_str = ",\n                ".join(field_assignments)
 
                 body_lines.append("        try:")
                 body_lines.append(
-                    "            # First try with tuple unpacking to handle both tuple and dict row factories"
+                    "            # Use column name mapping for column-order independence"
                 )
-                body_lines.append(f"            instance = {singular_class_name}(*row)")
+                body_lines.append(f"            instance = {singular_class_name}(**dict(zip(_columns, row)))")
 
                 # Convert string values to enum objects after creating the instance
                 for i, col in enumerate(func.return_columns):
@@ -433,8 +430,9 @@ def _generate_setof_return_body(
 
                 body_lines.append("            return instance")
                 body_lines.append("        except (TypeError, KeyError) as e:")
-                body_lines.append("            # Fallback to explicit construction if tuple unpacking fails")
+                body_lines.append("            # Fallback to explicit name-based construction")
                 body_lines.append("            try:")
+                body_lines.append("                _row_dict = dict(zip(_columns, row))")
                 body_lines.append(
                     f"                return {singular_class_name}(\n                    {field_assignments_str}\n                )"
                 )
@@ -450,12 +448,12 @@ def _generate_setof_return_body(
                 body_lines.append("    try:")
                 body_lines.append(f"        return [create_{singular_class_name.lower()}(row) for row in rows]")
             else:
-                # No enum columns case - just use tuple unpacking directly
+                # No enum columns case - use column name mapping for order independence
                 body_lines.append("    try:")
-                body_lines.append(f"        return [{singular_class_name}(*r) for r in rows]")
+                body_lines.append(f"        return [{singular_class_name}(**dict(zip(_columns, r))) for r in rows]")
 
-            body_lines.append("    except TypeError as e:")
-            body_lines.append("        # Tuple unpacking failed. This often happens if the DB connection")
+            body_lines.append("    except (TypeError, KeyError) as e:")
+            body_lines.append("        # Column name mapping failed. This often happens if the DB connection")
             body_lines.append("        # is configured with a dict-like row factory (e.g., DictRow).")
             body_lines.append("        # This generated code expects the default tuple row factory.")
             body_lines.append("        raise TypeError(")
@@ -514,6 +512,7 @@ def _generate_single_row_return_body(
 
         body_lines.append(f"    # Ensure dataclass '{singular_class_name}' is defined above.")
         body_lines.append(f"    # Expecting simple tuple return for composite type {singular_class_name}")
+        body_lines.append("    _columns = [desc[0] for desc in cur.description]")
 
         # Check if we need special handling for nested composites
         if func.return_columns and needs_nested_unpacking(func.return_columns, composite_types):
@@ -523,8 +522,8 @@ def _generate_single_row_return_body(
                 singular_class_name, func.return_columns, composite_types, indent="        "
             )
             body_lines.extend(unpacking_lines)
-            body_lines.append("    except TypeError as e:")
-            body_lines.append("        # Tuple unpacking failed. This often happens if the DB connection")
+            body_lines.append("    except (TypeError, KeyError) as e:")
+            body_lines.append("        # Column name mapping failed. This often happens if the DB connection")
             body_lines.append("        # is configured with a dict-like row factory (e.g., DictRow).")
             body_lines.append("        # This generated code expects the default tuple row factory.")
             body_lines.append("        raise TypeError(")
@@ -561,7 +560,7 @@ def _generate_single_row_return_body(
                 )
 
             if has_enum_columns:
-                # Generate field assignments with ENUM conversions
+                # Generate field assignments with ENUM conversions (name-based)
                 field_assignments = []
                 for i, col in enumerate(func.return_columns):
                     if not col.python_type.startswith(("Optional[", "List[")) and col.python_type not in (
@@ -577,16 +576,16 @@ def _generate_single_row_return_body(
                         "dict",
                         "Dict[str, Any]",
                     ):
-                        field_assignments.append(f"{col.name}=row[{i}]")
+                        field_assignments.append(f"{col.name}=_row_dict['{col.name}']")
                     else:
-                        field_assignments.append(f"{col.name}=row[{i}]")
+                        field_assignments.append(f"{col.name}=_row_dict['{col.name}']")
                 field_assignments_str = ",\n                    ".join(field_assignments)
 
                 body_lines.append("    try:")
                 body_lines.append(
-                    "        # First try with tuple unpacking to handle both tuple and dict row factories"
+                    "        # Use column name mapping for column-order independence"
                 )
-                body_lines.append(f"        instance = {singular_class_name}(*row)")
+                body_lines.append(f"        instance = {singular_class_name}(**dict(zip(_columns, row)))")
                 body_lines.append(
                     "        # Check for 'empty' composite rows (all values are None) returned as a single tuple"
                 )
@@ -616,8 +615,9 @@ def _generate_single_row_return_body(
                 body_lines.append("        return instance")  # Return the single instance, not a list
 
                 body_lines.append("    except (TypeError, KeyError) as e:")
-                body_lines.append("        # If tuple unpacking fails, try explicit construction")
+                body_lines.append("        # Fallback to explicit name-based construction")
                 body_lines.append("        try:")
+                body_lines.append("            _row_dict = dict(zip(_columns, row))")
                 body_lines.append(
                     f"            instance = {singular_class_name}(\n                    {field_assignments_str}\n                )"
                 )
@@ -650,7 +650,7 @@ def _generate_single_row_return_body(
                 )
             else:
                 body_lines.append("    try:")
-                body_lines.append(f"        instance = {singular_class_name}(*row)")
+                body_lines.append(f"        instance = {singular_class_name}(**dict(zip(_columns, row)))")
                 body_lines.append(
                     "        # Check for 'empty' composite rows (all values are None) returned as a single tuple"
                 )
@@ -659,8 +659,8 @@ def _generate_single_row_return_body(
                 # Return None if the single row represents a NULL composite (consistency with Optional hint)
                 body_lines.append("             return None")
                 body_lines.append("        return instance")  # Return the single instance, not a list
-                body_lines.append("    except TypeError as e:")
-                body_lines.append("        # Tuple unpacking failed. This often happens if the DB connection")
+                body_lines.append("    except (TypeError, KeyError) as e:")
+                body_lines.append("        # Column name mapping failed. This often happens if the DB connection")
                 body_lines.append("        # is configured with a dict-like row factory (e.g., DictRow).")
                 body_lines.append("        # This generated code expects the default tuple row factory.")
                 body_lines.append("        raise TypeError(")

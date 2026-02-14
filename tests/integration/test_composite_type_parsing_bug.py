@@ -349,11 +349,11 @@ def test_type_aware_composite_parsing_functionality():
         composite_types={},  # No nested composites
     )
 
-    # Should include type-aware functions and field_types
+    # Should include type-aware functions and field type mapping
     unpacking_str = "\n".join(unpacking_code)
     assert "_convert_postgresql_value_typed" in unpacking_str
     assert "_parse_composite_string_typed" in unpacking_str
-    assert "field_types = " in unpacking_str
+    assert "_field_type_map = " in unpacking_str
 
     print("✅ Type-aware composite unpacking code generation works correctly")
 
